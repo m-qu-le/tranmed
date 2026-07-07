@@ -456,49 +456,58 @@ function App() {
           </div>
         )}
 
-        <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '20px', background: '#ffffff', padding: '32px', borderRadius: '24px', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', border: '1px solid #eaeaea', maxWidth: '850px', margin: '0 auto 40px auto' }}>
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
             <input 
               type="text" 
-              placeholder="Tên thư mục (Vd: USMLE Step 1)" 
+              placeholder="📁 Tên thư mục (Vd: USMLE Step 1)" 
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
-              style={{ padding: '10px', borderRadius: '5px', border: '1px solid #ccc', flex: 1 }}
+              style={{ padding: '14px 18px', borderRadius: '12px', border: '1.5px solid #e0e0e0', flex: 1, minWidth: '250px', fontSize: '15px', outline: 'none', transition: 'border-color 0.2s', backgroundColor: '#fafafa', color: '#333' }}
+              onFocus={(e) => { e.target.style.borderColor = '#007bff'; e.target.style.backgroundColor = '#fff'; }}
+              onBlur={(e) => { e.target.style.borderColor = '#e0e0e0'; e.target.style.backgroundColor = '#fafafa'; }}
             />
-            <input 
-              id="fileInput"
-              type="file" 
-              accept="application/pdf" 
-              multiple 
-              onChange={handleFileChange} 
-              className="file-input"
-              style={{ flex: 2 }}
-            />
+            <div style={{ flex: 2, position: 'relative', minWidth: '300px' }}>
+              <input 
+                id="fileInput"
+                type="file" 
+                accept="application/pdf" 
+                multiple 
+                onChange={handleFileChange} 
+                className="file-input"
+                style={{ width: '100%', padding: '12px 15px', background: '#f0f4f8', border: '1.5px dashed #a0aec0', borderRadius: '12px', cursor: 'pointer', color: '#4a5568', transition: 'background 0.2s', fontSize: '14px' }}
+                onMouseEnter={(e) => e.target.style.background = '#e2e8f0'}
+                onMouseLeave={(e) => e.target.style.background = '#f0f4f8'}
+              />
+            </div>
           </div>
           
           <button 
             onClick={handleAddToQueue} 
             disabled={!selectedFiles || selectedFiles.length === 0}
             className="upload-btn"
+            style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', background: (!selectedFiles || selectedFiles.length === 0) ? '#e9ecef' : '#007bff', color: (!selectedFiles || selectedFiles.length === 0) ? '#adb5bd' : '#ffffff', border: 'none', cursor: (!selectedFiles || selectedFiles.length === 0) ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: (!selectedFiles || selectedFiles.length === 0) ? 'none' : '0 4px 12px rgba(0, 123, 255, 0.3)' }}
           >
-            ➕ Thêm {selectedFiles ? selectedFiles.length : 0} file vào Local Queue
+            <span style={{ fontSize: '1.2em' }}>➕</span> Thêm {selectedFiles ? selectedFiles.length : 0} file vào Local Queue
           </button>
 
           {/* HIỂN THỊ DANH SÁCH LOCAL QUEUE */}
           {localQueue.length > 0 && (
-            <div style={{ marginTop: '10px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '6px', padding: '10px' }}>
-              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>Hàng chờ thiết bị ({localQueue.filter(t => t.status !== 'completed').length} đang đợi)</h4>
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ marginTop: '10px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '12px', padding: '16px' }}>
+              <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#495057', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                ⏳ Hàng chờ thiết bị ({localQueue.filter(t => t.status !== 'completed').length} đang đợi)
+              </h4>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {localQueue.map(task => (
-                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', background: '#fff', padding: '8px', border: '1px solid #eee', borderRadius: '4px' }}>
-                    <div>
-                      <strong>📁 {task.folderName}</strong> ({task.files.length} files) 
-                      <span style={{ marginLeft: '10px', color: task.status === 'error' ? 'red' : task.status === 'completed' ? 'green' : '#007bff' }}>
+                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13.5px', background: '#fff', padding: '12px 16px', border: '1px solid #eaeaea', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <strong>📁 {task.folderName} <span style={{fontWeight: 'normal', color: '#6c757d', fontSize: '0.9em'}}>({task.files.length} files)</span></strong>
+                      <span style={{ fontSize: '12.5px', color: task.status === 'error' ? '#dc3545' : task.status === 'completed' ? '#28a745' : '#007bff', fontWeight: '500' }}>
                         {task.progressMsg}
                       </span>
                     </div>
                     {task.status === 'pending' && (
-                      <button onClick={() => handleRemoveFromQueue(task.id)} style={{ background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold' }}>✕ Xóa</button>
+                      <button onClick={() => handleRemoveFromQueue(task.id)} style={{ background: '#ffebee', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', padding: '6px 12px', borderRadius: '6px', transition: 'background 0.2s' }} onMouseEnter={(e) => e.target.style.background = '#ffcdd2'} onMouseLeave={(e) => e.target.style.background = '#ffebee'}>✕ Xóa</button>
                     )}
                   </li>
                 ))}
