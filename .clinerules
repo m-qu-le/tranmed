@@ -32,3 +32,4 @@
 - Do not create new folders unless necessary.
 - Follow existing file structure (Backend in `med-translator-backend/`, Frontend in `med-translator-frontend/`).
 - Always check `.env` configuration requirements before running.
+- **Git Workflow:** Always refer to `cline_docs/06_git_push_guide.md` for push instructions. Ensure all commits use the correct local email: `lequang2k5012345@gmail.com` for this project.
