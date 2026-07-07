@@ -28,13 +28,26 @@ console.log("-----------------------------------------------");
 const app = express();
 const PORT = process.env.PORT || 8080; 
 
-// Cho phép domain Vercel cụ thể (thay thế bằng domain thực tế của bạn nếu cần bảo mật hơn)
+// [CẤU HÌNH CORS ĐỘNG VÀ LOGGING]
+const allowedOrigins = [
+    'https://tranmed.vercel.app',
+    'https://med-translator-frontend.vercel.app',
+    'http://localhost:5173',
+    process.env.FRONTEND_URL // Hỗ trợ biến môi trường linh hoạt
+].filter(Boolean);
+
 app.use(cors({
-  origin: [
-    'https://tranmed.vercel.app', 
-    'https://med-translator-frontend.vercel.app', // Domain thực tế đang bị chặn
-    'http://localhost:5173'
-  ],
+  origin: function (origin, callback) {
+    // Cho phép các request không có origin (như mobile apps hoặc curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log(`⚠️ [CORS BLOCK] Từ chối request từ origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
