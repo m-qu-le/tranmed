@@ -30,7 +30,11 @@ const PORT = process.env.PORT || 8080;
 
 // Cho phép domain Vercel cụ thể (thay thế bằng domain thực tế của bạn nếu cần bảo mật hơn)
 app.use(cors({
-  origin: ['https://tranmed.vercel.app', 'http://localhost:5173'], // Thêm domain Vercel của bạn tại đây
+  origin: [
+    'https://tranmed.vercel.app', 
+    'https://med-translator-frontend.vercel.app', // Domain thực tế đang bị chặn
+    'http://localhost:5173'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
@@ -73,9 +77,9 @@ mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
         await translationQueue.initDB(); 
         
         // Chỉ mở Port HTTP sau khi Database và Queue đã hoàn tất setup
-        app.listen(PORT, () => {
+        app.listen(PORT, '0.0.0.0', () => {
             console.log(`-----------------------------------------------`);
-            console.log(`🚀 Server đang chạy tại: http://localhost:${PORT}`);
+            console.log(`🚀 Server đang chạy tại: http://0.0.0.0:${PORT}`);
             console.log(`-----------------------------------------------`);
         });
     })
