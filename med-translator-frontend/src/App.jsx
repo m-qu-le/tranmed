@@ -115,6 +115,11 @@ function App() {
   
   const [jobs, setJobs] = useState([]); 
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
+  const [collapsedFolders, setCollapsedFolders] = useState({});
+
+  const toggleFolder = (folderName) => { 
+    setCollapsedFolders(prev => ({ ...prev, [folderName]: !prev[folderName] })); 
+  };
 
   // 1. Phục hồi trạng thái khi F5 (Bao gồm cả trạng thái Hệ thống và Jobs)
   useEffect(() => {
@@ -503,12 +508,19 @@ function App() {
         </div>
 
         <div className="jobs-container">
-          {Object.entries(groupedJobs).map(([folderName, folderJobs]) => (
-            <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
-              <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
-                <h3 className="queue-title" style={{ color: '#007bff', margin: 0 }}>
-                  📁 {folderName} ({folderJobs.length} files)
-                </h3>
+          {Object.entries(groupedJobs).map(([folderName, folderJobs]) => {
+            const isCollapsed = collapsedFolders[folderName];
+            return (
+              <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
+                <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
+                  <h3 
+                    className="queue-title" 
+                    onClick={() => toggleFolder(folderName)}
+                    style={{ color: '#007bff', margin: 0, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}
+                  >
+                    <span style={{ fontSize: '0.7em', display: 'inline-block', transition: 'transform 0.2s ease', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                    📁 {folderName} ({folderJobs.length} files)
+                  </h3>
                 
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {/* Đã chỉnh sửa điều kiện hiển thị nút tải: Xóa && j.result */}
@@ -533,13 +545,16 @@ function App() {
                 </div>
               </div>
               
-              <div className="masonry-grid-fallback">
-                {folderJobs.map(job => (
-                  <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
-                ))}
-              </div>
+              {!isCollapsed && (
+                <div className="masonry-grid-fallback">
+                  {folderJobs.map(job => (
+                    <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
 
           {jobs.length === 0 && (
             <div className="empty-state">
