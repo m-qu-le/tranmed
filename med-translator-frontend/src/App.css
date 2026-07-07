@@ -1,0 +1,386 @@
+/* =========================================================
+   PINTEREST-INSPIRED DESIGN SYSTEM TOKENS
+   ========================================================= */
+:root {
+  /* Primary Brand */
+  --brand-red: #e60023;
+  --success-green: #103c25;
+  --error-red: #9e0a0a;
+
+  /* Text */
+  --text-plum: #211922;      /* Primary text - warm near black */
+  --text-olive: #62625b;     /* Secondary descriptions */
+  --text-black: #000000;
+  --text-white: #ffffff;
+
+  /* Surfaces & Backgrounds */
+  --bg-fog: #f6f6f3;         /* Main app background */
+  --bg-white: #ffffff;       /* Card background */
+  --btn-sand: #e5e5e0;       /* Secondary warm button */
+  --btn-light: #e0e0d9;      /* Badges & circle actions */
+  --bg-dark-surface: #33332e;/* Dark areas (terminal) */
+  --warm-wash: hsla(60, 20%, 98%, 0.5); /* Subtle yellow-warm wash */
+
+  /* Borders */
+  --border-silver: #91918c;
+  --border-disabled: #c8c8c1;
+}
+
+* { 
+  box-sizing: border-box; 
+  margin: 0;
+  padding: 0;
+}
+
+body { 
+  background-color: var(--bg-fog); 
+  color: var(--text-plum); 
+  /* Font Pin Sans fallback stack */
+  font-family: -apple-system, system-ui, "Segoe UI", Roboto, Oxygen-Sans, "Helvetica Neue", Helvetica, Arial, sans-serif; 
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* =========================================================
+   LAYOUT & TYPOGRAPHY
+   ========================================================= */
+.app-container { 
+  max-width: 1000px; 
+  margin: 0 auto; 
+  padding: 60px 24px; 
+}
+
+.header { 
+  text-align: center; 
+  margin-bottom: 48px; 
+}
+
+.header h1 { 
+  color: var(--text-plum); 
+  font-size: 28px; /* Section Heading scale */
+  font-weight: 700; 
+  letter-spacing: -1.2px; /* Cozy negative tracking */
+  margin-bottom: 8px; 
+}
+
+.header p { 
+  color: var(--text-olive); 
+  font-size: 16px; 
+  font-weight: 400;
+}
+
+/* =========================================================
+   UPLOAD SECTION (Inputs & Primary CTA)
+   ========================================================= */
+.upload-section { 
+  display: flex; 
+  gap: 16px; 
+  justify-content: center; 
+  margin-bottom: 40px; 
+  background: var(--bg-white); 
+  padding: 24px; 
+  border-radius: 28px; /* Large container radius */
+  /* Flat by design, no shadow, rely on warm backgrounds */
+}
+
+.file-input { 
+  background-color: var(--bg-white);
+  padding: 11px 15px; 
+  border: 1px solid var(--border-silver); 
+  border-radius: 16px; 
+  flex: 1; 
+  max-width: 450px; 
+  color: var(--text-plum);
+  font-size: 16px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.file-input:focus {
+  border-color: #435ee5; /* Focus Blue */
+}
+
+.upload-btn { 
+  background-color: var(--brand-red); 
+  color: var(--text-black); /* Unusual choice for contrast per specs */
+  border: none; 
+  padding: 12px 24px; 
+  border-radius: 16px; /* Not pill-shaped */
+  font-size: 16px;
+  font-weight: 600; 
+  cursor: pointer; 
+  transition: opacity 0.2s; 
+}
+
+.upload-btn:hover:not(:disabled) { 
+  opacity: 0.9; 
+}
+
+.upload-btn:disabled { 
+  background-color: var(--border-disabled); 
+  color: var(--text-olive);
+  cursor: not-allowed; 
+}
+
+/* =========================================================
+   QUEUE & EMPTY STATE
+   ========================================================= */
+.queue-header-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.queue-title { 
+  color: var(--text-plum); 
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-bottom: 0; /* Ghi đè margin cũ vì đã dùng flexbox ở parent */
+}
+
+.download-all-btn {
+  background-color: var(--success-green);
+  color: var(--text-white);
+  border: none;
+  padding: 10px 20px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.download-all-btn:hover {
+  opacity: 0.9;
+}
+
+.download-all-btn:active {
+  transform: scale(0.98);
+}
+
+.empty-state { 
+  text-align: center; 
+  padding: 40px; 
+}
+
+.empty-wash {
+  display: inline-block;
+  background-color: var(--warm-wash);
+  color: var(--text-olive);
+  padding: 24px 40px;
+  border-radius: 20px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* =========================================================
+   JOB CARDS (Containers)
+   ========================================================= */
+.jobs-container { 
+  display: flex; 
+  flex-direction: column; 
+  gap: 24px; /* Generous breathing room */
+}
+
+.job-card { 
+  background: var(--bg-white); 
+  border-radius: 20px; /* Comfortable feature card radius */
+  padding: 24px;
+  border: 1px solid var(--btn-light);
+  transition: transform 0.2s ease; 
+}
+
+/* Remove harsh left borders, use subtle background shifts if needed */
+.job-card.processing { background-color: var(--bg-white); }
+.job-card.failed { border-color: var(--error-red); }
+
+.job-header { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center; 
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.job-info { 
+  display: flex; 
+  align-items: center; 
+  gap: 16px; 
+}
+
+.job-name { 
+  font-weight: 600; 
+  color: var(--text-plum); 
+  font-size: 16px; 
+}
+
+/* Status Badges */
+.status-badge { 
+  padding: 6px 12px; 
+  border-radius: 16px; 
+  font-size: 12px; /* Caption text size */
+  font-weight: 600; 
+}
+
+.status-badge.pending { background-color: var(--btn-sand); color: var(--text-plum); }
+.status-badge.processing { background-color: var(--btn-light); color: var(--text-plum); }
+.status-badge.completed { background-color: var(--success-green); color: var(--text-white); }
+.status-badge.failed { background-color: var(--error-red); color: var(--text-white); }
+
+/* Job Actions (Secondary Buttons) */
+.job-actions { 
+  display: flex; 
+  gap: 12px; 
+}
+
+.preview-btn, .copy-btn { 
+  background-color: var(--btn-sand); 
+  color: var(--text-black); 
+  border: none; 
+  padding: 8px 16px; 
+  border-radius: 16px; 
+  font-size: 14px;
+  font-weight: 600; 
+  cursor: pointer; 
+  transition: background-color 0.2s; 
+}
+
+.preview-btn:hover, .copy-btn:hover { 
+  background-color: #d8d8d3; 
+}
+
+.copy-btn.copied { 
+  background-color: var(--success-green); 
+  color: var(--text-white); 
+}
+
+.job-error { 
+  margin-top: 20px;
+  padding: 16px; 
+  background-color: #fce4e4; 
+  color: var(--error-red); 
+  font-size: 14px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.mt-15 { margin-top: 20px; }
+
+/* =========================================================
+   MARKDOWN PREVIEW
+   ========================================================= */
+.markdown-preview { 
+  padding: 20px; 
+  background-color: var(--bg-fog);
+  border-radius: 16px;
+  line-height: 1.6; 
+  font-size: 16px; 
+  color: var(--text-plum);
+}
+
+.markdown-preview h1, 
+.markdown-preview h2, 
+.markdown-preview h3 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.markdown-preview table { 
+  width: 100%; 
+  border-collapse: collapse; 
+  margin: 20px 0; 
+}
+
+.markdown-preview th, .markdown-preview td { 
+  border: 1px solid var(--border-silver); 
+  padding: 12px; 
+  text-align: left; 
+}
+
+.markdown-preview th { 
+  background-color: var(--btn-light); 
+  font-weight: 600; 
+}
+
+/* =========================================================
+   TERMINAL LOGS
+   ========================================================= */
+.terminal-container.mini-terminal { 
+  margin-top: 20px;
+  border-radius: 16px; 
+  background-color: var(--bg-dark-surface);
+  overflow: hidden;
+}
+
+.terminal-header { 
+  background-color: rgba(0,0,0,0.2); 
+  padding: 12px 20px; 
+  display: flex; 
+  align-items: center; 
+  gap: 12px; 
+}
+
+.mac-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.mac-dots span:nth-child(1) { color: #ff5f56; font-size: 12px; }
+.mac-dots span:nth-child(2) { color: #ffbd2e; font-size: 12px; }
+.mac-dots span:nth-child(3) { color: #27c93f; font-size: 12px; }
+
+.terminal-title { 
+  color: var(--border-silver); 
+  font-size: 12px; 
+  font-family: monospace; 
+}
+
+.terminal-body { 
+  padding: 16px 20px; 
+  height: 220px; 
+  overflow-y: auto; 
+  font-family: 'Consolas', 'Courier New', monospace; 
+  font-size: 14px; 
+  color: #e0e0d9; /* Warm light text instead of pure neon green to fit vibe */
+  background-color: transparent; 
+  line-height: 1.6; 
+}
+
+.log-line { 
+  margin-bottom: 6px; 
+}
+
+.log-time { 
+  color: var(--border-silver); 
+  font-size: 12px; 
+  margin-right: 12px; 
+}
+
+/* Breakpoints cho di động */
+@media (max-width: 576px) {
+  .upload-section {
+    flex-direction: column;
+  }
+  .file-input {
+    max-width: 100%;
+  }
+  .job-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.queue-header-actions:hover h3 {
+  opacity: 0.8;
+}
+
+.cleanup-btn:hover {
+  opacity: 0.9;
+  transform: scale(0.98);
+}

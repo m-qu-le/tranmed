@@ -1,0 +1,34 @@
+# Project Rules & Context: Med-Translator
+
+## 1. Project Overview
+- **Goal:** Med-Translator is a medical document translation system using Gemini AI.
+- **Workflow:** User uploads PDF -> System queues for processing -> PDF split into chunks -> Translated by Gemini AI -> Result stored in Job model.
+
+## 2. Tech Stack
+- **Backend:** Node.js, Express, Multer, PDF-lib, Mongoose (MongoDB).
+- **Frontend:** React, Vite, CSS.
+- **Key Services:** 
+    - `geminiService.js`: AI translation logic.
+    - `pdfService.js`/`pdfSplitter.js`: PDF extraction and chunking.
+    - `queueManager.js`: Async task handling.
+    - `translateController.js`: Request handling.
+
+## 3. Architecture & Data Flow
+- **Data Flow:** `POST /translate` -> `translateController.uploadFile` -> `jobModel` created -> `queueManager` -> `pdfWorker` -> `geminiService` -> Result updated in `jobModel`.
+- **Frontend Polling:** `GET /status/:jobId` every 2-3s.
+
+## 4. Workflows & Setup
+- **Backend:** `cd med-translator-backend` -> `npm install` -> `npm run dev`.
+- **Frontend:** `cd med-translator-frontend` -> `npm install` -> `npm run dev`.
+- **Conventions:** `camelCase` naming, `try/catch` error handling, mandatory `async/await`.
+
+## 5. Coding Standards
+- Always maintain module separation (Controller/Service).
+- Handle Gemini API rate limits and timeouts gracefully.
+- Validate file types (`application/pdf`) and size (max 500MB).
+- Use `upload` middleware (Multer) with name decoding and sanitization.
+
+## 6. Development Rules
+- Do not create new folders unless necessary.
+- Follow existing file structure (Backend in `med-translator-backend/`, Frontend in `med-translator-frontend/`).
+- Always check `.env` configuration requirements before running.

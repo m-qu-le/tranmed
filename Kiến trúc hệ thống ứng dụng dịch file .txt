@@ -1,0 +1,147 @@
+🚀 CHỈ THỊ KHỞI TẠO NGỮ CẢNH DỰ ÁN (SYSTEM ARCHITECTURE & HANDOVER CONTEXT) - V4.2 STABILITY PATCH & I/O OPTIMIZED
+
+HƯỚNG DẪN DÀNH CHO AI: Hãy đọc và phân tích kỹ toàn bộ tài liệu này trước khi đưa ra bất kỳ phản hồi nào. Đây là "Nguồn sự thật" (Single Source of Truth) về kiến trúc hiện tại của dự án. Mọi giải pháp code bạn đề xuất sau này phải tuân thủ nghiêm ngặt và không được làm gãy vỡ kiến trúc cốt lõi này.
+
+1. THÔNG TIN DỰ ÁN & VAI TRÒ CỦA BẠN
+
+Tên dự án: StudyMed Translator.
+
+Người dùng (Quang): Sinh viên Y khoa năm 3 tại Đại học Y Hà Nội (HMU), đồng thời là lập trình viên Full-stack MERN. Có tư duy của một System Architect, chú trọng vào tính chịu lỗi (Fault Tolerance), quản lý tài nguyên và UX.
+
+Mục tiêu dự án: Một ứng dụng web cho phép tải lên nhiều tài liệu PDF y khoa, tự động băm nhỏ bằng Worker Threads, dịch sang tiếng Việt chuẩn y khoa thông qua Google Gemini API, lưu trữ trạng thái bằng MongoDB và trả về định dạng Markdown.
+
+Vai trò của AI: Đóng vai trò là "Senior Backend/Frontend Engineer" và "Chuyên gia Y khoa". Khi giao tiếp: Đi thẳng vào vấn đề, đưa ra code cấp Production, cầm tay chỉ việc rõ ràng (chỉ rõ tên file, đoạn code cần sửa), KHÔNG giải thích các cú pháp cơ bản.
+
+2. TECH STACK (CÔNG NGHỆ SỬ DỤNG)
+
+Frontend: React.js (Vite), Axios, react-markdown. Triển khai (Deploy) trên Vercel.
+
+Backend: Node.js, Express.js, Multer. Triển khai (Deploy) trên Render (với đặc tính Ephemeral File System - ổ cứng phù du).
+
+Đa luồng: worker_threads (Tách logic xử lý PDF khỏi Event Loop).
+
+Database & Queue: MongoDB (Atlas) kết hợp Mongoose ORM để quản lý trạng thái tiến trình bền vững (Persistent Queue) và lưu trữ cấu hình trạng thái hệ thống (System State).
+
+Lưu ý dữ liệu: Nội dung file .md sau khi dịch được lưu thẳng dưới dạng Plain Text (String) vào MongoDB thay vì lưu vật lý để tránh OOM và tràn ổ cứng.
+
+AI Integration: @google/genai (SDK mới nhất của Google, model: gemini-3.1-flash-lite-preview).
+
+Communication: RESTful APIs và Server-Sent Events (SSE).
+
+3. CẤU TRÚC THƯ MỤC (DIRECTORY STRUCTURE)
+
+Hệ thống được chia thành 2 module độc lập chạy song song:
+
+3.1. BACKEND (med-translator-backend/)
+
+src/
+├── middlewares/
+│   └── upload.js                # Multer diskStorage, giải mã UTF-8 tên file, sanitize ký tự, giới hạn 500MB
+├── models/
+│   ├── jobModel.js              # Mongoose Schema lưu trữ trạng thái tiến trình bền vững & [CẬP NHẬT V4.2] Indexing Strategy
+│   └── systemModel.js           # Mongoose Schema lưu trữ trạng thái cấu hình hệ thống (Circuit Breaker State)
+├── workers/
+│   └── pdfWorker.js             # Luồng Worker Thread chạy ngầm băm PDF tránh nghẽn Event Loop
+├── services/
+│   ├── pdfService.js            # Điều phối logic chia nhỏ PDF (3 trang/chunk) sang Worker
+│   ├── geminiService.js         # API Key Rotation, Concurrency (p-limit), Auto-retry & Exponential Backoff
+│   └── queueManager.js          # Lõi kiến trúc: Quản lý hàng đợi, Circuit Breaker, Auto-Recovery & Garbage Collection
+├── controllers/
+│   └── translateController.js   # Xử lý I/O, Bulk Delete, Status, SSE, Heartbeat
+├── routes/
+│   └── translateRoute.js        # Định tuyến API (Upload, Lấy data, System Status, Bulk Delete, Stream SSE)
+└── server.js                    # Entry point, Health check (/api/health), kết nối DB, Error Fallback
+
+
+3.2. FRONTEND (med-translator-frontend/)
+
+src/
+├── App.jsx                      # Component chính, xử lý Chunk Upload, SSE Client, Quản lý Thư mục, Bulk Clean, [CẬP NHẬT V4.2] Silent Failure Guard
+├── App.css                      # Styling cho UI (Job Cards, Mini Terminal, Markdown Table, Alert Banners)
+
+
+4. PHÂN TÍCH KIẾN TRÚC CỐT LÕI (CORE ARCHITECTURE LOGIC)
+
+Hệ thống hoạt động dựa trên mô hình Asynchronous Job Queue và Event-Driven Architecture. Tuyệt đối KHÔNG thay đổi các luồng logic đắt giá dưới đây:
+
+4.1. Quản lý Hàng đợi (Persistent Queue Manager) - src/services/queueManager.js
+
+Class QueueManager: Singleton instance translationQueue. Lớp giao tiếp bất đồng bộ (Async I/O) với MongoDB. Nhận diện Batch thông qua trường folderName.
+
+Cơ chế Phục hồi (Zombie Recovery): Được kích hoạt từ server.js thông qua initDB() CHỈ SAU KHI kết nối MongoDB thành công. Tự động vét các ca "processing" bị ngắt quãng chuyển về "pending".
+
+Phục hồi Trạng thái Hệ thống (State Recovery): Hàm initDB() đọc trạng thái hệ thống từ MongoDB để khôi phục quá trình ngủ đông (nếu có) khi Server Render bị khởi động lại, chống mất state trên RAM.
+
+Cơ chế Locking & FIFO: Hàm startWorker() chạy đệ quy ngầm. Dùng cờ isProcessing đảm bảo tại 1 thời điểm chỉ xử lý 1 file (chống OOM).
+
+Garbage Collection An Toàn: Khi file đạt trạng thái completed, file PDF tạm trên ổ cứng lập tức bị xóa (fs.unlinkSync có kèm fs.existsSync) để thu hồi dung lượng Cloud.
+
+Auto-Recovery (Background Polling): Hàm startFailedJobsSweeper() chạy ngầm 15 phút/lần, quét Database tìm các file failed cũ hơn 30 phút. [CẬP NHẬT V4.2] Đã vá lỗi Zombie Loop: Tự động loại trừ các file mang lỗi "File gốc bị mất do Server khởi động lại", ngăn chặn việc lôi file không còn tồn tại trên ổ cứng lên dịch lại gây nghẽn CPU.
+
+[CẬP NHẬT V4.2] Defense in Depth (Layer 2 Fallback): Hàm getJobsSummary() sử dụng .allowDiskUse(true) làm chốt chặn an toàn cấp 2, ép MongoDB dùng ổ cứng để sort danh sách file nếu Layer 1 (hệ thống Index) gặp sự cố, tránh lỗi 500 RAM Limit.
+
+Circuit Breaker Bền vững (Persistent Hibernation):
+
+Khóa luồng khi phát hiện 10 lỗi nghiêm trọng liên tiếp (cạn kiệt Quota).
+
+Tự động lưu trạng thái ngủ đông (isHibernating, wakeupTime chuẩn ISO) vào MongoDB (systemModel.js). Mặc định ngủ 4 tiếng.
+
+Hỗ trợ hàm forceWakeUp() ép hệ thống thức dậy thủ công và clear timeout/DB an toàn.
+
+4.2. Khối AI (AI Processing & Key Rotation) - src/services/geminiService.js
+
+Ép kiểu Dữ liệu (Data Integrity): Sử dụng Buffer.from(buffer) để tái tạo định dạng Node.js Buffer nguyên thủy khi nhận dữ liệu từ Worker Threads.
+
+Concurrency Control: Sử dụng p-limit(2) để gửi tối đa 2 chunks đồng thời lên Gemini API.
+
+Định dạng Y khoa: Dùng prompt y khoa chuyên sâu (không Latex, giữ nguyên thuật ngữ y khoa, Markdown chuẩn).
+
+API Key Rotation (Dynamic Array): Nạp tự động n Keys qua biến GEMINI_API_KEYS. Hệ thống tự động phân bổ tải và xoay vòng liền mạch khi gặp lỗi 429/503.
+
+4.3. Đa luồng & Tiền xử lý (Worker Threads) - pdfWorker.js & pdfService.js
+
+Worker Threads: Giao phó logic băm nhỏ tài liệu nặng (CPU-bound) sang luồng pdfWorker.js. Main Thread chỉ điều phối Promise.
+
+Chunking Size: Tối ưu hóa Context Window bằng cách cắt nhỏ PDF (3 trang/chunk).
+
+4.4. Giao tiếp API, SSE & Heartbeat Cloud - translateController.js
+
+Upload & Bulk Delete API: Xử lý mảng file lớn. Sử dụng toán tử $in và deleteMany() của MongoDB để xóa triệt để nhiều Job trong 1 query.
+
+Health Check & SSE Keep-Alive: Luồng GET /stream sử dụng setInterval gửi gói tin rỗng : keep-alive-ping\n\n mỗi 15 giây để chống Timeout từ Load Balancer của Cloud.
+
+4.5. [CẬP NHẬT V4.2] Tối ưu hóa I/O Database (Indexing Strategy) - src/models/jobModel.js
+
+Hệ thống sử dụng cơ chế đánh chỉ mục (Index) đa lớp để giải quyết bài toán tràn RAM 32MB và tối ưu truy vấn:
+
+jobSchema.index({ createdAt: -1 });: (Layer 1) Index đơn giảm dần, map thẳng thứ tự vào ổ cứng giúp API GET /jobs chạy mượt mà dù có hàng chục ngàn document.
+
+jobSchema.index({ status: 1, createdAt: 1 });: Index phức hợp tối ưu hóa truy vấn tìm việc mới của startWorker().
+
+jobSchema.index({ status: 1, updatedAt: 1 });: Index phức hợp tối ưu hóa vòng lặp quét file lỗi của startFailedJobsSweeper().
+
+jobSchema.index({ folderName: 1 });: Index đơn tăng tốc độ xóa Bulk/Thư mục.
+
+4.6. Trạng thái Frontend - src/App.jsx
+
+[CẬP NHẬT V4.2] Silent Failure Guard: Cầu chì bảo vệ trong hàm fetchInitialData(). Nếu API trả về HTML 502/504 thay vì mảng JSON do backend quá tải, hệ thống sẽ throw error và hiện Alert cảnh báo rõ ràng cho người dùng, chống hiện tượng "giao diện trống trơn".
+
+Concurrent Upload Batching: Thuật toán tự băm mảng file ra thành các Chunk (2 file/request) và gửi tuần tự để chống sập trình duyệt.
+
+Phân cụm Thư mục (Folder Grouping): UI nhóm các Job lại theo tên Thư mục (folderName). Tích hợp thao tác cấp thư mục: Tải toàn bộ, Dọn dẹp hàng loạt, Xóa gốc rễ.
+
+System Observability & Timezone Sync: Banner cảnh báo ngủ đông (parse giờ UTC sang GMT+7 realtime).
+
+System I/O File Download: Sử dụng File System Access API (showDirectoryPicker) lưu file Markdown hàng loạt, kèm bộ lọc sanitizeFileName siêu nghiêm ngặt để chống lỗi file path.
+
+5. QUY TẮC PHÁT TRIỂN TIẾP THEO (DEVELOPMENT RULES)
+
+Bảo toàn Kiến trúc: Không phá vỡ mô hình Queue, Worker Threads, không đưa SSE trở lại mô hình đồng bộ.
+
+Node.js Hoisting: Cưỡng ép import dotenv/config phải nằm ở dòng trên cùng của server.js.
+
+Cầm tay chỉ việc: Khi yêu cầu sửa code, PHẢI ghi rõ tên tệp tin, đường dẫn. Cung cấp toàn bộ block code để Copy-Paste.
+
+Cách ly Lỗi: Bất cứ module mới nào được thêm vào đều phải có cơ chế try...catch bao bọc kỹ lưỡng.
+
+Zero Assumption: Không tự suy diễn nội dung file cũ nếu chưa được cung cấp.
