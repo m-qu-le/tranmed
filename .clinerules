@@ -18,8 +18,8 @@
 - **Frontend Polling:** `GET /status/:jobId` every 2-3s.
 
 ## 4. Workflows & Setup
-- **Backend:** `cd med-translator-backend` -> `npm install` -> `npm run dev`.
-- **Frontend:** `cd med-translator-frontend` -> `npm install` -> `npm run dev`.
+- **Backend:** `cd med-translator-backend` -> `npm install` -> `npm run dev` (Cần cấu hình `MONGODB_URI`, `GEMINI_API_KEYS` trong `.env`).
+- **Frontend:** `cd med-translator-frontend` -> `npm install` -> `npm run dev` (Cấu hình `VITE_API_URL` trỏ về backend).
 - **Conventions:** `camelCase` naming, `try/catch` error handling, mandatory `async/await`.
 
 ## 5. Coding Standards

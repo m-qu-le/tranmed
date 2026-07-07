@@ -28,7 +28,12 @@ console.log("-----------------------------------------------");
 const app = express();
 const PORT = process.env.PORT || 8080; 
 
-app.use(cors());
+// Cho phép domain Vercel cụ thể (thay thế bằng domain thực tế của bạn nếu cần bảo mật hơn)
+app.use(cors({
+  origin: ['https://tranmed.vercel.app', 'http://localhost:5173'], // Thêm domain Vercel của bạn tại đây
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
