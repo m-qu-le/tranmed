@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G9 hoàn tất; G10 deploy và batch 5/50/200 đạt, còn restart thật và theo dõi 24 giờ |
+| Trạng thái tổng | G1–G9 hoàn tất; G10 rollout/restart/batch 5/50/200 đạt, đang theo dõi production 24 giờ trước khi đóng dự án |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -415,7 +415,7 @@ Mục tiêu: rollout không làm mất job/kết quả hiện có và xác nhậ
 - [x] **P002-G10-S07 — Batch 5 file.** Upload xong, đóng tab, đợi hoàn thành; kiểm tra object/disk/chunk.
 - [x] **P002-G10-S08 — Batch 50 file.** Đo upload/confirm, đóng máy hoặc ngắt client sau banner an toàn, xác nhận toàn batch tiếp tục.
 - [x] **P002-G10-S09 — Batch 200 file đại diện.** Chỉ thực hiện khi quota Gemini/thời gian cho phép; đo tốc độ, restart recovery và cleanup.
-- [ ] **P002-G10-S10 — Render restart thật có kiểm soát.** Khi còn source R2, restart/deploy backend; job phải redownload và hoàn thành.
+- [x] **P002-G10-S10 — Render restart thật có kiểm soát.** Khi còn source R2, restart/deploy backend; job phải redownload và hoàn thành.
 - [ ] **P002-G10-S11 — Theo dõi 24 giờ.** R2 objects/bytes, cleanup backlog, Render RAM/disk/restart, Mongo jobs/chunks, Gemini calls/retry và UI resync.
 - [ ] **P002-G10-S12 — Đóng dự án.** Chỉ hoàn thành khi tiêu chí mục 12 đều đạt và tài liệu vận hành đã cập nhật.
 
@@ -522,6 +522,8 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G10 / batch 5 | Client upload kết thúc sau close-safe; process mới poll Mongo | 5/5 completed, 0 failed; source object 0; dọn 5 job đạt | Client không cần giữ kết nối |
 | 15-07-2026 | G10 / batch 50 | Confirm chunk 10 rồi ngắt client | Upload/confirm 43,1 giây; worker 50/50 completed trong 285 giây, 0 failed | Trước xóa: 50 R2 job, 0 object/missing/orphan; sau xóa sạch |
 | 15-07-2026 | G10 / batch 200 | Confirm chunk 10; reconciler tự promote 100 object giữa PUT; ngắt client sau close-safe | Upload/confirm 149,6 giây; worker 200/200 completed, 0 failed | Trước xóa: 200 R2 job, 0 object/missing/orphan; sau xóa sạch, backlog 0 |
+| 15-07-2026 | G10 / controlled restart | PUT 10/50 object, chưa client-confirm; push backend commit `43c447b`; theo dõi `metrics.startedAt` | Instance đổi `12:08:40Z → 13:01:03Z`; instance mới tự reconcile 10 object và hoàn thành 10/10; 40 file chưa PUT được abandon close-safe | Sau dọn 70 test job: 0 job/object/orphan, backlog 0, storage available |
+| 15-07-2026 | G10 / 24h observation start | Mốc bắt đầu sau controlled restart `15-07-2026 20:01` (Asia/Saigon) | Readiness ready; cleanup/upload backlog 0; R2 reconciliation sạch | Đợi đủ 24 giờ trước P002-G10-S11/S12 |
 
 ## 10. Nhật ký thay đổi
 
@@ -539,6 +541,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G9-S01..S09 | Checkpoint G9 (commit này) | Integration/restart/failure matrix, source streaming benchmark và R2 production upload benchmark 50/200 file | Codex | Hoàn thành; bucket sạch sau benchmark |
 | 15-07-2026 | P002-G10-S01 | Checkpoint pre-deploy (commit này) | Thêm backup EJSON nén, backup production và migration dry-run trước deploy | Codex | Hoàn thành; chờ xác nhận Render env và auto-deploy |
 | 15-07-2026 | P002-G10-S02..S09 | `60ab4bb` + production smoke | Merge/push main, deploy Render/Vercel, migration và batch 1/5/50/200 | Codex | Đạt; production sạch sau cleanup |
+| 15-07-2026 | P002-G10-S10 | `43c447b` + controlled restart | Deploy thật khi 10 object đã PUT chưa confirm; verify reconcile/redownload/completion | Codex | 10/10 recovered; 40 unuploaded abandoned; cleanup sạch |
 
 ## 11. Nhật ký vấn đề và quyết định
 
