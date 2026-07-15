@@ -109,7 +109,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G7 | Xóa, hủy, retry và garbage collection | Hoàn thành code + reconciliation | Không có object R2 mồ côi ngoài retention window |
 | G8 | UX, realtime và quan sát vận hành | Hoàn thành cục bộ | UI phân biệt upload cloud/dịch; reconnect resync đúng |
 | G9 | Test tải, lỗi và hiệu năng | Hoàn thành | Batch 200 file mock đạt; benchmark R2 production 50/200 file đạt và cleanup sạch |
-| G10 | Migration, deploy và theo dõi production | Chưa làm | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
+| G10 | Migration, deploy và theo dõi production | Đang làm | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
 
 ---
 
@@ -406,7 +406,7 @@ Mục tiêu: chứng minh tính đúng đắn trước production và đo liệu
 
 Mục tiêu: rollout không làm mất job/kết quả hiện có và xác nhận đúng kịch bản tắt máy.
 
-- [ ] **P002-G10-S01 — Backup/dry-run.** Đếm dữ liệu MongoDB; backup nếu có dữ liệu cần giữ; migration dry-run và report.
+- [x] **P002-G10-S01 — Backup/dry-run.** Đếm dữ liệu MongoDB; backup nếu có dữ liệu cần giữ; migration dry-run và report.
 - [ ] **P002-G10-S02 — Đặt Render env.** Thêm biến R2 vào Render Environment, không ghi vào Blueprint/repo nếu file đó public; xác nhận secret masking.
 - [ ] **P002-G10-S03 — Deploy backend tương thích trước.** API cũ và mới cùng hoạt động; smoke health/R2 readiness.
 - [ ] **P002-G10-S04 — Chạy migration production.** Idempotent, verify index/schema và không claim job uploading.
@@ -515,6 +515,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G9 / RAM-disk | `npm run benchmark:p002-source` | Stream 1/3/30/350 MB đúng byte; 350 MB mất 378 ms; peak RSS delta toàn ma trận tối đa 0,2 MB với chunk 1 MB | File tạm dọn trong `finally` |
 | 15-07-2026 | G9 / R2 upload benchmark | `npm run benchmark:p002-upload` | 50×1 MB: PUT 10.854 ms, HEAD 2.776 ms, 38,64 Mbps; 200×1 MB: PUT 34.029 ms, HEAD 9.149 ms, 49,3 Mbps; concurrency 4, 0 retry | Prefix `benchmark/` được DELETE trong `finally` |
 | 15-07-2026 | G9 / post-benchmark reconciliation | `npm run reconcile:r2` | 0 job, 0 object, 0 orphan, 0 byte sau benchmark | Read-only; lifecycle API vẫn AccessDenied theo least privilege |
+| 15-07-2026 | G10 / backup + dry-run | `npm run backup:p002`; `npm run migrate:p002:dry` | Backup EJSON gzip ngoài repo: 5 Job, 0 UploadBatch; dry-run: 5 legacy candidate, 0 modified, chưa tạo index | `D:\Dự án StudyMed\Tran-backups`; không in nội dung/URI |
 
 ## 10. Nhật ký thay đổi
 
@@ -530,6 +531,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G7-S01..S10 | `5b6ed9f` | Source cleanup tập trung, persistent retry sweeper, orphan expiry, batch cleanup và reconciliation report | Codex | Hoàn thành code; bucket hiện sạch |
 | 15-07-2026 | P002-G8-S01..S09 | Checkpoint G8 (commit này) | Dashboard ba giai đoạn, R2 status/metrics, SSE batch/cleanup, correlation log và reconnect resync Mongo | Codex | Hoàn thành cục bộ; test/lint/build đạt |
 | 15-07-2026 | P002-G9-S01..S09 | Checkpoint G9 (commit này) | Integration/restart/failure matrix, source streaming benchmark và R2 production upload benchmark 50/200 file | Codex | Hoàn thành; bucket sạch sau benchmark |
+| 15-07-2026 | P002-G10-S01 | Checkpoint pre-deploy (commit này) | Thêm backup EJSON nén, backup production và migration dry-run trước deploy | Codex | Hoàn thành; chờ xác nhận Render env và auto-deploy |
 
 ## 11. Nhật ký vấn đề và quyết định
 

@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Điền `MONGODB_URI` và `GEMINI_API_KEYS` thật trong `.env`. Không commit file này.
+Điền `MONGODB_URI`, `GEMINI_API_KEYS` và các biến `R2_*` theo `.env.example` trong `.env`. Không commit file này.
 
 Các giới hạn quan trọng:
 
@@ -36,3 +36,14 @@ npm run verify:p001
 ```
 
 Migration có tính idempotent và đồng bộ index cho Job, System và TranslationChunk. Riêng đợt P001 ngày 15-07-2026, chủ dự án cho phép bỏ qua backup sau khi dry-run xác nhận cả `jobs`, `systems` và `translationChunks` đều có 0 document; migration và verification production đã hoàn thành thành công.
+
+Trước migration P002, đặt thư mục backup ngoài repository rồi chạy:
+
+```powershell
+$env:P002_BACKUP_DIR='D:\duong-dan-backup'
+npm run backup:p002
+npm run migrate:p002:dry
+npm run migrate:p002
+```
+
+P002 upload trực tiếp PDF vào R2 bằng presigned URL, MongoDB giữ trạng thái queue, còn Render chỉ stream một source về disk tạm khi xử lý. Các lệnh `benchmark:p002-source`, `benchmark:p002-upload` và `reconcile:r2` lần lượt kiểm tra streaming, throughput R2 và object mồ côi.

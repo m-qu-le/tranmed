@@ -1,6 +1,6 @@
 # StudyMed Translator — Frontend
 
-React/Vite client cho hệ thống dịch PDF y khoa. Frontend giữ nhiều PDF trong Local Queue và chỉ gửi một file khi backend báo còn dung lượng, nhằm tránh làm đầy filesystem 500 MB của Render.
+React/Vite client cho hệ thống dịch PDF y khoa. Frontend upload PDF trực tiếp lên Cloudflare R2 với concurrency 4, xác nhận từng lô qua backend và chỉ báo có thể đóng máy sau khi toàn batch đã an toàn trên Cloud.
 
 ## Chạy local
 
@@ -20,4 +20,4 @@ npm run lint
 npm run build
 ```
 
-Không F5 hoặc đóng tab khi Local Queue còn file chưa gửi. Trình duyệt sẽ cảnh báo vì đối tượng File chưa upload không thể tự phục hồi sau khi tải lại trang.
+Không F5 hoặc đóng tab khi còn batch chưa được backend xác nhận `canCloseClient=true`. Khi banner “Đã lưu an toàn trên Cloud” xuất hiện, có thể đóng máy; Render tiếp tục dịch và giao diện sẽ phục hồi batch/job từ MongoDB khi mở lại.
