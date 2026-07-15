@@ -22,6 +22,7 @@
     "smoke:fixture": "node scripts/create-smoke-pdf.js",
     "smoke:r2": "node scripts/smoke-r2.js",
     "smoke:r2-presign": "node scripts/smoke-r2-presign.js",
+    "smoke:p003-quality": "node scripts/smoke-project-003-quality.js",
     "reconcile:r2": "node scripts/reconcile-r2.js",
     "benchmark:p002-source": "node --expose-gc scripts/benchmark-source-stream.js",
     "benchmark:p002-upload": "node scripts/benchmark-r2-upload.js",
