@@ -8,6 +8,7 @@ import System from '../models/systemModel.js';
 import TranslationChunk from '../models/translationChunkModel.js';
 import { MAX_JOB_ATTEMPTS } from '../config/env.js';
 import { cleanupOrphanUploads } from './storageService.js';
+import { sourceService as runtimeSourceService } from './runtimeServices.js';
 import {
     ErrorCodes,
     ProcessingError,
@@ -20,18 +21,8 @@ const LEASE_HEARTBEAT_MS = 60 * 1000;
 const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
 
-async function fileExists(filePath) {
-    if (!filePath) return false;
-    try {
-        await fs.access(filePath);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 export class QueueManager extends EventEmitter {
-    constructor() {
+    constructor({ sourceService = runtimeSourceService } = {}) {
         super();
         this.isProcessing = false;
         this.currentJobId = null;
@@ -42,6 +33,7 @@ export class QueueManager extends EventEmitter {
         this.hibernationStats = null;
         this.hibernationTimer = null;
         this.retryTimer = null;
+        this.sourceService = sourceService;
     }
 
     async initDB() {
@@ -422,22 +414,19 @@ export class QueueManager extends EventEmitter {
             this.emit('jobLog', { jobId: job.jobId, msg });
         };
 
-        if (!(await fileExists(job.filePath))) {
-            throw new ProcessingError(
-                ErrorCodes.FILE_MISSING,
-                'File gốc bị mất do Server khởi động lại.',
-                { publicMessage: 'File gốc đã bị mất trên Render. Vui lòng tải lại.' }
-            );
-        }
+        let resolvedSource = null;
+        try {
+            resolvedSource = await this.sourceService.resolve(job);
+            const sourcePath = resolvedSource.filePath;
 
-        if (signal.aborted) {
-            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
-        }
+            if (signal.aborted) {
+                throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+            }
 
         let chunkBuffers;
         try {
             emitLog('Đang băm PDF...');
-            chunkBuffers = await processPdf(job.filePath, signal);
+            chunkBuffers = await processPdf(sourcePath, signal);
         } catch (error) {
             if (error instanceof ProcessingError) throw error;
             throw new ProcessingError(
@@ -500,6 +489,9 @@ export class QueueManager extends EventEmitter {
             chunkCount: chunkBuffers.length
         });
         emitLog('🎉 Đã dịch xong toàn bộ!');
+        } finally {
+            await this.sourceService.cleanup(resolvedSource);
+        }
     }
 
     async handleProcessingFailure(job, rawError) {
@@ -562,7 +554,7 @@ export class QueueManager extends EventEmitter {
         );
         await this.safeUnlink(job.filePath);
         // FILE_MISSING cần giữ các chunk đã dịch để Local Feeder tải lại PDF và resume.
-        if (error.code !== ErrorCodes.FILE_MISSING) {
+        if (![ErrorCodes.FILE_MISSING, ErrorCodes.R2_SOURCE_MISSING].includes(error.code)) {
             await TranslationChunk.deleteMany({ jobId: job.jobId });
         }
         this.emitJobUpdate(job.jobId, 'failed', {

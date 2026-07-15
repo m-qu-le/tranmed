@@ -5,6 +5,16 @@ import { MAX_FILE_SIZE_MB, MAX_UPLOAD_STORAGE_MB, UPLOAD_DIR } from '../config/e
 
 const budgetBytes = MAX_UPLOAD_STORAGE_MB * 1024 * 1024;
 
+export async function assertWorkerDiskCapacity(sourceSize) {
+    const usedBytes = await getUploadStorageUsage();
+    if (!Number.isSafeInteger(sourceSize) || sourceSize <= 0 || usedBytes + sourceSize > budgetBytes) {
+        const error = new Error('Không đủ dung lượng disk tạm để tải source từ R2.');
+        error.code = 'DISK_CAPACITY';
+        throw error;
+    }
+    return { usedBytes, budgetBytes };
+}
+
 export async function getUploadStorageUsage() {
     let entries = [];
     try {
@@ -60,7 +70,7 @@ export async function cleanupOrphanUploads(gracePeriodMs = 5 * 60 * 1000) {
         { status: { $in: ['pending', 'processing'] } },
         'filePath'
     ).lean();
-    const referencedPaths = new Set(activeJobs.map(job => path.resolve(job.filePath)));
+    const referencedPaths = new Set(activeJobs.map(job => job.filePath).filter(Boolean).map(filePath => path.resolve(filePath)));
     let deletedCount = 0;
 
     for (const entry of entries) {
