@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G9 hoàn tất; bước tiếp theo là G10 migration/deploy production |
+| Trạng thái tổng | G1–G9 hoàn tất; G10 deploy và batch 5/50/200 đạt, còn restart thật và theo dõi 24 giờ |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -397,8 +397,8 @@ Mục tiêu: chứng minh tính đúng đắn trước production và đo liệu
 - [x] **P002-G9-S07 — Cleanup matrix.** Completed, permanent failed, retry waiting, cancel, delete folder, upload abandon và lifecycle.
 - [x] **P002-G9-S08 — Peak RAM/disk.** File 1 MB, 3 MB, 30 MB và gần max config; ghi số liệu thực.
 - [x] **P002-G9-S09 — Upload benchmark.** Batch đại diện 50 và 200 file; ghi tổng byte, tốc độ mạng, thời gian PUT, thời gian confirm và số retry.
-- [ ] **P002-G9-S10 — Security regression tối thiểu.** Bucket private, credentials không ở bundle/log/API; không thêm authentication theo quyết định phạm vi.
-- [ ] **P002-G9-S11 — Full regression P001.** Backend/frontend test, lint, build, audit, legacy result, cancellation và chunk resume đều đạt.
+- [x] **P002-G9-S10 — Security regression tối thiểu.** Bucket private, credentials không ở bundle/log/API; không thêm authentication theo quyết định phạm vi.
+- [x] **P002-G9-S11 — Full regression P001.** Backend/frontend test, lint, build, audit, legacy result, cancellation và chunk resume đều đạt.
 
 **Cổng G9:** test tự động sạch; batch 200 mock đạt; benchmark chỉ kết luận “dưới 5 phút” khi tổng byte/tốc độ mạng thực sự đạt, không hứa theo số file đơn thuần.
 
@@ -407,14 +407,14 @@ Mục tiêu: chứng minh tính đúng đắn trước production và đo liệu
 Mục tiêu: rollout không làm mất job/kết quả hiện có và xác nhận đúng kịch bản tắt máy.
 
 - [x] **P002-G10-S01 — Backup/dry-run.** Đếm dữ liệu MongoDB; backup nếu có dữ liệu cần giữ; migration dry-run và report.
-- [ ] **P002-G10-S02 — Đặt Render env.** Thêm biến R2 vào Render Environment, không ghi vào Blueprint/repo nếu file đó public; xác nhận secret masking.
-- [ ] **P002-G10-S03 — Deploy backend tương thích trước.** API cũ và mới cùng hoạt động; smoke health/R2 readiness.
-- [ ] **P002-G10-S04 — Chạy migration production.** Idempotent, verify index/schema và không claim job uploading.
-- [ ] **P002-G10-S05 — Smoke một PDF R2.** Browser PUT → confirm → worker GET → completed → source R2 deleted.
-- [ ] **P002-G10-S06 — Deploy frontend.** Xác nhận bundle có Cloud Uploader và không chứa R2 credentials.
-- [ ] **P002-G10-S07 — Batch 5 file.** Upload xong, đóng tab, đợi hoàn thành; kiểm tra object/disk/chunk.
-- [ ] **P002-G10-S08 — Batch 50 file.** Đo upload/confirm, đóng máy hoặc ngắt client sau banner an toàn, xác nhận toàn batch tiếp tục.
-- [ ] **P002-G10-S09 — Batch 200 file đại diện.** Chỉ thực hiện khi quota Gemini/thời gian cho phép; đo tốc độ, restart recovery và cleanup.
+- [x] **P002-G10-S02 — Đặt Render env.** Thêm biến R2 vào Render Environment, không ghi vào Blueprint/repo nếu file đó public; xác nhận secret masking.
+- [x] **P002-G10-S03 — Deploy backend tương thích trước.** API cũ và mới cùng hoạt động; smoke health/R2 readiness.
+- [x] **P002-G10-S04 — Chạy migration production.** Idempotent, verify index/schema và không claim job uploading.
+- [x] **P002-G10-S05 — Smoke một PDF R2.** Browser PUT → confirm → worker GET → completed → source R2 deleted.
+- [x] **P002-G10-S06 — Deploy frontend.** Xác nhận bundle có Cloud Uploader và không chứa R2 credentials.
+- [x] **P002-G10-S07 — Batch 5 file.** Upload xong, đóng tab, đợi hoàn thành; kiểm tra object/disk/chunk.
+- [x] **P002-G10-S08 — Batch 50 file.** Đo upload/confirm, đóng máy hoặc ngắt client sau banner an toàn, xác nhận toàn batch tiếp tục.
+- [x] **P002-G10-S09 — Batch 200 file đại diện.** Chỉ thực hiện khi quota Gemini/thời gian cho phép; đo tốc độ, restart recovery và cleanup.
 - [ ] **P002-G10-S10 — Render restart thật có kiểm soát.** Khi còn source R2, restart/deploy backend; job phải redownload và hoàn thành.
 - [ ] **P002-G10-S11 — Theo dõi 24 giờ.** R2 objects/bytes, cleanup backlog, Render RAM/disk/restart, Mongo jobs/chunks, Gemini calls/retry và UI resync.
 - [ ] **P002-G10-S12 — Đóng dự án.** Chỉ hoàn thành khi tiêu chí mục 12 đều đạt và tài liệu vận hành đã cập nhật.
@@ -516,6 +516,12 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G9 / R2 upload benchmark | `npm run benchmark:p002-upload` | 50×1 MB: PUT 10.854 ms, HEAD 2.776 ms, 38,64 Mbps; 200×1 MB: PUT 34.029 ms, HEAD 9.149 ms, 49,3 Mbps; concurrency 4, 0 retry | Prefix `benchmark/` được DELETE trong `finally` |
 | 15-07-2026 | G9 / post-benchmark reconciliation | `npm run reconcile:r2` | 0 job, 0 object, 0 orphan, 0 byte sau benchmark | Read-only; lifecycle API vẫn AccessDenied theo least privilege |
 | 15-07-2026 | G10 / backup + dry-run | `npm run backup:p002`; `npm run migrate:p002:dry` | Backup EJSON gzip ngoài repo: 5 Job, 0 UploadBatch; dry-run: 5 legacy candidate, 0 modified, chưa tạo index | `D:\Dự án StudyMed\Tran-backups`; không in nội dung/URI |
+| 15-07-2026 | G10 / migration production | `npm run migrate:p002`; dry-run lần hai | 5/5 legacy Job cập nhật additive, index đồng bộ; lần hai 0 candidate/0 modified | Backup đã có trước migration |
+| 15-07-2026 | G10 / deploy | Push `main` merge commit `60ab4bb`; health/readiness/status/metrics | Render Mongo + R2 available; Vercel bundle có Cloud Uploader/canClose/dashboard, không còn Local Feeder | Backend 44/44 trên checkout sạch; frontend 9/9, lint/build/audit đạt |
+| 15-07-2026 | G10 / smoke 1 PDF | Production prepare → PUT → confirm → worker → result → cleanup | Completed 1/1 chunk; sau delete 0 object/orphan/backlog | Không in presigned URL |
+| 15-07-2026 | G10 / batch 5 | Client upload kết thúc sau close-safe; process mới poll Mongo | 5/5 completed, 0 failed; source object 0; dọn 5 job đạt | Client không cần giữ kết nối |
+| 15-07-2026 | G10 / batch 50 | Confirm chunk 10 rồi ngắt client | Upload/confirm 43,1 giây; worker 50/50 completed trong 285 giây, 0 failed | Trước xóa: 50 R2 job, 0 object/missing/orphan; sau xóa sạch |
+| 15-07-2026 | G10 / batch 200 | Confirm chunk 10; reconciler tự promote 100 object giữa PUT; ngắt client sau close-safe | Upload/confirm 149,6 giây; worker 200/200 completed, 0 failed | Trước xóa: 200 R2 job, 0 object/missing/orphan; sau xóa sạch, backlog 0 |
 
 ## 10. Nhật ký thay đổi
 
@@ -532,6 +538,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G8-S01..S09 | Checkpoint G8 (commit này) | Dashboard ba giai đoạn, R2 status/metrics, SSE batch/cleanup, correlation log và reconnect resync Mongo | Codex | Hoàn thành cục bộ; test/lint/build đạt |
 | 15-07-2026 | P002-G9-S01..S09 | Checkpoint G9 (commit này) | Integration/restart/failure matrix, source streaming benchmark và R2 production upload benchmark 50/200 file | Codex | Hoàn thành; bucket sạch sau benchmark |
 | 15-07-2026 | P002-G10-S01 | Checkpoint pre-deploy (commit này) | Thêm backup EJSON nén, backup production và migration dry-run trước deploy | Codex | Hoàn thành; chờ xác nhận Render env và auto-deploy |
+| 15-07-2026 | P002-G10-S02..S09 | `60ab4bb` + production smoke | Merge/push main, deploy Render/Vercel, migration và batch 1/5/50/200 | Codex | Đạt; production sạch sau cleanup |
 
 ## 11. Nhật ký vấn đề và quyết định
 
