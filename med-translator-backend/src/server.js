@@ -1,39 +1,23 @@
-import { fileURLToPath } from 'url';
-import path from 'path';
-import dotenv from 'dotenv';
-
-// 🛠️ GIẢI PHÁP ĐẶC TRỊ: Xác định đường dẫn tuyệt đối tới file .envssssss
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Di chuyển ngược ra 1 cấp từ src/ để tìm file .env tại thư mục gốc
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose'; 
 import translateRoute from './routes/translateRoute.js';
+import { validateRuntimeEnv } from './config/env.js';
 
 // [THÊM MỚI] Bổ sung đường truyền tĩnh mạch: Import QueueManager để gọi khởi tạo sau khi có DB
 import { translationQueue } from './services/queueManager.js'; 
 
-// 💉 Tiêm "ống dò" kiểm tra lại
-console.log("-----------------------------------------------");
-console.log("🔍 [KIỂM TRA CWD]:", process.cwd());
-console.log("🔍 [KIỂM TRA BIẾN MÔI TRƯỜNG]:");
-console.log("   - GEMINI_API_KEYS:", process.env.GEMINI_API_KEYS ? "✅ ĐÃ NHẬN" : "❌ TRỐNG");
-console.log("   - MONGODB_URI:", process.env.MONGODB_URI ? "✅ ĐÃ NHẬN" : "❌ TRỐNG");
-console.log("-----------------------------------------------");
-
+const runtimeConfig = validateRuntimeEnv();
 const app = express();
-const PORT = process.env.PORT || 8080; 
+const PORT = runtimeConfig.port;
+app.set('trust proxy', 1);
 
 // [CẤU HÌNH CORS ĐỘNG VÀ LOGGING]
 const allowedOrigins = [
     'https://tranmed.vercel.app',
     'https://med-translator-frontend.vercel.app',
     'http://localhost:5173',
-    process.env.FRONTEND_URL // Hỗ trợ biến môi trường linh hoạt
+    runtimeConfig.frontendUrl // Hỗ trợ biến môi trường linh hoạt
 ].filter(Boolean);
 
 app.use(cors({
@@ -51,8 +35,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // [GIAI ĐOẠN 4]: Heartbeat Endpoint siêu nhẹ chống Cloud Sleep mode
 app.get('/api/health', async (req, res) => {
@@ -78,11 +62,18 @@ app.use('/api/translate', translateRoute);
 
 app.use((err, req, res, next) => {
     console.error('❌ Lỗi không xác định:', err.stack);
+    if (err.name === 'MulterError') {
+        const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({ error: err.message });
+    }
+    if (err.message === 'Not allowed by CORS') {
+        return res.status(403).json({ error: 'Origin không được phép.' });
+    }
     res.status(500).json({ error: 'Lỗi Server Nội Bộ!' });
 });
 
 // Ép Mongoose không chờ (buffering) nếu mất kết nối, fail-fast ngay lập tức
-mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
+mongoose.connect(runtimeConfig.mongodbUri, { serverSelectionTimeoutMS: 5000 })
     .then(async () => { 
         console.log(`🟢 [DATABASE] Đã kết nối thành công tới MongoDB.`);
         

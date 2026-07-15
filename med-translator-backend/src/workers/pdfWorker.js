@@ -1,15 +1,17 @@
 import { parentPort, workerData } from 'worker_threads';
+import fs from 'fs/promises';
 import { splitPdfToBuffers } from '../utils/pdfSplitter.js';
 
 async function executeSplit() {
     try {
         // 🛠️ FIX: Ép kiểu ngược lại thành Node.js Buffer chuẩn ngay khi nhận từ Main Thread
         // Điều này đảm bảo thư viện băm PDF (pdf-lib) đọc đúng format
-        const validFileBuffer = Buffer.from(workerData.fileBuffer);
+        const validFileBuffer = await fs.readFile(workerData.filePath);
         
         const { chunkBuffers, totalPages } = await splitPdfToBuffers(validFileBuffer, 3);
         
-        parentPort.postMessage({ success: true, chunkBuffers, totalPages });
+        const transferList = chunkBuffers.map(chunk => chunk.buffer);
+        parentPort.postMessage({ success: true, chunkBuffers, totalPages }, transferList);
     } catch (error) {
         parentPort.postMessage({ success: false, error: error.message });
     }

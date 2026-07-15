@@ -6,7 +6,13 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage test/*.test.js",
+    "test:keys": "node src/test-keys.js",
+    "migrate:p001:dry": "node scripts/migrate-project-001.js --dry-run",
+    "migrate:p001": "node scripts/migrate-project-001.js",
+    "verify:p001": "node scripts/verify-project-001.js"
   },
   "keywords": [],
   "author": "",
@@ -17,9 +23,9 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
     "mongoose": "^9.5.0",
     "multer": "^2.1.1",
-    "p-limit": "^7.3.0",
     "pdf-lib": "^1.17.1"
   }
 }

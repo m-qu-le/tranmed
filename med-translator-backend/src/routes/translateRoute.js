@@ -1,9 +1,13 @@
 import express from 'express';
 import upload from '../middlewares/upload.js';
+import { enforceStorageBudget, getCapacity, reserveUploadCapacity } from '../middlewares/capacity.js';
+import validatePdf from '../middlewares/validatePdf.js';
+import { rateLimit } from 'express-rate-limit';
 import { 
     uploadFiles, 
     getJobsSummary, 
     getJobResult, 
+    downloadJobResult,
     streamLogs,
     deleteJob,
     bulkDeleteJobs,
@@ -13,15 +17,23 @@ import {
 } from '../controllers/translateController.js'; 
 
 const router = express.Router();
+const uploadRateLimit = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 120,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Đã gửi quá nhiều upload trong một giờ. Vui lòng thử lại sau.' }
+});
 
-// 1. API Upload nhiều file. 
-// Đã nâng cấp giới hạn: Cho phép upload tối đa 100 file cùng lúc để tối ưu Workflow.
-router.post('/', upload.array('files', 100), uploadFiles);
+// Frontend có thể giữ hàng trăm file trong Local Queue, nhưng backend chỉ nhận một file/lần.
+router.post('/', uploadRateLimit, reserveUploadCapacity, upload.array('files', 1), validatePdf, enforceStorageBudget, uploadFiles);
+router.get('/capacity', getCapacity);
 
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
 router.get('/status', getSystemStatus); // Route lấy trạng thái hệ thống
 router.get('/jobs/:jobId/result', getJobResult);
+router.get('/jobs/:jobId/download', downloadJobResult);
 
 // 3. API Stream Server-Sent Events (SSE)
 router.get('/stream', streamLogs);
