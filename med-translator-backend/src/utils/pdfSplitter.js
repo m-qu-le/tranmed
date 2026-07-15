@@ -37,7 +37,8 @@ export async function extractPdfPageRange(pdfBuffer, startPage, pageCount) {
 /**
  * Hàm cắt PDF từ Buffer gốc thành mảng các Buffer nhỏ (mỗi Buffer là 1 chunk)
  */
-export async function splitPdfToBuffers(pdfBuffer, pagesPerChunk = 10) {
+export async function splitPdfToBuffers(pdfBuffer, pagesPerChunk = 2) {
+    assertPositiveInteger(pagesPerChunk, 'pagesPerChunk');
     // 1. Tải file PDF từ bộ nhớ RAM
     const originalPdf = await PDFDocument.load(pdfBuffer);
     const totalPages = originalPdf.getPageCount();

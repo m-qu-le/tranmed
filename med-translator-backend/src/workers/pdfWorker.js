@@ -8,7 +8,7 @@ async function executeSplit() {
         // Điều này đảm bảo thư viện băm PDF (pdf-lib) đọc đúng format
         const validFileBuffer = await fs.readFile(workerData.filePath);
         
-        const { chunkBuffers, totalPages } = await splitPdfToBuffers(validFileBuffer, 3);
+        const { chunkBuffers, totalPages } = await splitPdfToBuffers(validFileBuffer, workerData.pagesPerChunk);
         
         const transferList = chunkBuffers.map(chunk => chunk.buffer);
         parentPort.postMessage({ success: true, chunkBuffers, totalPages }, transferList);

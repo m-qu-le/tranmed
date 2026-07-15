@@ -18,6 +18,10 @@ Các giới hạn quan trọng:
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
+- `TRANSLATION_PIPELINE_MODE`: `legacy` trong rollout đầu; chỉ chuyển `quality` sau benchmark/canary.
+- `PDF_PAGES_PER_CHUNK`: số trang mỗi chunk, mặc định 2.
+- `GEMINI_THINKING_LEVEL`: P003 bắt buộc `HIGH` cho quality mode.
+- `QUALITY_MAX_REPAIR_CYCLES`: 0 hoặc 1; mặc định 1 để không tạo vòng lặp repair vô hạn.
 
 ## Kiểm tra và migration
 

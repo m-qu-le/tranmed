@@ -2,6 +2,7 @@ import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
+import { PDF_PAGES_PER_CHUNK } from '../config/env.js';
 
 // Xác định đường dẫn tuyệt đối đến file pdfWorker.js
 const __filename = fileURLToPath(import.meta.url);
@@ -16,7 +17,7 @@ export const processPdf = (filePath, signal) => {
         
         // Worker tự đọc file để Main Thread không giữ thêm một bản PDF lớn trong RAM.
         const worker = new Worker(workerPath, {
-            workerData: { filePath }
+            workerData: { filePath, pagesPerChunk: PDF_PAGES_PER_CHUNK }
         });
         let settled = false;
         const settle = (callback, value) => {

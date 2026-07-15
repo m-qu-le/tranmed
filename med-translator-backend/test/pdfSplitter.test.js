@@ -61,3 +61,23 @@ test('extractPdfPageRange rejects invalid page ranges', async () => {
     await assert.rejects(extractPdfPageRange(bytes, 2, 1), /vượt quá/);
     await assert.rejects(extractPdfPageRange(bytes, 1, 0), /pageCount/);
 });
+
+test('two-page chunking covers 1, 2, 3, odd and many-page PDFs in order', async () => {
+    for (const [totalPages, expectedChunkPages] of [
+        [1, [1]],
+        [2, [2]],
+        [3, [2, 1]],
+        [5, [2, 2, 1]],
+        [10, [2, 2, 2, 2, 2]],
+    ]) {
+        const source = await PDFDocument.create();
+        for (let page = 0; page < totalPages; page += 1) source.addPage([200 + page, 200]);
+        const result = await splitPdfToBuffers(Buffer.from(await source.save()));
+        const actualChunkPages = [];
+        for (const chunk of result.chunkBuffers) {
+            actualChunkPages.push((await PDFDocument.load(chunk)).getPageCount());
+        }
+        assert.equal(result.totalPages, totalPages);
+        assert.deepEqual(actualChunkPages, expectedChunkPages);
+    }
+});

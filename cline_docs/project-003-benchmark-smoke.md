@@ -44,3 +44,7 @@ npm run benchmark:p003 -- B4 "321 Acute Kidney Injury.pdf" 1 4
 ```
 
 Tham số positional lần lượt là `variant`, `fileName`, `startPage` 1-based, `firstKeyIndex` 0-based và tùy chọn `dry-run`. Runner không in bản dịch ra console và không ghi giá trị API key.
+
+## Smoke profile production G2
+
+`processTranslation` được gọi trực tiếp trên cùng PDF 2 trang với `mode: quality`. Kết quả: một chunk, 20.388 ms, `STOP`, 1.795 input token, 4.051 output token, 2.068 thought token, tổng 7.914 token. Callback nhận đủ metadata và 14.214 ký tự output; nội dung output không được in hoặc commit.

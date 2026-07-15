@@ -17,8 +17,8 @@ export function getGeminiApiKeys() {
         .filter(Boolean);
 }
 
-function readPositiveInteger(name, fallback) {
-    const rawValue = process.env[name];
+function readPositiveInteger(name, fallback, source = process.env) {
+    const rawValue = source[name];
     if (!rawValue) return fallback;
 
     const value = Number.parseInt(rawValue, 10);
@@ -27,6 +27,60 @@ function readPositiveInteger(name, fallback) {
     }
     return value;
 }
+
+function readStrictPositiveInteger(name, fallback, source = process.env) {
+    const rawValue = source[name];
+    if (rawValue === undefined || rawValue === '') return fallback;
+
+    const normalized = String(rawValue).trim();
+    const value = Number.parseInt(normalized, 10);
+    if (!Number.isSafeInteger(value) || value <= 0 || String(value) !== normalized) {
+        throw new Error(`${name} phải là một số nguyên dương.`);
+    }
+    return value;
+}
+
+function readNonNegativeInteger(name, fallback, source = process.env) {
+    const rawValue = source[name];
+    if (rawValue === undefined || rawValue === '') return fallback;
+
+    const normalized = String(rawValue).trim();
+    const value = Number.parseInt(normalized, 10);
+    if (!Number.isSafeInteger(value) || value < 0 || String(value) !== normalized) {
+        throw new Error(`${name} phải là một số nguyên không âm.`);
+    }
+    return value;
+}
+
+export function readP003Config(source = process.env) {
+    const pipelineMode = source.TRANSLATION_PIPELINE_MODE?.trim().toLowerCase() || 'legacy';
+    if (!['legacy', 'quality'].includes(pipelineMode)) {
+        throw new Error('TRANSLATION_PIPELINE_MODE chỉ nhận legacy hoặc quality.');
+    }
+
+    const thinkingLevel = source.GEMINI_THINKING_LEVEL?.trim().toUpperCase() || 'HIGH';
+    if (thinkingLevel !== 'HIGH') {
+        throw new Error('GEMINI_THINKING_LEVEL của P003 bắt buộc là HIGH.');
+    }
+
+    const maxRepairCycles = readNonNegativeInteger('QUALITY_MAX_REPAIR_CYCLES', 1, source);
+    if (maxRepairCycles > 1) {
+        throw new Error('QUALITY_MAX_REPAIR_CYCLES không được vượt quá 1.');
+    }
+
+    return Object.freeze({
+        pipelineMode,
+        pagesPerChunk: readStrictPositiveInteger('PDF_PAGES_PER_CHUNK', 2, source),
+        thinkingLevel,
+        maxRepairCycles,
+    });
+}
+
+const p003Config = readP003Config();
+export const TRANSLATION_PIPELINE_MODE = p003Config.pipelineMode;
+export const PDF_PAGES_PER_CHUNK = p003Config.pagesPerChunk;
+export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
+export const QUALITY_MAX_REPAIR_CYCLES = p003Config.maxRepairCycles;
 
 function readRequiredString(name, missing) {
     const value = process.env[name]?.trim();

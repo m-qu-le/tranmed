@@ -1,8 +1,14 @@
-import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../config/env.js';
+import {
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT_MS,
+    getGeminiApiKeys,
+    TRANSLATION_PIPELINE_MODE,
+} from '../config/env.js';
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
 import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 import { createPdfContents, generateGeminiContent } from './geminiAdapter.js';
 import { LEGACY_TRANSLATION_SYSTEM_INSTRUCTION, TRANSLATE_USER_INSTRUCTION } from './geminiPrompts.js';
+import { getTranslationProfile } from './translationProfiles.js';
 
 // [ĐÃ SỬA]: Lazy Loading (Lấy Key khi thực thi thay vì lấy lúc khởi tạo file)
 const getApiKeys = () => {
@@ -40,7 +46,7 @@ function assertNotCancelled(signal) {
     }
 }
 
-async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal) {
+async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal, profile) {
     const keys = getApiKeys();
     const keysCount = keys.length;
     if (keysCount === 0) {
@@ -72,18 +78,19 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
                     contents: createPdfContents(base64Data, TRANSLATE_USER_INSTRUCTION),
                     config: {
                         systemInstruction: LEGACY_TRANSLATION_SYSTEM_INSTRUCTION,
-                        temperature: 0.1,
+                        ...profile.generateConfig,
                         httpOptions: { timeout: GEMINI_TIMEOUT_MS },
                     },
                     signal,
-                    stage: 'legacy_translate',
-                    validationMode: 'legacy',
+                    stage: profile.stage,
+                    validationMode: profile.validationMode,
                 });
 
                 return { 
                     text: response.text, 
                     modelUsed: TARGET_MODEL, 
-                    keyUsed: `Key ${attemptingKeyIndex + 1}` 
+                    keyUsed: `Key ${attemptingKeyIndex + 1}`,
+                    metadata: response.metadata,
                 };
 
             } catch (error) {
@@ -155,7 +162,7 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
     );
 }
 
-async function translateSingleChunk(buffer, chunkIndex, emitLog, signal) {
+async function translateSingleChunk(buffer, chunkIndex, emitLog, signal, profile) {
     const chunkLabel = `Chunk ${chunkIndex + 1}`;
     let base64Data;
 
@@ -171,10 +178,11 @@ async function translateSingleChunk(buffer, chunkIndex, emitLog, signal) {
         }
         
         emitLog(`⏳ [${chunkLabel}] Bắt đầu dịch... (Đang nạp Key ${currentKeyIndex + 1})`);
-        const result = await callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal);
+        const result = await callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal, profile);
         
         emitLog(`✅ [${chunkLabel}] Xong! (Dùng: ${result.modelUsed} - Bằng: ${result.keyUsed})`);
-        return result.text;
+        emitLog(`📊 [${chunkLabel}] stage=${result.metadata.stage} model=${result.metadata.modelVersion || result.modelUsed} finish=${result.metadata.finishReason || 'MISSING'} input=${result.metadata.usage.promptTokenCount ?? 'n/a'} output=${result.metadata.usage.candidatesTokenCount ?? 'n/a'} thought=${result.metadata.usage.thoughtsTokenCount ?? 'n/a'} total=${result.metadata.usage.totalTokenCount ?? 'n/a'} latencyMs=${result.metadata.latencyMs}`);
+        return result;
     } catch (error) {
         emitLog(`❌ LỖI NGHIÊM TRỌNG tại ${chunkLabel}: ${error.message}`);
         throw error;
@@ -185,8 +193,10 @@ export const processTranslation = async (chunkBuffers, emitLog, options = {}) =>
     const {
         signal,
         existingChunks = new Map(),
-        onChunkTranslated = async () => {}
+        onChunkTranslated = async () => {},
+        mode = TRANSLATION_PIPELINE_MODE,
     } = options;
+    const profile = getTranslationProfile(mode);
     const keysCount = getApiKeys().length;
     emitLog(`🚀 Bắt đầu dịch ${chunkBuffers.length} chunk với ${keysCount} API key...`);
 
@@ -202,16 +212,17 @@ export const processTranslation = async (chunkBuffers, emitLog, options = {}) =>
 
     await runBoundedTasks(remainingIndexes, 2, async chunkIndex => {
         assertNotCancelled(signal);
-        const content = await translateSingleChunk(
+        const result = await translateSingleChunk(
             chunkBuffers[chunkIndex],
             chunkIndex,
             emitLog,
-            signal
+            signal,
+            profile
         );
         assertNotCancelled(signal);
-        translatedChunks[chunkIndex] = content;
-        await onChunkTranslated(chunkIndex, content);
-        return content;
+        translatedChunks[chunkIndex] = result.text;
+        await onChunkTranslated(chunkIndex, result.text, result.metadata);
+        return result.text;
     });
 
     return translatedChunks;
