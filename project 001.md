@@ -240,7 +240,7 @@ Mục tiêu: đưa đại tu lên production có kiểm soát và có đường 
 - [ ] **P001-G9-S01 — Test matrix local.** Chạy toàn bộ bảng tình huống bên dưới với Gemini mock; chọn một smoke test Gemini thật kích thước nhỏ.
 - [x] **P001-G9-S02 — Backup MongoDB.** Không áp dụng theo quyết định D005: chủ dự án xác nhận đã dọn toàn bộ job, không có job khoảng một tuần và không có dữ liệu cần giữ. Trước migration vẫn phải dry-run/count; nếu phát hiện dữ liệu thì dừng và backup.
 - [ ] **P001-G9-S03 — Deploy backend trước.** Backend mới phải tương thích frontend cũ trong cửa sổ chuyển đổi.
-- [ ] **P001-G9-S04 — Chạy migration production.** Dry-run, review số document, chạy thật, kiểm tra index.
+- [ ] **P001-G9-S04 — Chạy migration production.** Dry-run ngày 15-07-2026 xác nhận `jobs=0`, `systems=0`, `translationChunks=0`; chưa chạy migration thật và chưa kiểm tra index production.
 - [ ] **P001-G9-S05 — Smoke backend.** Health, capacity, jobs pagination, SSE, upload 1 PDF, result và cleanup.
 - [ ] **P001-G9-S06 — Deploy frontend.** Xác nhận `VITE_API_URL` là `https://tranmed.onrender.com/api/translate`.
 - [ ] **P001-G9-S07 — Smoke end-to-end.** Chọn nhiều chương, quan sát Local Feeder, hoàn thành, preview, copy, download, delete.
@@ -316,6 +316,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | 15-07-2026 | P001-PLAN | `f024643` | Tạo kế hoạch đại tu | Codex | Hoàn thành tài liệu |
 | 15-07-2026 | P001-G0…G8 | `f024643` | Đại tu queue, retry/cancel, chunk storage, disk guard, Local Feeder, API/SSE và test | Codex | Hoàn thành code lõi; giữ G9 production mở |
 | 15-07-2026 | P001-G6-S05 | `b1f8dc3` | Chiếm khóa upload trước I/O để đóng race hai request đồng thời | Codex | Hoàn thành + unit test |
+| 15-07-2026 | P001-G9-S04 | `16d060a` | Bổ sung tổng collection vào báo cáo migration dry-run | Codex | Xác nhận database trống; chưa mutate |
 
 ## 9. Bằng chứng kiểm thử
 
@@ -330,6 +331,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | 15-07-2026 | G6/G8 | Frontend `npm test -- --run` | 2 test đạt; fixture 100 chương chỉ POST 1 file | Vitest/RTL |
 | 15-07-2026 | G8 | Frontend `npm run lint` + `npm run build` | Thành công; Vite production build sạch | ESLint/Vite |
 | 15-07-2026 | G5 | PDF Worker unit | Abort dừng worker; Uint8Array dùng transfer list | `pdfSplitter.test.js` |
+| 15-07-2026 | G9 migration dry-run | `npm run migrate:p001:dry` | `jobs=0`, `systems=0`, `translationChunks=0`; không update/index change | MongoDB production, read-only |
 
 ## 10. Nhật ký vấn đề và quyết định
 
@@ -339,7 +341,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | D002 | 15-07-2026 | Render chỉ có khoảng 500 MB nhưng số chương cần dịch rất lớn | Upload trước toàn bộ làm restart và mất file pending | Local Feeder + capacity/disk budget | Đã chốt |
 | D003 | 15-07-2026 | Filesystem Render là ephemeral | PDF trên server không thể là queue bền vững | Chỉ giữ file đang xử lý/retry; MongoDB giữ metadata/chunks | Đã chốt |
 | D004 | 15-07-2026 | Ba tài liệu gốc đang hiện là deleted trong worktree trước khi triển khai P001 | Có nguy cơ commit nhầm deletion | Xác nhận riêng với chủ dự án ở G0-S01 | Chờ xác nhận |
-| D005 | 15-07-2026 | Chủ dự án xác nhận database không còn job/dữ liệu cần giữ và đồng ý bỏ qua backup trước migration P001 | Không tạo archive MongoDB cho trạng thái trống | Dry-run/count trước migration; nếu kết quả khác 0 phải dừng và quay lại bước backup | Đã chốt |
+| D005 | 15-07-2026 | Chủ dự án xác nhận database không còn job/dữ liệu cần giữ và đồng ý bỏ qua backup trước migration P001 | Không tạo archive MongoDB cho trạng thái trống | Dry-run đã xác nhận cả ba collection liên quan có tổng 0 document | Đã chốt và kiểm chứng |
 
 ## 11. Điều kiện hoàn thành PROJECT 001
 
