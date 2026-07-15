@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/*.test.js",
-    "test:watch": "node --test --watch test/*.test.js",
-    "test:coverage": "node --test --experimental-test-coverage test/*.test.js",
+    "test": "node --import ./test/setup-env.js --test test/*.test.js",
+    "test:watch": "node --import ./test/setup-env.js --test --watch test/*.test.js",
+    "test:coverage": "node --import ./test/setup-env.js --test --experimental-test-coverage test/*.test.js",
     "test:keys": "node src/test-keys.js",
     "migrate:p001:dry": "node scripts/migrate-project-001.js --dry-run",
     "migrate:p001": "node scripts/migrate-project-001.js",
