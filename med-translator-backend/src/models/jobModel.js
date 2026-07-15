@@ -5,12 +5,24 @@ const jobSchema = new mongoose.Schema({
     clientUploadId: { type: String },
     originalName: { type: String, required: true },
     folderName: { type: String, default: 'Mặc định' }, // [THÊM MỚI] Nhóm các file lại thành thư mục
-    filePath: { type: String, required: true },
+    filePath: { type: String, default: null },
     status: { 
         type: String, 
-        enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'],
+        enum: ['uploading', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
         default: 'pending' 
     },
+    storageProvider: { type: String, enum: ['local', 'r2'], default: null },
+    storageKey: { type: String, default: null },
+    sourceSize: { type: Number, min: 0, default: null },
+    sourceEtag: { type: String, default: null },
+    sourceState: {
+        type: String,
+        enum: ['prepared', 'ready', 'delete_pending', 'deleted', 'missing'],
+        default: null
+    },
+    uploadBatchId: { type: String, default: null },
+    uploadConfirmedAt: { type: Date, default: null },
+    sourceDeletedAt: { type: Date, default: null },
     result: { type: String, default: null }, // Legacy: job mới lưu nội dung theo TranslationChunk
     error: { type: String, default: null },
     errorCode: { type: String, default: null },
@@ -23,6 +35,32 @@ const jobSchema = new mongoose.Schema({
     chunkCount: { type: Number, default: 0, min: 0 },
     completedChunks: { type: Number, default: 0, min: 0 }
 }, { timestamps: true });
+
+jobSchema.pre('validate', function validateSourceInvariant() {
+    const hasLocalSource = Boolean(this.filePath);
+    const hasR2Source = this.storageProvider === 'r2' && Boolean(this.storageKey);
+    if (!hasLocalSource && !hasR2Source) {
+        this.invalidate('filePath', 'Job phải tham chiếu file local hoặc object R2.');
+    }
+
+    if (this.storageProvider === 'r2') {
+        if (!this.storageKey) this.invalidate('storageKey', 'Job R2 bắt buộc có storageKey.');
+        if (!this.uploadBatchId) this.invalidate('uploadBatchId', 'Job R2 bắt buộc có uploadBatchId.');
+        if (this.status === 'uploading' && this.sourceState !== 'prepared') {
+            this.invalidate('sourceState', 'Job uploading phải có sourceState=prepared.');
+        }
+        if (this.status === 'pending' && this.sourceState !== 'ready') {
+            this.invalidate('sourceState', 'Job pending trên R2 phải có sourceState=ready.');
+        }
+    }
+
+    if (this.sourceDeletedAt && this.sourceState !== 'deleted') {
+        this.invalidate('sourceDeletedAt', 'sourceDeletedAt chỉ được đặt sau khi sourceState=deleted.');
+    }
+    if (this.sourceState === 'deleted' && !this.sourceDeletedAt) {
+        this.invalidate('sourceState', 'sourceState=deleted bắt buộc có sourceDeletedAt.');
+    }
+});
 
 // ============================================================================
 // [KIẾN TRÚC TỐI ƯU HÓA I/O DATABASE - INDEXING STRATEGY]
@@ -40,6 +78,7 @@ jobSchema.index({ status: 1, createdAt: 1 });
 // Claim job đến hạn và phục hồi processing lease đã hết hạn.
 jobSchema.index({ status: 1, nextRetryAt: 1, createdAt: 1 });
 jobSchema.index({ status: 1, leaseExpiresAt: 1 });
+jobSchema.index({ status: 1, sourceState: 1, createdAt: 1 });
 
 // 3. Index Phức hợp (Compound Index) #2: Tối ưu cho cơ chế Auto-Recovery (Sweeper)
 // Truy vấn: Job.updateMany({ status: 'failed', updatedAt: { $lte: thirtyMinsAgo } })
@@ -49,5 +88,8 @@ jobSchema.index({ status: 1, updatedAt: 1 });
 // Truy vấn: Job.deleteMany({ folderName })
 jobSchema.index({ folderName: 1 });
 jobSchema.index({ clientUploadId: 1 }, { unique: true, sparse: true });
+jobSchema.index({ storageKey: 1 }, { unique: true, sparse: true });
+jobSchema.index({ uploadBatchId: 1, createdAt: 1 });
+jobSchema.index({ sourceState: 1, updatedAt: 1 });
 
 export default mongoose.model('Job', jobSchema);

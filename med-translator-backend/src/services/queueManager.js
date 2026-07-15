@@ -209,6 +209,8 @@ export class QueueManager extends EventEmitter {
                 originalName: file.originalname,
                 folderName: folderName || 'Mặc định',
                 filePath: file.path,
+                storageProvider: 'local',
+                sourceState: 'ready',
                 status: 'pending',
                 maxAttempts: MAX_JOB_ATTEMPTS,
                 nextRetryAt: new Date()
@@ -277,9 +279,23 @@ export class QueueManager extends EventEmitter {
             {
                 status: 'pending',
                 cancelRequested: { $ne: true },
-                $or: [
-                    { nextRetryAt: null },
-                    { nextRetryAt: { $lte: now } }
+                $and: [
+                    {
+                        $or: [
+                            { nextRetryAt: null },
+                            { nextRetryAt: { $lte: now } }
+                        ]
+                    },
+                    {
+                        $or: [
+                            { storageProvider: { $ne: 'r2' } },
+                            {
+                                storageProvider: 'r2',
+                                sourceState: 'ready',
+                                storageKey: { $type: 'string' }
+                            }
+                        ]
+                    }
                 ]
             },
             {

@@ -13,13 +13,18 @@
     "migrate:p001:dry": "node scripts/migrate-project-001.js --dry-run",
     "migrate:p001": "node scripts/migrate-project-001.js",
     "verify:p001": "node scripts/verify-project-001.js",
-    "smoke:fixture": "node scripts/create-smoke-pdf.js"
+    "migrate:p002:dry": "node scripts/migrate-project-002.js --dry-run",
+    "migrate:p002": "node scripts/migrate-project-002.js",
+    "smoke:fixture": "node scripts/create-smoke-pdf.js",
+    "smoke:r2": "node scripts/smoke-r2.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1087.0",
+    "@aws-sdk/s3-request-presigner": "^3.1087.0",
     "@google/genai": "^1.50.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

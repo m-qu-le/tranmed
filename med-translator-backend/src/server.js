@@ -3,6 +3,8 @@ import cors from 'cors';
 import mongoose from 'mongoose'; 
 import translateRoute from './routes/translateRoute.js';
 import { validateRuntimeEnv } from './config/env.js';
+import { createR2Service } from './services/r2Service.js';
+import { redactError } from './utils/redactSecrets.js';
 
 // [THÊM MỚI] Bổ sung đường truyền tĩnh mạch: Import QueueManager để gọi khởi tạo sau khi có DB
 import { translationQueue } from './services/queueManager.js'; 
@@ -10,6 +12,7 @@ import { translationQueue } from './services/queueManager.js';
 const runtimeConfig = validateRuntimeEnv();
 const app = express();
 const PORT = runtimeConfig.port;
+const r2Service = createR2Service(runtimeConfig.r2);
 app.set('trust proxy', 1);
 
 // [CẤU HÌNH CORS ĐỘNG VÀ LOGGING]
@@ -50,7 +53,7 @@ app.get('/api/health', async (req, res) => {
             message: 'Render server is awake and MongoDB connection is active!' 
         });
     } catch (error) {
-        console.error('Database connection failed during health check:', error);
+        console.error('Database connection failed during health check:', redactError(error));
         res.status(500).json({ 
             status: 'error', 
             message: 'Database connection failed' 
@@ -58,10 +61,31 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+// Readiness là phép kiểm tra chủ động, tách khỏi heartbeat thường xuyên.
+// HeadBucket không tạo object và không trả bucket name/credential cho client.
+app.get('/api/readiness', async (req, res) => {
+    try {
+        await mongoose.connection.db.admin().ping();
+        await r2Service.checkReadiness();
+        res.status(200).json({
+            status: 'ready',
+            database: { available: true },
+            storage: { configured: true, available: true },
+        });
+    } catch (error) {
+        console.error('Readiness check failed:', redactError(error));
+        res.status(503).json({
+            status: 'not_ready',
+            database: { available: mongoose.connection.readyState === 1 },
+            storage: { configured: true, available: false },
+        });
+    }
+});
+
 app.use('/api/translate', translateRoute);
 
 app.use((err, req, res, next) => {
-    console.error('❌ Lỗi không xác định:', err.stack);
+    console.error('Unhandled server error:', redactError(err));
     if (err.name === 'MulterError') {
         const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
         return res.status(status).json({ error: err.message });
@@ -88,6 +112,6 @@ mongoose.connect(runtimeConfig.mongodbUri, { serverSelectionTimeoutMS: 5000 })
         });
     })
     .catch((error) => {
-        console.error(`🔴 [DATABASE] Lỗi kết nối MongoDB:`, error.message);
+        console.error('[DATABASE] Lỗi kết nối MongoDB:', redactError(error));
         process.exit(1); 
     });

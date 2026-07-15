@@ -10,6 +10,10 @@ test('claimNextJob relies on one atomic pending-to-processing update', async (co
 
     Job.findOneAndUpdate = async (filter, update, options) => {
         assert.equal(filter.status, 'pending');
+        const r2SourceGate = filter.$and[1].$or[1];
+        assert.equal(r2SourceGate.storageProvider, 'r2');
+        assert.equal(r2SourceGate.sourceState, 'ready');
+        assert.deepEqual(r2SourceGate.storageKey, { $type: 'string' });
         assert.equal(update.$set.status, 'processing');
         assert.equal(options.returnDocument, 'after');
         if (!pendingJobAvailable) return null;
