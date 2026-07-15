@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const systemSchema = new mongoose.Schema({
-    key: { type: String, default: 'circuit_breaker' },
+    key: { type: String, default: 'circuit_breaker', unique: true },
     isHibernating: { type: Boolean, default: false },
     stats: {
         startTime: String,

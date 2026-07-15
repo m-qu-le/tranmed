@@ -1,16 +1,23 @@
-# React + Vite
+# StudyMed Translator — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite client cho hệ thống dịch PDF y khoa. Frontend giữ nhiều PDF trong Local Queue và chỉ gửi một file khi backend báo còn dung lượng, nhằm tránh làm đầy filesystem 500 MB của Render.
 
-Currently, two official plugins are available:
+## Chạy local
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+Copy-Item .env.example .env.local
+npm install
+npm run dev
+```
 
-## React Compiler
+`VITE_API_URL` phải bao gồm `/api/translate`, ví dụ `http://localhost:8080/api/translate`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Kiểm tra
 
-## Expanding the ESLint configuration
+```powershell
+npm test
+npm run lint
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Không F5 hoặc đóng tab khi Local Queue còn file chưa gửi. Trình duyệt sẽ cảnh báo vì đối tượng File chưa upload không thể tự phục hồi sau khi tải lại trang.

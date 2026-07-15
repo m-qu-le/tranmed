@@ -1,16 +1,17 @@
 import multer from 'multer';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
+import { MAX_FILE_SIZE_MB, UPLOAD_DIR } from '../config/env.js';
 
 // Tạo thư mục tạm 'uploads' ở thư mục gốc của project nếu chưa có
-const uploadDir = 'uploads/';
-if (!fs.existsSync(uploadDir)){
-    fs.mkdirSync(uploadDir);
+if (!fs.existsSync(UPLOAD_DIR)){
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
 // Cấu hình lưu trữ file xuống ổ cứng (Disk Storage)
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, uploadDir);
+        cb(null, UPLOAD_DIR);
     },
     filename: function (req, file, cb) {
         // 1. GIẢI MÃ ENCODING: Ép ngược từ latin1 sang utf8 để giữ nguyên tiếng Việt và ký tự đặc biệt
@@ -18,11 +19,10 @@ const storage = multer.diskStorage({
 
         // 2. SANITIZE (Vệ sinh tên file - Optional nhưng là Best Practice của System Architect): 
         // Xóa hoặc thay thế các ký tự có thể gây lỗi đường dẫn trên hệ điều hành (như \ / : * ? " < > |)
-        const safeName = decodedName.replace(/[\\/:*?"<>|]/g, '-');
+        file.originalname = decodedName;
 
-        // 3. Gắn timestamp chống trùng lặp
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + '-' + safeName);
+        // Tên lưu vật lý độc lập với tên người dùng để tránh URL/path quá dài hoặc ký tự đặc biệt.
+        cb(null, `${randomUUID()}.pdf`);
     }
 });
 
@@ -37,7 +37,11 @@ const upload = multer({
         }
     },
     limits: {
-        fileSize: 500 * 1024 * 1024 // Giới hạn 500MB cho mỗi lần upload sách
+        fileSize: MAX_FILE_SIZE_MB * 1024 * 1024,
+        files: 1,
+        fields: 5,
+        fieldNameSize: 100,
+        fieldSize: 16 * 1024
     }
 });
 

@@ -8,9 +8,8 @@ echo ===================================================
 :: Lấy đường dẫn của chính thư mục chứa file .bat này
 set CURRENT_DIR=%~dp0
 
-:: 0. Garbage Collection: Dọn dẹp file PDF mồ côi từ phiên làm việc trước
-echo [0/4] Đang dọn dẹp bộ nhớ đệm (Clear Cache)...
-if exist "%CURRENT_DIR%med-translator-backend\uploads\*.pdf" del /q "%CURRENT_DIR%med-translator-backend\uploads\*.pdf"
+:: PDF tạm được QueueManager đối chiếu với MongoDB và tự dọn an toàn khi backend khởi động.
+:: Không xóa mù thư mục uploads vì có thể làm mất job pending hợp lệ.
 
 :: 1. Khởi động Backend
 echo [1/4] Đang bật Backend Server...

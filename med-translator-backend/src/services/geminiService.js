@@ -1,16 +1,18 @@
 import { GoogleGenAI } from '@google/genai';
-import pLimit from 'p-limit';
+import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../config/env.js';
+import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
+import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 
 // [ĐÃ SỬA]: Lazy Loading (Lấy Key khi thực thi thay vì lấy lúc khởi tạo file)
 const getApiKeys = () => {
-    const keys = process.env.GEMINI_API_KEYS ? process.env.GEMINI_API_KEYS.split(',') : [];
+    const keys = getGeminiApiKeys();
     if (keys.length === 0) {
         console.error("🔴 [CẢNH BÁO]: Chưa tìm thấy GEMINI_API_KEYS trong file .env!");
     }
     return keys;
 };
 
-const TARGET_MODEL = 'gemini-3.1-flash-lite'; 
+const TARGET_MODEL = GEMINI_MODEL;
 let currentKeyIndex = 0;
 
 const SYSTEM_INSTRUCTION = `
@@ -47,7 +49,17 @@ VD:
 - Không dùng "### Hình 22–3: Các giai đoạn của nang trứng, từ nguyên thủy đến trưởng thành." mà dùng "**Hình 22–3: Các giai đoạn của nang trứng, từ nguyên thủy đến trưởng thành.**
 `;
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms, signal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+    }, ms);
+    const onAbort = () => {
+        clearTimeout(timer);
+        reject(new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+});
 
 function getAiInstance(keyIndex) {
     return new GoogleGenAI({ 
@@ -55,28 +67,42 @@ function getAiInstance(keyIndex) {
     });
 }
 
-function rotateApiKey(emitLog, chunkLabel, failedIndex) {
-    const keysCount = getApiKeys().length;
-    if (currentKeyIndex === failedIndex) {
-        const oldIndex = currentKeyIndex;
-        currentKeyIndex = (currentKeyIndex + 1) % keysCount;
-        emitLog(`🔄 [${chunkLabel}] ĐÃ ĐỔI API KEY: Từ Key ${oldIndex + 1} sang Key ${currentKeyIndex + 1}`);
-    } else {
-        emitLog(`ℹ️ [${chunkLabel}] API Key đã được tiến trình khác đổi sang Key ${currentKeyIndex + 1}, tiếp tục đồng bộ...`);
+function reserveKeyIndex(keysCount) {
+    const reservedIndex = currentKeyIndex % keysCount;
+    currentKeyIndex = (currentKeyIndex + 1) % keysCount;
+    return reservedIndex;
+}
+
+function assertNotCancelled(signal) {
+    if (signal?.aborted) {
+        throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
     }
 }
 
-async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog) {
-    let keysTried = 0;
-    let lastError = null;
-    const keysCount = getApiKeys().length;
+async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal) {
+    const keys = getApiKeys();
+    const keysCount = keys.length;
+    if (keysCount === 0) {
+        throw new ProcessingError(
+            ErrorCodes.GEMINI_CONFIG,
+            'Không có Gemini API key hợp lệ.',
+            { publicMessage: 'Server chưa được cấu hình Gemini API key.' }
+        );
+    }
 
-    while (keysTried < keysCount) {
+    const firstKeyIndex = reserveKeyIndex(keysCount);
+    let lastError = null;
+    let lastStatus = null;
+    let authFailures = 0;
+
+    for (let keysTried = 0; keysTried < keysCount; keysTried += 1) {
+        assertNotCancelled(signal);
         let retries = 0;
-        const maxRetriesPerKey = 5; 
-        const attemptingKeyIndex = currentKeyIndex; 
+        const maxRetriesPerKey = 3;
+        const attemptingKeyIndex = (firstKeyIndex + keysTried) % keysCount;
 
         while (retries <= maxRetriesPerKey) {
+            assertNotCancelled(signal);
             try {
                 const ai = getAiInstance(attemptingKeyIndex); 
                 const response = await ai.models.generateContent({
@@ -92,9 +118,19 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog) {
                     ],
                     config: {
                         systemInstruction: SYSTEM_INSTRUCTION,
-                        temperature: 0.1 
+                        temperature: 0.1,
+                        httpOptions: { timeout: GEMINI_TIMEOUT_MS },
+                        abortSignal: signal
                     }
                 });
+
+                if (!response.text) {
+                    throw new ProcessingError(
+                        ErrorCodes.GEMINI_UNAVAILABLE,
+                        'Gemini trả về nội dung rỗng.',
+                        { retryable: true }
+                    );
+                }
 
                 return { 
                     text: response.text, 
@@ -103,39 +139,80 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog) {
                 };
 
             } catch (error) {
-                lastError = error;
-                const status = error?.status || error?.response?.status || 500;
+                if (error instanceof ProcessingError) throw error;
+                if (signal?.aborted || error?.name === 'AbortError') {
+                    throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+                }
 
-                if (status === 429 || status === 503) {
+                lastError = error;
+                const status = error?.status || error?.response?.status || null;
+                lastStatus = status;
+
+                if (status === 401 || status === 403) {
+                    authFailures += 1;
+                    emitLog(`🔑 [${chunkLabel}] Key ${attemptingKeyIndex + 1} không hợp lệ, chuyển key khác.`);
+                    break;
+                }
+
+                if (status === 400 || status === 404) {
+                    throw new ProcessingError(
+                        ErrorCodes.GEMINI_CONFIG,
+                        error.message,
+                        { publicMessage: 'Gemini từ chối model hoặc dữ liệu đầu vào.' }
+                    );
+                }
+
+                if (status === 429 || [500, 502, 503, 504].includes(status) || status === null) {
                     if (retries < maxRetriesPerKey) {
                         retries++;
-                        // [ĐÃ SỬA]: Thay đổi hệ số nhân từ 3000 thành 12000
-                        const waitTime = retries * 12000; 
+                        const waitTime = retries * 12000;
                         
                         emitLog(`⚠️ [${chunkLabel}] API Key ${attemptingKeyIndex + 1} đang bận (Lỗi ${status}). Đợi ${waitTime/1000}s thử lại lần ${retries}/${maxRetriesPerKey}...`);
-                        await delay(waitTime);
+                        await delay(waitTime, signal);
                     } else {
                         emitLog(`🛑 [${chunkLabel}] API Key ${attemptingKeyIndex + 1} THẤT BẠI sau ${maxRetriesPerKey} lần thử.`);
                         break; 
                     }
                 } else {
-                    throw error; 
+                    throw new ProcessingError(
+                        ErrorCodes.GEMINI_UNAVAILABLE,
+                        error.message,
+                        { retryable: true, publicMessage: 'Không thể kết nối dịch vụ Gemini.' }
+                    );
                 }
             }
         } 
-
-        rotateApiKey(emitLog, chunkLabel, attemptingKeyIndex);
-        keysTried++;
     } 
 
-    throw new Error(`Tuyệt vọng! Đã thử toàn bộ ${keysCount} API Keys nhưng đều thất bại. Lỗi cuối cùng: ${lastError?.message}`);
+    if (authFailures === keysCount) {
+        throw new ProcessingError(
+            ErrorCodes.GEMINI_AUTH,
+            'Toàn bộ Gemini API key đều bị từ chối.',
+            { publicMessage: 'Toàn bộ Gemini API key không hợp lệ.' }
+        );
+    }
+
+    if (lastStatus === 429) {
+        throw new ProcessingError(
+            ErrorCodes.GEMINI_RATE_LIMIT,
+            lastError?.message || 'Gemini đã hết quota.',
+            { retryable: true, quotaRelated: true, publicMessage: 'Gemini đang hết quota, hệ thống sẽ thử lại.' }
+        );
+    }
+
+    throw new ProcessingError(
+        ErrorCodes.GEMINI_UNAVAILABLE,
+        lastError?.message || 'Gemini tạm thời không khả dụng.',
+        { retryable: true, publicMessage: 'Gemini tạm thời không khả dụng, hệ thống sẽ thử lại.' }
+    );
 }
 
-async function translateSingleChunk(buffer, chunkIndex, emitLog) {
+async function translateSingleChunk(buffer, chunkIndex, emitLog, signal) {
     const chunkLabel = `Chunk ${chunkIndex + 1}`;
     let base64Data;
 
     try {
+        assertNotCancelled(signal);
         // 🛠️ FIX: Kiểm tra an toàn loại dữ liệu trả về từ Worker
         const validBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
         base64Data = validBuffer.toString('base64');
@@ -146,7 +223,7 @@ async function translateSingleChunk(buffer, chunkIndex, emitLog) {
         }
         
         emitLog(`⏳ [${chunkLabel}] Bắt đầu dịch... (Đang nạp Key ${currentKeyIndex + 1})`);
-        const result = await callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog);
+        const result = await callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal);
         
         emitLog(`✅ [${chunkLabel}] Xong! (Dùng: ${result.modelUsed} - Bằng: ${result.keyUsed})`);
         return result.text;
@@ -156,15 +233,38 @@ async function translateSingleChunk(buffer, chunkIndex, emitLog) {
     }
 }
 
-export const processTranslation = async (chunkBuffers, emitLog) => {
-    const limit = pLimit(2); 
+export const processTranslation = async (chunkBuffers, emitLog, options = {}) => {
+    const {
+        signal,
+        existingChunks = new Map(),
+        onChunkTranslated = async () => {}
+    } = options;
     const keysCount = getApiKeys().length;
-    emitLog(`🚀 Đang băm thành ${chunkBuffers.length} chunk. Hệ thống Key Rotation đã sẵn sàng với ${keysCount} Keys...`);
+    emitLog(`🚀 Bắt đầu dịch ${chunkBuffers.length} chunk với ${keysCount} API key...`);
 
-    const promises = chunkBuffers.map((buffer, index) => 
-        limit(() => translateSingleChunk(buffer, index, emitLog))
-    );
+    const translatedChunks = Array(chunkBuffers.length);
+    const remainingIndexes = [];
+    for (let index = 0; index < chunkBuffers.length; index += 1) {
+        if (existingChunks.has(index)) {
+            translatedChunks[index] = existingChunks.get(index);
+        } else {
+            remainingIndexes.push(index);
+        }
+    }
 
-    const translatedChunks = await Promise.all(promises);
-    return translatedChunks.join('\n\n---\n\n');
+    await runBoundedTasks(remainingIndexes, 2, async chunkIndex => {
+        assertNotCancelled(signal);
+        const content = await translateSingleChunk(
+            chunkBuffers[chunkIndex],
+            chunkIndex,
+            emitLog,
+            signal
+        );
+        assertNotCancelled(signal);
+        translatedChunks[chunkIndex] = content;
+        await onChunkTranslated(chunkIndex, content);
+        return content;
+    });
+
+    return translatedChunks;
 };

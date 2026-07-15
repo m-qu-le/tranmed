@@ -1,6 +1,6 @@
 import { translationQueue } from '../services/queueManager.js';
-import Job from '../models/jobModel.js';
-import fs from 'fs'; // [THÊM DÒNG NÀY] Import fs để dọn dẹp file PDF vật lý trên ổ cứng
+import TranslationChunk from '../models/translationChunkModel.js';
+import mongoose from 'mongoose';
 
 // API 1: Bọc try-catch, dùng Promise.all để ghi đa file vào DB
 export const uploadFiles = async (req, res) => {
@@ -10,21 +10,39 @@ export const uploadFiles = async (req, res) => {
         }
 
         // [THÊM MỚI] Trích xuất tên thư mục từ request, nếu không có thì để "Mặc định"
-        const folderName = req.body.folderName || 'Mặc định';
+        const folderName = (req.body.folderName || 'Mặc định').trim().slice(0, 120) || 'Mặc định';
+        const clientUploadId = typeof req.body.clientUploadId === 'string'
+            ? req.body.clientUploadId.trim().slice(0, 100)
+            : null;
+        const jobs = [];
+        const failures = [];
 
-        const jobs = await Promise.all(
-            // [SỬA ĐỔI] Truyền thêm folderName vào hàng đợi
-            req.files.map(file => translationQueue.addJob(file, folderName))
-        );
+        for (const file of req.files) {
+            try {
+                jobs.push(await translationQueue.addJob(file, folderName, clientUploadId));
+            } catch (error) {
+                await translationQueue.safeUnlink(file.path);
+                failures.push({ originalName: file.originalname, error: 'Không thể tạo job trong MongoDB.' });
+                console.error(`[UPLOAD] Không thể tạo job cho ${file.originalname}:`, error.message);
+            }
+        }
+
+        if (jobs.length === 0) {
+            return res.status(500).json({
+                error: 'Không thể tạo job cho các file đã tải lên.',
+                failures
+            });
+        }
         
-        res.status(200).json({ 
+        res.status(failures.length > 0 ? 207 : 200).json({
             message: 'Đã đưa vào hàng chờ xử lý trên Cloud/Database', 
             jobs: jobs.map(j => ({ 
                 jobId: j.jobId, 
                 originalName: j.originalName, 
                 status: j.status,
                 folderName: j.folderName 
-            })) 
+            })),
+            failures
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -34,8 +52,15 @@ export const uploadFiles = async (req, res) => {
 // API 2: Đổi thành Async
 export const getJobsSummary = async (req, res) => {
     try {
-        const jobs = await translationQueue.getJobsSummary();
-        res.status(200).json(jobs);
+        const requestedLimit = Number.parseInt(req.query.limit || '100', 10);
+        const limit = Math.min(200, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 100));
+        const cursor = req.query.cursor || null;
+        if (cursor && !mongoose.isValidObjectId(cursor)) {
+            return res.status(400).json({ error: 'Cursor không hợp lệ.' });
+        }
+
+        const page = await translationQueue.getJobsSummary({ limit, cursor });
+        res.status(200).json(page);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -50,7 +75,15 @@ export const getJobResult = async (req, res) => {
         if (!job) return res.status(404).json({ error: 'Không tìm thấy công việc này.' });
         if (job.status !== 'completed') return res.status(400).json({ error: 'Tài liệu chưa dịch xong.' });
         
-        res.status(200).json({ result: job.result });
+        if (job.result) {
+            return res.status(200).json({ result: job.result });
+        }
+
+        const chunks = await TranslationChunk.find({ jobId }, 'content chunkIndex')
+            .sort({ chunkIndex: 1 })
+            .lean();
+        const result = chunks.map(chunk => chunk.content).join('\n\n');
+        res.status(200).json({ result });
     } catch (error) {
          res.status(500).json({ error: error.message });
     }
@@ -72,7 +105,18 @@ export const streamLogs = (req, res) => {
     }, 15000); 
 
     const onJobUpdated = (job) => {
-        const payload = { type: 'status', jobId: job.jobId, status: job.status, error: job.error };
+        const payload = {
+            type: 'status',
+            jobId: job.jobId,
+            status: job.status,
+            error: job.error,
+            errorCode: job.errorCode,
+            attemptCount: job.attemptCount,
+            maxAttempts: job.maxAttempts,
+            nextRetryAt: job.nextRetryAt,
+            completedChunks: job.completedChunks,
+            chunkCount: job.chunkCount
+        };
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
@@ -104,13 +148,18 @@ export const streamLogs = (req, res) => {
 export const deleteJob = async (req, res) => {
     try {
         const { jobId } = req.params;
-        const deletedJob = await Job.findOneAndDelete({ jobId });
-        
-        if (!deletedJob) {
+        const result = await translationQueue.cancelAndDeleteJob(jobId);
+
+        if (!result.found) {
             return res.status(404).json({ error: 'Không tìm thấy tiến trình để xóa.' });
         }
-        
-        res.status(200).json({ message: 'Đã xóa tiến trình thành công.' });
+
+        res.status(result.pending ? 202 : 200).json({
+            message: result.pending
+                ? 'Đã gửi yêu cầu hủy. Tiến trình sẽ được dọn sau khi request hiện tại dừng.'
+                : 'Đã xóa tiến trình thành công.',
+            pending: result.pending
+        });
     } catch (error) {
          res.status(500).json({ error: error.message });
     }
@@ -121,16 +170,16 @@ export const bulkDeleteJobs = async (req, res) => {
     try {
         const { jobIds } = req.body; // Nhận mảng các jobId từ Frontend
         
-        if (!jobIds || !Array.isArray(jobIds)) {
+        if (!Array.isArray(jobIds) || jobIds.length === 0 || jobIds.length > 500 || jobIds.some(id => typeof id !== 'string')) {
             return res.status(400).json({ error: 'Danh sách ID không hợp lệ.' });
         }
 
-        // Xóa một lần toàn bộ các document có jobId nằm trong mảng
-        const result = await Job.deleteMany({ jobId: { $in: jobIds } });
+        const result = await translationQueue.cancelAndDeleteJobs([...new Set(jobIds)]);
         
-        res.status(200).json({ 
-            message: `Đã dọn dẹp thành công ${result.deletedCount} tiến trình.`, 
-            deletedCount: result.deletedCount 
+        res.status(result.pendingCount > 0 ? 202 : 200).json({
+            message: `Đã xử lý ${result.foundCount} tiến trình; ${result.pendingCount} tiến trình đang chờ hủy.`,
+            deletedCount: result.foundCount - result.pendingCount,
+            pendingCount: result.pendingCount
         });
     } catch (error) {
          res.status(500).json({ error: error.message });
@@ -168,28 +217,45 @@ export const deleteFolderQueue = async (req, res) => {
     try {
         const { folderName } = req.params;
         
-        // 1. Tìm tất cả các tiến trình thuộc thư mục này để lấy đường dẫn file vật lý
-        const jobsToDelete = await Job.find({ folderName });
+        const result = await translationQueue.cancelAndDeleteFolder(folderName);
         
-        // 2. Dọn dẹp ổ cứng: Quét và xóa toàn bộ file PDF còn tồn đọng
-        jobsToDelete.forEach(job => {
-            if (job.filePath && fs.existsSync(job.filePath)) {
-                try { 
-                    fs.unlinkSync(job.filePath); 
-                } catch (e) { 
-                    console.error(`[Garbage Collection] Lỗi xóa file vật lý ${job.filePath}:`, e); 
-                }
-            }
-        });
-
-        // 3. Xóa triệt để các Document trong MongoDB
-        const result = await Job.deleteMany({ folderName });
-        
-        res.status(200).json({ 
-            message: `Đã xóa hoàn toàn thư mục [${folderName}] với ${result.deletedCount} tiến trình.`, 
-            deletedCount: result.deletedCount 
+        res.status(result.pendingCount > 0 ? 202 : 200).json({
+            message: `Đã xử lý thư mục [${folderName}] với ${result.foundCount} tiến trình.`,
+            deletedCount: result.foundCount - result.pendingCount,
+            pendingCount: result.pendingCount
         });
     } catch (error) {
          res.status(500).json({ error: error.message });
+    }
+};
+
+export const downloadJobResult = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const job = await translationQueue.getJobResult(jobId);
+        if (!job) return res.status(404).json({ error: 'Không tìm thấy công việc này.' });
+        if (job.status !== 'completed') return res.status(400).json({ error: 'Tài liệu chưa dịch xong.' });
+
+        const baseName = (job.originalName || 'tai-lieu').replace(/\.pdf$/i, '');
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}_vi.md`)}`);
+
+        if (job.result) {
+            return res.end(job.result);
+        }
+
+        let firstChunk = true;
+        const cursor = TranslationChunk.find({ jobId }, 'content chunkIndex')
+            .sort({ chunkIndex: 1 })
+            .cursor();
+        for await (const chunk of cursor) {
+            if (!firstChunk) res.write('\n\n');
+            res.write(chunk.content);
+            firstChunk = false;
+        }
+        res.end();
+    } catch (error) {
+        if (!res.headersSent) res.status(500).json({ error: error.message });
+        else res.end();
     }
 };

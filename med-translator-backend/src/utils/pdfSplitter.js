@@ -22,9 +22,9 @@ export async function splitPdfToBuffers(pdfBuffer, pagesPerChunk = 10) {
         const copiedPages = await chunkPdf.copyPages(originalPdf, pageIndices);
         copiedPages.forEach((page) => chunkPdf.addPage(page));
 
-        // Lưu chunk lại dưới dạng mảng byte (Uint8Array) rồi chuyển sang Buffer
+        // Giữ Uint8Array gốc để Worker có thể transfer ArrayBuffer mà không clone thêm.
         const chunkBytes = await chunkPdf.save();
-        chunkBuffers.push(Buffer.from(chunkBytes));
+        chunkBuffers.push(chunkBytes);
     }
 
     return { chunkBuffers, totalPages };

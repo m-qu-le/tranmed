@@ -1,65 +1,119 @@
 import { EventEmitter } from 'events';
-import fs from 'fs';
+import { randomUUID } from 'crypto';
+import fs from 'fs/promises';
 import { processPdf } from './pdfService.js';
 import { processTranslation } from './geminiService.js';
-import Job from '../models/jobModel.js'; 
-import System from '../models/systemModel.js'; // [THÊM MỚI] Import model System
+import Job from '../models/jobModel.js';
+import System from '../models/systemModel.js';
+import TranslationChunk from '../models/translationChunkModel.js';
+import { MAX_JOB_ATTEMPTS } from '../config/env.js';
+import { cleanupOrphanUploads } from './storageService.js';
+import {
+    ErrorCodes,
+    ProcessingError,
+    normalizeProcessingError
+} from '../utils/processingError.js';
+
+const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
+const LEASE_DURATION_MS = 5 * 60 * 1000;
+const LEASE_HEARTBEAT_MS = 60 * 1000;
+const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
+const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
+
+async function fileExists(filePath) {
+    if (!filePath) return false;
+    try {
+        await fs.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 export class QueueManager extends EventEmitter {
     constructor() {
         super();
         this.isProcessing = false;
-        
-        // [CƠ CHẾ CIRCUIT BREAKER]
-        this.consecutiveFailures = 0;   
-        this.isHibernating = false;     
-        this.hibernationLevel = 1;      
-        
-        // Dữ liệu giám sát ngủ đông để gửi cho Frontend
-        this.hibernationCount = 0; 
-        this.hibernationStats = null; 
-        
-        // Lưu trữ tham chiếu Timeout để hủy khi cần Ép thức dậy
-        this.hibernationTimer = null; 
+        this.currentJobId = null;
+        this.currentAbortController = null;
+        this.consecutiveFailures = 0;
+        this.isHibernating = false;
+        this.hibernationCount = 0;
+        this.hibernationStats = null;
+        this.hibernationTimer = null;
+        this.retryTimer = null;
     }
 
     async initDB() {
-        try {
-            // 1. Khôi phục Jobs
-            const result = await Job.updateMany({ status: 'processing' }, { $set: { status: 'pending' } });
-            if (result.modifiedCount > 0) {
-                console.log(`♻️ [QUEUE] Đã khôi phục ${result.modifiedCount} tác vụ (Zombie Jobs) về trạng thái Pending.`);
-            }
+        const now = new Date();
+        const cancelledJobs = await Job.find(
+            {
+                status: 'processing',
+                cancelRequested: true,
+                $or: [
+                    { leaseExpiresAt: { $lte: now } },
+                    { leaseExpiresAt: null }
+                ]
+            },
+            'jobId filePath'
+        ).lean();
+        for (const job of cancelledJobs) {
+            await this.cleanupJob(job.jobId, job.filePath);
+        }
 
-            // 2. [QUAN TRỌNG] Khôi phục trạng thái Ngủ đông từ Database
-            const sysState = await System.findOne({ key: 'circuit_breaker' });
-            if (sysState && sysState.isHibernating) {
-                const now = new Date();
-                const wakeupTime = new Date(sysState.stats.wakeupTime);
-
-                if (wakeupTime > now) {
-                    // Nếu vẫn chưa đến giờ thức dậy, thiết lập lại bộ đếm ngủ đông
-                    this.isHibernating = true;
-                    this.hibernationStats = sysState.stats;
-                    this.hibernationCount = sysState.stats.hibernationCount;
-
-                    const remainingMs = wakeupTime - now;
-                    this.hibernationTimer = setTimeout(() => this.wakeUp(), remainingMs);
-                    console.log(`🛑 [RESTORE] Hệ thống vẫn đang trong thời gian ngủ đông. Sẽ thức dậy sau ${Math.round(remainingMs/60000)} phút.`);
-                } else {
-                    // Nếu đã quá giờ thức dậy trong lúc server đang tắt, ép thức dậy luôn
-                    await this.forceWakeUp();
+        const recovery = await Job.updateMany(
+            {
+                status: 'processing',
+                cancelRequested: { $ne: true },
+                $or: [
+                    { leaseExpiresAt: { $lte: now } },
+                    { leaseExpiresAt: null }
+                ]
+            },
+            {
+                $set: {
+                    status: 'pending',
+                    processingToken: null,
+                    leaseExpiresAt: null,
+                    nextRetryAt: now,
+                    error: 'Tiến trình cũ đã được phục hồi sau khi server khởi động lại.',
+                    errorCode: null
                 }
             }
+        );
 
-            this.startFailedJobsSweeper();
-            this.startWorker(); 
-        } catch (error) {
-            console.error('❌ [QUEUE] Lỗi khi khởi tạo DB:', error);
+        if (recovery.modifiedCount > 0) {
+            console.log(`♻️ [QUEUE] Đã phục hồi ${recovery.modifiedCount} job có lease hết hạn.`);
         }
+        if (cancelledJobs.length > 0) {
+            console.log(`🧹 [QUEUE] Đã dọn ${cancelledJobs.length} job hủy dở từ worker cũ.`);
+        }
+
+        const sysState = await System.findOne({ key: CIRCUIT_BREAKER_KEY });
+        if (sysState?.isHibernating && sysState.stats?.wakeupTime) {
+            const wakeupTime = new Date(sysState.stats.wakeupTime);
+            if (wakeupTime > now) {
+                this.isHibernating = true;
+                this.hibernationStats = sysState.stats.toObject?.() || sysState.stats;
+                this.hibernationCount = sysState.stats.hibernationCount || 0;
+                this.scheduleWakeUp(wakeupTime.getTime() - now.getTime());
+            } else {
+                await System.findOneAndUpdate(
+                    { key: CIRCUIT_BREAKER_KEY },
+                    { $set: { isHibernating: false, stats: null } },
+                    { upsert: true }
+                );
+            }
+        }
+
+        const orphanCount = await cleanupOrphanUploads();
+        if (orphanCount > 0) {
+            console.log(`🧹 [GC] Đã xóa ${orphanCount} PDF mồ côi khi khởi động.`);
+        }
+
+        await this.startWorker();
     }
 
-    // API Nội bộ cho Controller lấy trạng thái hiện tại
     getSystemStatus() {
         return {
             isHibernating: this.isHibernating,
@@ -67,187 +121,559 @@ export class QueueManager extends EventEmitter {
         };
     }
 
-    // Hàm ép hệ thống thức dậy ngay lập tức
+    scheduleWakeUp(delayMs) {
+        if (this.hibernationTimer) clearTimeout(this.hibernationTimer);
+        this.hibernationTimer = setTimeout(() => {
+            this.wakeUp().catch(error => {
+                console.error('❌ [CIRCUIT BREAKER] Không thể tự thức dậy:', error.message);
+                this.scheduleWakeUp(60 * 1000);
+            });
+        }, Math.max(0, delayMs));
+    }
+
     async forceWakeUp() {
         if (!this.isHibernating) return false;
-
-        console.log(`\n⚡ [CIRCUIT BREAKER] ÉP THỨC DẬY THỦ CÔNG (FORCE WAKE-UP)!`);
-        
         if (this.hibernationTimer) clearTimeout(this.hibernationTimer);
-        await this.wakeUp(); // Tái sử dụng hàm wakeUp
+        await this.wakeUp();
         return true;
     }
 
-    startFailedJobsSweeper() {
-        setInterval(async () => {
-            if (this.isHibernating) return; 
-            try {
-                const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
-                
-                // [CẬP NHẬT FIX LỖI] Bỏ qua các tác vụ bị mất file vật lý để ngăn chặn Zombie Loop
-                const result = await Job.updateMany(
-                    { 
-                        status: 'failed', 
-                        updatedAt: { $lte: thirtyMinsAgo },
-                        error: { $ne: 'File gốc bị mất do Server khởi động lại. Vui lòng dọn dẹp và tải lại.' } 
-                    },
-                    { $set: { status: 'pending', error: '🔄 Tự động thử lại sau 30 phút...' } }
-                );
-                
-                if (result.modifiedCount > 0) {
-                    console.log(`\n♻️ [AUTO-RECOVERY] Đã tìm thấy và đưa ${result.modifiedCount} files bị lỗi tạm thời quay lại hàng đợi.`);
-                    this.startWorker(); 
-                }
-            } catch (error) {
-                console.error('❌ [AUTO-RECOVERY] Lỗi khi truy vấn Database:', error.message);
-            }
-        }, 15 * 60 * 1000);
-    }
-
     async triggerHibernation() {
-        this.isHibernating = true; 
-        this.hibernationCount++;
-        
-        const sleepHours = 4; // Cố định ngủ 4 tiếng
+        if (this.isHibernating) return;
+
+        const sleepHours = 4;
         const sleepMs = sleepHours * 60 * 60 * 1000;
-        
-        // Lưu chuẩn ISO để Frontend tự parse theo múi giờ địa phương
-        this.hibernationStats = {
+        const stats = {
             startTime: new Date().toISOString(),
             wakeupTime: new Date(Date.now() + sleepMs).toISOString(),
-            sleepHours: sleepHours,
-            hibernationCount: this.hibernationCount
+            sleepHours,
+            hibernationCount: this.hibernationCount + 1
         };
 
-        // Lưu xuống MongoDB
         await System.findOneAndUpdate(
-            { key: 'circuit_breaker' },
-            { isHibernating: true, stats: this.hibernationStats },
+            { key: CIRCUIT_BREAKER_KEY },
+            { $set: { isHibernating: true, stats } },
             { upsert: true }
         );
 
-        console.log(`\n🛑 [CIRCUIT BREAKER] KÍCH HOẠT NGỦ ĐÔNG!`);
-        console.log(`   Thời gian ngủ: ${sleepHours} tiếng.`);
-        console.log(`   Chu kỳ ngủ thứ: ${this.hibernationCount}\n`);
-
+        this.isHibernating = true;
+        this.hibernationCount = stats.hibernationCount;
+        this.hibernationStats = stats;
         this.emit('systemStatusChanged', this.getSystemStatus());
-        
-        this.hibernationTimer = setTimeout(() => this.wakeUp(), sleepMs);
+        this.scheduleWakeUp(sleepMs);
+        console.log(`🛑 [CIRCUIT BREAKER] Ngủ đông ${sleepHours} giờ sau lỗi quota liên tiếp.`);
     }
 
-    // Hàm wakeUp phụ trợ
     async wakeUp() {
-        console.log(`\n🟢 [CIRCUIT BREAKER] HỆ THỐNG ĐÃ THỨC DẬY.`);
-        this.consecutiveFailures = 0; 
-        this.isHibernating = false;   
+        await System.findOneAndUpdate(
+            { key: CIRCUIT_BREAKER_KEY },
+            { $set: { isHibernating: false, stats: null } },
+            { upsert: true }
+        );
+
+        this.consecutiveFailures = 0;
+        this.isHibernating = false;
         this.hibernationStats = null;
         this.hibernationTimer = null;
-
-        await System.findOneAndUpdate({ key: 'circuit_breaker' }, { isHibernating: false, stats: null });
-        
         this.emit('systemStatusChanged', this.getSystemStatus());
-        this.startWorker();
+        await this.startWorker();
     }
 
-    async addJob(file, folderName) {
-        const job = new Job({
-            jobId: file.filename,
-            originalName: file.originalname,
-            folderName: folderName,
-            filePath: file.path,
-            status: 'pending'
-        });
-        await job.save();
-        this.startWorker();
+    async addJob(file, folderName, clientUploadId = null) {
+        if (clientUploadId) {
+            const existing = await Job.findOne({ clientUploadId });
+            if (existing) {
+                if (existing.status === 'failed' && existing.errorCode === ErrorCodes.FILE_MISSING) {
+                    existing.filePath = file.path;
+                    existing.status = 'pending';
+                    existing.error = null;
+                    existing.errorCode = null;
+                    existing.attemptCount = 0;
+                    existing.nextRetryAt = new Date();
+                    existing.cancelRequested = false;
+                    await existing.save();
+                    void this.startWorker();
+                    return existing;
+                }
+
+                await this.safeUnlink(file.path);
+                return existing;
+            }
+        }
+
+        let job;
+        try {
+            job = await Job.create({
+                jobId: randomUUID(),
+                ...(clientUploadId ? { clientUploadId } : {}),
+                originalName: file.originalname,
+                folderName: folderName || 'Mặc định',
+                filePath: file.path,
+                status: 'pending',
+                maxAttempts: MAX_JOB_ATTEMPTS,
+                nextRetryAt: new Date()
+            });
+        } catch (error) {
+            if (error?.code === 11000 && clientUploadId) {
+                const existing = await Job.findOne({ clientUploadId });
+                await this.safeUnlink(file.path);
+                if (existing) return existing;
+            }
+            throw error;
+        }
+
+        void this.startWorker();
         return job;
     }
 
-    async getJobsSummary() {
-        // [CẬP NHẬT FIX LỖI] Vượt rào 32MB RAM Limit: Ép MongoDB sử dụng ổ cứng tạm (Disk) để sắp xếp dữ liệu
-        return await Job.find({}, 'jobId originalName folderName status error')
-            .sort({ createdAt: -1 })
-            .allowDiskUse(true);
+    async getJobsSummary({ limit = 100, cursor = null } = {}) {
+        const filter = cursor ? { _id: { $lt: cursor } } : {};
+        const rows = await Job.find(
+            filter,
+            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks createdAt'
+        )
+            .sort({ _id: -1 })
+            .limit(limit + 1)
+            .lean();
+
+        const hasMore = rows.length > limit;
+        const items = hasMore ? rows.slice(0, limit) : rows;
+        return {
+            items,
+            nextCursor: hasMore ? String(items.at(-1)._id) : null
+        };
     }
 
     async getJobResult(jobId) {
-        return await Job.findOne({ jobId });
+        return Job.findOne({ jobId });
+    }
+
+    emitJobUpdate(jobId, status, fields = {}) {
+        this.emit('jobUpdated', { jobId, status, ...fields });
+    }
+
+    createLeaseHeartbeat(jobId, processingToken) {
+        return setInterval(() => {
+            Job.updateOne(
+                { jobId, status: 'processing', processingToken },
+                { $set: { leaseExpiresAt: new Date(Date.now() + LEASE_DURATION_MS) } }
+            ).catch(error => {
+                console.error(`❌ [LEASE] Không thể gia hạn ${jobId}:`, error.message);
+            });
+        }, LEASE_HEARTBEAT_MS);
+    }
+
+    calculateRetryAt(error, attemptCount) {
+        const baseDelay = error.quotaRelated ? QUOTA_RETRY_BASE_MS : TRANSIENT_RETRY_BASE_MS;
+        const exponentialDelay = baseDelay * (2 ** Math.max(0, attemptCount - 1));
+        const jitter = Math.floor(Math.random() * Math.min(30000, baseDelay / 4));
+        return new Date(Date.now() + exponentialDelay + jitter);
+    }
+
+    async claimNextJob() {
+        const now = new Date();
+        const processingToken = randomUUID();
+        return Job.findOneAndUpdate(
+            {
+                status: 'pending',
+                cancelRequested: { $ne: true },
+                $or: [
+                    { nextRetryAt: null },
+                    { nextRetryAt: { $lte: now } }
+                ]
+            },
+            {
+                $set: {
+                    status: 'processing',
+                    processingToken,
+                    leaseExpiresAt: new Date(Date.now() + LEASE_DURATION_MS),
+                    nextRetryAt: null,
+                    error: null,
+                    errorCode: null
+                },
+                $inc: { attemptCount: 1 }
+            },
+            { sort: { createdAt: 1 }, new: true }
+        );
+    }
+
+    async recoverExpiredLeases() {
+        const now = new Date();
+        const cancelledJobs = await Job.find(
+            {
+                status: 'processing',
+                cancelRequested: true,
+                leaseExpiresAt: { $lte: now }
+            },
+            'jobId filePath'
+        ).lean();
+        for (const job of cancelledJobs) {
+            await this.cleanupJob(job.jobId, job.filePath);
+        }
+
+        const result = await Job.updateMany(
+            {
+                status: 'processing',
+                cancelRequested: { $ne: true },
+                leaseExpiresAt: { $lte: now }
+            },
+            {
+                $set: {
+                    status: 'pending',
+                    processingToken: null,
+                    leaseExpiresAt: null,
+                    nextRetryAt: now,
+                    error: 'Worker cũ mất lease; job đã được phục hồi.',
+                    errorCode: null
+                }
+            }
+        );
+        return result.modifiedCount + cancelledJobs.length;
+    }
+
+    async scheduleNextRetry() {
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        const [nextRetry, nextLease] = await Promise.all([
+            Job.findOne(
+                { status: 'pending', nextRetryAt: { $gt: new Date() } },
+                'nextRetryAt'
+            ).sort({ nextRetryAt: 1 }).lean(),
+            Job.findOne(
+                { status: 'processing', leaseExpiresAt: { $gt: new Date() } },
+                'leaseExpiresAt'
+            ).sort({ leaseExpiresAt: 1 }).lean()
+        ]);
+
+        const wakeTimes = [nextRetry?.nextRetryAt, nextLease?.leaseExpiresAt]
+            .filter(Boolean)
+            .map(value => new Date(value).getTime());
+        if (wakeTimes.length === 0) return;
+        const delayMs = Math.max(1000, Math.min(...wakeTimes) - Date.now());
+        this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            void this.startWorker();
+        }, Math.min(delayMs, 2_147_000_000));
+    }
+
+    async saveTranslatedChunk(job, chunkIndex, content) {
+        try {
+            const isStillActive = await Job.exists({
+                jobId: job.jobId,
+                status: 'processing',
+                processingToken: job.processingToken,
+                cancelRequested: { $ne: true }
+            });
+            if (!isStillActive) {
+                throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+            }
+
+            await TranslationChunk.updateOne(
+                { jobId: job.jobId, chunkIndex },
+                { $set: { content } },
+                { upsert: true }
+            );
+
+            const completedChunks = await TranslationChunk.countDocuments({ jobId: job.jobId });
+            const progressUpdate = await Job.updateOne(
+                {
+                    jobId: job.jobId,
+                    status: 'processing',
+                    processingToken: job.processingToken,
+                    cancelRequested: { $ne: true }
+                },
+                { $set: { completedChunks } }
+            );
+            if (progressUpdate.matchedCount === 0) {
+                throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+            }
+            this.emitJobUpdate(job.jobId, 'processing', {
+                completedChunks,
+                chunkCount: job.chunkCount
+            });
+        } catch (error) {
+            if (error instanceof ProcessingError) throw error;
+            throw new ProcessingError(
+                ErrorCodes.DATABASE_UNAVAILABLE,
+                error.message,
+                { retryable: true, publicMessage: 'MongoDB tạm thời không ghi được kết quả.' }
+            );
+        }
+    }
+
+    async processClaimedJob(job, signal) {
+        const emitLog = (msg) => {
+            console.log(`[${job.originalName}] ${msg}`);
+            this.emit('jobLog', { jobId: job.jobId, msg });
+        };
+
+        if (!(await fileExists(job.filePath))) {
+            throw new ProcessingError(
+                ErrorCodes.FILE_MISSING,
+                'File gốc bị mất do Server khởi động lại.',
+                { publicMessage: 'File gốc đã bị mất trên Render. Vui lòng tải lại.' }
+            );
+        }
+
+        if (signal.aborted) {
+            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+        }
+
+        let chunkBuffers;
+        try {
+            emitLog('Đang băm PDF...');
+            chunkBuffers = await processPdf(job.filePath, signal);
+        } catch (error) {
+            if (error instanceof ProcessingError) throw error;
+            throw new ProcessingError(
+                ErrorCodes.INVALID_PDF,
+                error.message,
+                { publicMessage: 'PDF bị hỏng hoặc không thể đọc.' }
+            );
+        }
+
+        if (signal.aborted) {
+            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+        }
+
+        job.chunkCount = chunkBuffers.length;
+        const existingRows = await TranslationChunk.find({ jobId: job.jobId }, 'chunkIndex content').lean();
+        const existingChunks = new Map(existingRows.map(row => [row.chunkIndex, row.content]));
+        await Job.updateOne(
+            { jobId: job.jobId, processingToken: job.processingToken },
+            { $set: { chunkCount: chunkBuffers.length, completedChunks: existingRows.length } }
+        );
+
+        await processTranslation(chunkBuffers, emitLog, {
+            signal,
+            existingChunks,
+            onChunkTranslated: (chunkIndex, content) => this.saveTranslatedChunk(job, chunkIndex, content)
+        });
+
+        if (signal.aborted) {
+            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+        }
+
+        const updateResult = await Job.updateOne(
+            {
+                jobId: job.jobId,
+                status: 'processing',
+                processingToken: job.processingToken,
+                cancelRequested: { $ne: true }
+            },
+            {
+                $set: {
+                    status: 'completed',
+                    error: null,
+                    errorCode: null,
+                    processingToken: null,
+                    leaseExpiresAt: null,
+                    nextRetryAt: null,
+                    completedChunks: chunkBuffers.length
+                }
+            }
+        );
+
+        if (updateResult.matchedCount === 0) {
+            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã bị hủy trước khi lưu kết quả.');
+        }
+
+        await this.safeUnlink(job.filePath);
+        this.consecutiveFailures = 0;
+        this.emitJobUpdate(job.jobId, 'completed', {
+            completedChunks: chunkBuffers.length,
+            chunkCount: chunkBuffers.length
+        });
+        emitLog('🎉 Đã dịch xong toàn bộ!');
+    }
+
+    async handleProcessingFailure(job, rawError) {
+        const error = normalizeProcessingError(rawError);
+        const cancellationRequested = error.code === ErrorCodes.CANCELLED || Boolean(await Job.exists({
+            jobId: job.jobId,
+            processingToken: job.processingToken,
+            cancelRequested: true
+        }));
+        if (cancellationRequested) {
+            await this.cleanupJob(job.jobId, job.filePath);
+            this.emitJobUpdate(job.jobId, 'cancelled', { error: null, errorCode: ErrorCodes.CANCELLED });
+            return;
+        }
+
+        if (error.quotaRelated) {
+            this.consecutiveFailures += 1;
+        } else {
+            this.consecutiveFailures = 0;
+        }
+
+        const shouldRetry = error.retryable && job.attemptCount < job.maxAttempts;
+        if (shouldRetry) {
+            const nextRetryAt = this.calculateRetryAt(error, job.attemptCount);
+            await Job.updateOne(
+                { jobId: job.jobId, processingToken: job.processingToken },
+                {
+                    $set: {
+                        status: 'pending',
+                        error: error.publicMessage,
+                        errorCode: error.code,
+                        nextRetryAt,
+                        processingToken: null,
+                        leaseExpiresAt: null
+                    }
+                }
+            );
+            this.emitJobUpdate(job.jobId, 'pending', {
+                error: error.publicMessage,
+                errorCode: error.code,
+                attemptCount: job.attemptCount,
+                maxAttempts: job.maxAttempts,
+                nextRetryAt
+            });
+            return;
+        }
+
+        await Job.updateOne(
+            { jobId: job.jobId, processingToken: job.processingToken },
+            {
+                $set: {
+                    status: 'failed',
+                    error: error.publicMessage,
+                    errorCode: error.code,
+                    nextRetryAt: null,
+                    processingToken: null,
+                    leaseExpiresAt: null
+                }
+            }
+        );
+        await this.safeUnlink(job.filePath);
+        // FILE_MISSING cần giữ các chunk đã dịch để Local Feeder tải lại PDF và resume.
+        if (error.code !== ErrorCodes.FILE_MISSING) {
+            await TranslationChunk.deleteMany({ jobId: job.jobId });
+        }
+        this.emitJobUpdate(job.jobId, 'failed', {
+            error: error.publicMessage,
+            errorCode: error.code,
+            attemptCount: job.attemptCount,
+            maxAttempts: job.maxAttempts
+        });
     }
 
     async startWorker() {
-        if (this.isProcessing || this.isHibernating) return; 
-        
+        if (this.isProcessing || this.isHibernating) return;
+        this.isProcessing = true;
+
+        let leaseHeartbeat = null;
+        let infrastructureFailed = false;
         try {
-            const nextJob = await Job.findOne({ status: 'pending' }).sort({ createdAt: 1 });
-            if (!nextJob) {
-                this.isProcessing = false; 
+            await this.recoverExpiredLeases();
+            const job = await this.claimNextJob();
+            if (!job) {
+                await this.scheduleNextRetry();
                 return;
             }
 
-            this.isProcessing = true;
-            nextJob.status = 'processing';
-            await nextJob.save();
-            this.emit('jobUpdated', nextJob); 
-
-            const emitLog = (msg) => {
-                console.log(`[${nextJob.originalName}] ${msg}`);
-                this.emit('jobLog', { jobId: nextJob.jobId, msg });
-            };
+            this.currentJobId = job.jobId;
+            this.currentAbortController = new AbortController();
+            leaseHeartbeat = this.createLeaseHeartbeat(job.jobId, job.processingToken);
+            this.emitJobUpdate(job.jobId, 'processing', {
+                attemptCount: job.attemptCount,
+                maxAttempts: job.maxAttempts
+            });
 
             try {
-                // [CHỐT CHẶN VẬT LÝ] Kiểm tra file có tồn tại trên ổ cứng không
-                if (!fs.existsSync(nextJob.filePath)) {
-                    throw new Error('FILE_NOT_FOUND_ON_DISK');
-                }
-
-                emitLog(`Đang đọc file...`);
-                const fileBuffer = fs.readFileSync(nextJob.filePath);
-                emitLog(`Đang băm PDF...`);
-                const chunkBuffers = await processPdf(fileBuffer);
-                const mdResult = await processTranslation(chunkBuffers, emitLog);
-
-                nextJob.status = 'completed';
-                nextJob.result = mdResult;
-                await nextJob.save();
-                emitLog(`🎉 Đã dịch xong toàn bộ!`);
-
-                // [THÀNH CÔNG] Reset toàn bộ bộ đếm Circuit Breaker về mức an toàn
-                this.consecutiveFailures = 0;
-                this.hibernationLevel = 1; 
-                this.hibernationCount = 0; 
-
-                if (fs.existsSync(nextJob.filePath)) {
-                    fs.unlinkSync(nextJob.filePath);
-                }
-
+                await this.processClaimedJob(job, this.currentAbortController.signal);
             } catch (error) {
-                nextJob.status = 'failed';
-                
-                // [LỌC LỖI] Chỉ tính lỗi API mới kích hoạt ngủ đông
-                if (error.message === 'FILE_NOT_FOUND_ON_DISK') {
-                    nextJob.error = 'File gốc bị mất do Server khởi động lại. Vui lòng dọn dẹp và tải lại.';
-                    emitLog(`❌ Lỗi: File vật lý đã bị Cloud xóa.`);
-                    // TUYỆT ĐỐI KHÔNG tăng biến this.consecutiveFailures ở đây
+                await this.handleProcessingFailure(job, error);
+            }
+
+            if (this.consecutiveFailures >= 10) {
+                await this.triggerHibernation();
+            }
+        } catch (error) {
+            infrastructureFailed = true;
+            console.error('❌ [QUEUE] Worker gặp lỗi database/hạ tầng:', error.message);
+        } finally {
+            if (leaseHeartbeat) clearInterval(leaseHeartbeat);
+            this.currentJobId = null;
+            this.currentAbortController = null;
+            this.isProcessing = false;
+
+            if (!this.isHibernating) {
+                if (infrastructureFailed) {
+                    setTimeout(() => void this.startWorker(), 5000);
                 } else {
-                    nextJob.error = error.message;
-                    emitLog(`❌ Lỗi: ${error.message}`);
-                    this.consecutiveFailures++; // Tăng đếm lỗi với các lỗi API thực sự
-                }
-                
-                await nextJob.save();
-            } finally {
-                this.emit('jobUpdated', nextJob); 
-                this.isProcessing = false;
-                
-                if (this.consecutiveFailures >= 10) {
-                    await this.triggerHibernation(); 
-                } else {
-                    this.startWorker(); 
+                    queueMicrotask(() => void this.startWorker());
                 }
             }
-        } catch (dbError) {
-            this.isProcessing = false;
-            setTimeout(() => this.startWorker(), 5000);
         }
+    }
+
+    async safeUnlink(filePath) {
+        if (!filePath) return;
+        try {
+            await fs.unlink(filePath);
+        } catch (error) {
+            if (error.code !== 'ENOENT') {
+                console.error(`[GC] Không thể xóa ${filePath}:`, error.message);
+            }
+        }
+    }
+
+    async cleanupJob(jobId, knownFilePath = null) {
+        const job = knownFilePath ? null : await Job.findOne({ jobId }, 'filePath').lean();
+        await this.safeUnlink(knownFilePath || job?.filePath);
+        await TranslationChunk.deleteMany({ jobId });
+        await Job.deleteOne({ jobId });
+    }
+
+    async cancelAndDeleteJob(jobId) {
+        const job = await Job.findOne({ jobId }).lean();
+        if (!job) return { found: false, pending: false };
+
+        if (job.status === 'pending') {
+            const cancelledJob = await Job.findOneAndUpdate(
+                { jobId, status: 'pending' },
+                {
+                    $set: {
+                        status: 'cancelled',
+                        cancelRequested: true,
+                        nextRetryAt: null
+                    }
+                },
+                { new: true }
+            );
+            // Worker có thể claim đúng giữa hai query; đánh giá lại theo trạng thái mới.
+            if (!cancelledJob) return this.cancelAndDeleteJob(jobId);
+
+            await this.cleanupJob(jobId, cancelledJob.filePath);
+            return { found: true, pending: false };
+        }
+
+        if (job.status === 'processing') {
+            await Job.updateOne(
+                { jobId },
+                { $set: { cancelRequested: true } }
+            );
+            if (this.currentJobId === jobId) {
+                this.currentAbortController?.abort();
+            }
+            return { found: true, pending: true };
+        }
+
+        await this.cleanupJob(jobId, job.filePath);
+        return { found: true, pending: false };
+    }
+
+    async cancelAndDeleteJobs(jobIds) {
+        const results = await Promise.all(jobIds.map(jobId => this.cancelAndDeleteJob(jobId)));
+        return {
+            foundCount: results.filter(result => result.found).length,
+            pendingCount: results.filter(result => result.pending).length
+        };
+    }
+
+    async cancelAndDeleteFolder(folderName) {
+        const jobs = await Job.find({ folderName }, 'jobId').lean();
+        return this.cancelAndDeleteJobs(jobs.map(job => job.jobId));
     }
 }
 

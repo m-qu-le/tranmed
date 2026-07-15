@@ -1,17 +1,14 @@
-import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
+import { GEMINI_MODEL, getGeminiApiKeys } from './config/env.js';
 
 async function testGeminiKeys() {
     // Trích xuất chuỗi keys từ biến môi trường, phân tách bằng dấu phẩy
-    const keysString = process.env.GEMINI_API_KEYS;
-    
-    if (!keysString) {
+    const keys = getGeminiApiKeys();
+
+    if (keys.length === 0) {
         console.error("❌ Không tìm thấy GEMINI_API_KEYS trong biến môi trường.");
         return;
     }
-
-    // Làm sạch mảng keys
-    const keys = keysString.split(',').map(k => k.trim()).filter(k => k !== '');
     console.log(`🔍 Bắt đầu kiểm tra ${keys.length} API Keys...\n`);
 
     for (let i = 0; i < keys.length; i++) {
@@ -25,7 +22,7 @@ async function testGeminiKeys() {
             
             // Gửi request siêu nhẹ kiểm tra kết nối
             const response = await ai.models.generateContent({
-                model: 'gemini-3.1-flash-lite-preview',
+                model: GEMINI_MODEL,
                 contents: 'Reply strictly with the word "OK"',
             });
             
