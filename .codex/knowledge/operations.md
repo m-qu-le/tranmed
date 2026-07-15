@@ -32,7 +32,7 @@ npm run build
 
 ## Migration P001
 
-Không chạy với production trước khi backup MongoDB.
+Mặc định không chạy với production trước khi backup MongoDB. Ngoại lệ P001 đã được chủ dự án chấp thuận ngày 15-07-2026 vì database được xác nhận không còn job/dữ liệu cần giữ: chạy dry-run/count trước; nếu phát hiện document thì dừng và backup thay vì migration tiếp.
 
 ```powershell
 npm run migrate:p001:dry
@@ -44,7 +44,7 @@ Dry-run chỉ đếm document thiếu field, không update hoặc sync index. Mi
 ## Checklist bàn giao/deploy
 
 1. Backend tests, frontend test/lint/build, `npm audit` cả hai và `git diff --check` phải sạch.
-2. Backup MongoDB; chạy migration dry-run và lưu số liệu không chứa credential.
+2. Chạy migration dry-run và lưu số liệu không chứa credential. Với database có dữ liệu phải backup; ngoại lệ database trống của P001 chỉ tiếp tục nếu count xác nhận đúng kỳ vọng.
 3. Deploy backend trước, smoke health/capacity/jobs/SSE/upload/result/delete.
 4. Deploy frontend với đúng `VITE_API_URL`, smoke Local Feeder nhiều file.
 5. Theo dõi RAM, disk, restart, retry/orphan trong 24 giờ trước khi đóng Project 001.
