@@ -293,7 +293,7 @@ export class QueueManager extends EventEmitter {
                 },
                 $inc: { attemptCount: 1 }
             },
-            { sort: { createdAt: 1 }, new: true }
+            { sort: { createdAt: 1 }, returnDocument: 'after' }
         );
     }
 
@@ -563,6 +563,7 @@ export class QueueManager extends EventEmitter {
 
         let leaseHeartbeat = null;
         let infrastructureFailed = false;
+        let processedJob = false;
         try {
             await this.recoverExpiredLeases();
             const job = await this.claimNextJob();
@@ -570,6 +571,7 @@ export class QueueManager extends EventEmitter {
                 await this.scheduleNextRetry();
                 return;
             }
+            processedJob = true;
 
             this.currentJobId = job.jobId;
             this.currentAbortController = new AbortController();
@@ -600,7 +602,7 @@ export class QueueManager extends EventEmitter {
             if (!this.isHibernating) {
                 if (infrastructureFailed) {
                     setTimeout(() => void this.startWorker(), 5000);
-                } else {
+                } else if (processedJob) {
                     queueMicrotask(() => void this.startWorker());
                 }
             }
@@ -639,7 +641,7 @@ export class QueueManager extends EventEmitter {
                         nextRetryAt: null
                     }
                 },
-                { new: true }
+                { returnDocument: 'after' }
             );
             // Worker có thể claim đúng giữa hai query; đánh giá lại theo trạng thái mới.
             if (!cancelledJob) return this.cancelAndDeleteJob(jobId);
