@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { QUALITY_ACTIONS } from '../services/qualityPipelineState.js';
 
 const jobSchema = new mongoose.Schema({
     jobId: { type: String, required: true, unique: true },
@@ -41,7 +42,17 @@ const jobSchema = new mongoose.Schema({
     processingToken: { type: String, default: null },
     leaseExpiresAt: { type: Date, default: null },
     chunkCount: { type: Number, default: 0, min: 0 },
-    completedChunks: { type: Number, default: 0, min: 0 }
+    completedChunks: { type: Number, default: 0, min: 0 },
+    translationPipelineVersion: { type: String, default: null },
+    translationMode: { type: String, enum: ['legacy', 'quality'], default: null },
+    currentQualityStage: { type: String, enum: QUALITY_ACTIONS, default: null },
+    passedChunks: { type: Number, default: 0, min: 0 },
+    needsReviewChunks: { type: Number, default: 0, min: 0 },
+    qualityWarnings: [{
+        chunkIndex: { type: Number, min: 0 },
+        pageStart: { type: Number, min: 1 },
+        pageEnd: { type: Number, min: 1 },
+    }]
 }, { timestamps: true });
 
 jobSchema.pre('validate', function validateSourceInvariant() {
@@ -67,6 +78,9 @@ jobSchema.pre('validate', function validateSourceInvariant() {
     }
     if (this.sourceState === 'deleted' && !this.sourceDeletedAt) {
         this.invalidate('sourceState', 'sourceState=deleted bắt buộc có sourceDeletedAt.');
+    }
+    if (this.translationMode === 'quality' && !this.translationPipelineVersion) {
+        this.invalidate('translationPipelineVersion', 'Job quality bắt buộc có translationPipelineVersion.');
     }
 });
 

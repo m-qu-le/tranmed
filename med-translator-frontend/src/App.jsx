@@ -44,6 +44,37 @@ const mergeServerBatches = (previous, batches) => {
   return [...withoutBatchId, ...byBatchId.values()];
 };
 
+const QUALITY_STAGE_LABELS = Object.freeze({
+  translate: 'Đang dịch',
+  medical_audit: 'Đang kiểm định',
+  revise: 'Đang hiệu chỉnh',
+  verify: 'Đang xác minh',
+  repair: 'Đang sửa lỗi',
+  reverify: 'Đang xác minh lại',
+});
+
+const qualityView = job => {
+  if (job.quality) return job.quality;
+  if (job.translationMode && job.translationMode !== 'quality') return null;
+  if (job.translationMode !== 'quality'
+    && !job.currentQualityStage
+    && !(job.passedChunks > 0)
+    && !(job.needsReviewChunks > 0)
+    && !job.qualityWarnings?.length) return null;
+  return {
+    currentStage: job.currentQualityStage || null,
+    passedChunks: job.passedChunks || 0,
+    needsReviewChunks: job.needsReviewChunks || 0,
+    warnings: Array.isArray(job.qualityWarnings) ? job.qualityWarnings : [],
+  };
+};
+
+const warningPageLabel = warning => {
+  if (!warning?.pageStart) return `chunk ${(warning?.chunkIndex ?? 0) + 1}`;
+  if (!warning.pageEnd || warning.pageEnd === warning.pageStart) return `trang ${warning.pageStart}`;
+  return `trang ${warning.pageStart}–${warning.pageEnd}`;
+};
+
 // Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ mặc định
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
@@ -55,6 +86,9 @@ const JobCard = ({ job, onDelete }) => {
   // State quản lý kết quả cục bộ
   const [localResult, setLocalResult] = useState(null);
   const [isLoadingContent, setIsLoadingContent] = useState(false);
+  const quality = qualityView(job);
+  const stageLabel = quality ? QUALITY_STAGE_LABELS[quality.currentStage] : null;
+  const needsReviewChunks = quality?.needsReviewChunks || 0;
 
   // Hàm Lazy Fetch nội dung
   const fetchResultOnDemand = async () => {
@@ -101,8 +135,8 @@ const JobCard = ({ job, onDelete }) => {
           <span className={`status-badge ${job.status}`}>
             {job.status === 'uploading' && '☁️ Đang lên Cloud...'}
             {job.status === 'pending' && (job.nextRetryAt ? '🔄 Chờ thử lại...' : '⏳ Đang chờ...')}
-            {job.status === 'processing' && `⚙️ Đang dịch${job.chunkCount ? ` ${job.completedChunks || 0}/${job.chunkCount}` : '...'}`}
-            {job.status === 'completed' && '✅ Hoàn thành'}
+            {job.status === 'processing' && `⚙️ ${stageLabel || 'Đang dịch'}${job.chunkCount ? ` ${job.completedChunks || 0}/${job.chunkCount}` : '...'}`}
+            {job.status === 'completed' && (needsReviewChunks > 0 ? '⚠️ Hoàn thành có cảnh báo' : '✅ Hoàn thành')}
             {job.status === 'failed' && '❌ Lỗi'}
             {job.status === 'cancelled' && '🛑 Đã hủy'}
           </span>
@@ -140,6 +174,25 @@ const JobCard = ({ job, onDelete }) => {
         <div className="job-retry">
           {job.error}
           {job.nextRetryAt && ` Thử lại lúc ${new Date(job.nextRetryAt).toLocaleTimeString('vi-VN')}.`}
+        </div>
+      )}
+
+      {quality && ['processing', 'completed'].includes(job.status) && (
+        <div className={`quality-progress ${needsReviewChunks > 0 ? 'has-warning' : ''}`}>
+          <span>
+            Kiểm soát chất lượng: {job.completedChunks || 0}/{job.chunkCount || 0} chunk hoàn tất
+            {' · '}{quality.passedChunks || 0} đạt
+            {' · '}{needsReviewChunks} cần xem lại
+          </span>
+          {needsReviewChunks > 0 && Array.isArray(quality.warnings) && quality.warnings.length > 0 && (
+            <ul className="quality-warning-list" aria-label="Các phần cần xem lại">
+              {quality.warnings.map(warning => (
+                <li key={`${warning.chunkIndex}-${warning.pageStart}-${warning.pageEnd}`}>
+                  Phần {warning.chunkIndex + 1}: {warningPageLabel(warning)}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 

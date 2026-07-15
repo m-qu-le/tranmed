@@ -3,12 +3,16 @@ import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import { processPdf } from './pdfService.js';
 import { processTranslation } from './geminiService.js';
+import { createQualityGeminiExecutors } from './qualityGeminiExecutors.js';
+import { QualityPipelineService } from './qualityPipelineService.js';
 import Job from '../models/jobModel.js';
 import System from '../models/systemModel.js';
 import TranslationChunk from '../models/translationChunkModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
-import { MAX_JOB_ATTEMPTS } from '../config/env.js';
+import { MAX_JOB_ATTEMPTS, TRANSLATION_PIPELINE_MODE } from '../config/env.js';
+import { QUALITY_PIPELINE_VERSION } from './qualityPipelineState.js';
 import { cleanupOrphanUploads } from './storageService.js';
+import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 import {
     sourceCleanupService as runtimeSourceCleanupService,
     sourceService as runtimeSourceService
@@ -217,7 +221,9 @@ export class QueueManager extends EventEmitter {
                 sourceState: 'ready',
                 status: 'pending',
                 maxAttempts: MAX_JOB_ATTEMPTS,
-                nextRetryAt: new Date()
+                nextRetryAt: new Date(),
+                translationMode: TRANSLATION_PIPELINE_MODE,
+                translationPipelineVersion: QUALITY_PIPELINE_VERSION
             });
         } catch (error) {
             if (error?.code === 11000 && clientUploadId) {
@@ -236,7 +242,7 @@ export class QueueManager extends EventEmitter {
         const filter = cursor ? { _id: { $lt: cursor } } : {};
         const rows = await Job.find(
             filter,
-            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt'
+            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
         )
             .sort({ _id: -1 })
             .limit(limit + 1)
@@ -270,6 +276,10 @@ export class QueueManager extends EventEmitter {
     }
 
     calculateRetryAt(error, attemptCount) {
+        if (Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) {
+            const jitter = Math.floor(Math.random() * Math.min(30_000, error.retryAfterMs / 4));
+            return new Date(Date.now() + error.retryAfterMs + jitter);
+        }
         const baseDelay = error.quotaRelated ? QUOTA_RETRY_BASE_MS : TRANSIENT_RETRY_BASE_MS;
         const exponentialDelay = baseDelay * (2 ** Math.max(0, attemptCount - 1));
         const jitter = Math.floor(Math.random() * Math.min(30000, baseDelay / 4));
@@ -420,6 +430,120 @@ export class QueueManager extends EventEmitter {
         }
     }
 
+    async assertJobActive(job) {
+        const active = await Job.exists({
+            jobId: job.jobId,
+            status: 'processing',
+            processingToken: job.processingToken,
+            cancelRequested: { $ne: true }
+        });
+        if (!active) throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+    }
+
+    async getQualityProgress(jobId) {
+        const [completedChunks, passedChunks, needsReviewRows] = await Promise.all([
+            TranslationChunk.countDocuments({
+                jobId,
+                $or: [
+                    { stage: { $in: ['completed', 'needs_review'] } },
+                    { content: { $type: 'string' }, pipelineVersion: null },
+                ],
+            }),
+            TranslationChunk.countDocuments({ jobId, qualityStatus: 'passed' }),
+            TranslationChunk.find(
+                { jobId, qualityStatus: 'needs_review' },
+                'chunkIndex pageStart pageEnd'
+            ).sort({ chunkIndex: 1 }).lean(),
+        ]);
+        return {
+            completedChunks,
+            passedChunks,
+            needsReviewChunks: needsReviewRows.length,
+            qualityWarnings: needsReviewRows.map(row => ({
+                chunkIndex: row.chunkIndex,
+                pageStart: row.pageStart,
+                pageEnd: row.pageEnd,
+            })),
+        };
+    }
+
+    async processQualityChunks(job, splitResult, emitLog, signal) {
+        const { chunkBuffers, totalPages, pageRanges } = splitResult;
+        const executors = createQualityGeminiExecutors({
+            onSchedulerEvent: event => {
+                const status = event.status ? ` status=${event.status}` : '';
+                const retry = event.retryAfterMs ? ` retryAfterMs=${event.retryAfterMs}` : '';
+                emitLog(`🔄 [${event.stage}] keyIndex=${event.keyIndex} event=${event.type}${status}${retry}`);
+            },
+        });
+        const pipeline = new QualityPipelineService({ ChunkModel: TranslationChunk, executors });
+        const indexes = chunkBuffers.map((_, index) => index);
+
+        await runBoundedTasks(indexes, 2, async chunkIndex => {
+            const range = pageRanges[chunkIndex];
+            return pipeline.runChunk({
+                jobId: job.jobId,
+                chunkIndex,
+                pageStart: range.pageStart,
+                pageEnd: range.pageEnd,
+                totalPages,
+                pdfBuffer: chunkBuffers[chunkIndex],
+                signal,
+                assertActive: () => this.assertJobActive(job),
+                onStage: async event => {
+                    if (event.phase === 'started') {
+                        const progress = await this.getQualityProgress(job.jobId);
+                        await Job.updateOne(
+                            {
+                                jobId: job.jobId,
+                                status: 'processing',
+                                processingToken: job.processingToken,
+                                cancelRequested: { $ne: true },
+                            },
+                            { $set: { currentQualityStage: event.action } }
+                        );
+                        this.emitJobUpdate(job.jobId, 'processing', {
+                            translationMode: 'quality',
+                            translationPipelineVersion: QUALITY_PIPELINE_VERSION,
+                            ...progress,
+                            currentQualityStage: event.action,
+                            qualityStagePhase: 'started',
+                            chunkIndex,
+                            pageStart: range.pageStart,
+                            pageEnd: range.pageEnd,
+                        });
+                        emitLog(`🧪 [Chunk ${chunkIndex + 1}] Bắt đầu stage=${event.action}.`);
+                        return;
+                    }
+
+                    const progress = await this.getQualityProgress(job.jobId);
+                    await Job.updateOne(
+                        {
+                            jobId: job.jobId,
+                            status: 'processing',
+                            processingToken: job.processingToken,
+                            cancelRequested: { $ne: true },
+                        },
+                        { $set: progress }
+                    );
+                    this.emitJobUpdate(job.jobId, 'processing', {
+                        translationMode: 'quality',
+                        translationPipelineVersion: QUALITY_PIPELINE_VERSION,
+                        ...progress,
+                        currentQualityStage: event.action,
+                        qualityStagePhase: 'completed',
+                        chunkIndex,
+                        pageStart: range.pageStart,
+                        pageEnd: range.pageEnd,
+                    });
+                    emitLog(`✅ [Chunk ${chunkIndex + 1}] Hoàn thành stage=${event.action}.`);
+                },
+            });
+        });
+
+        return this.getQualityProgress(job.jobId);
+    }
+
     async processClaimedJob(job, signal) {
         const jobStartedAt = Date.now();
         const emitLog = (msg) => {
@@ -437,10 +561,10 @@ export class QueueManager extends EventEmitter {
                 throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
             }
 
-        let chunkBuffers;
+        let splitResult;
         try {
             emitLog('Đang băm PDF...');
-            chunkBuffers = await processPdf(sourcePath, signal);
+            splitResult = await processPdf(sourcePath, signal);
         } catch (error) {
             if (error instanceof ProcessingError) throw error;
             throw new ProcessingError(
@@ -454,19 +578,39 @@ export class QueueManager extends EventEmitter {
             throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
         }
 
+        const { chunkBuffers } = splitResult;
+
         job.chunkCount = chunkBuffers.length;
-        const existingRows = await TranslationChunk.find({ jobId: job.jobId }, 'chunkIndex content').lean();
-        const existingChunks = new Map(existingRows.map(row => [row.chunkIndex, row.content]));
+        const translationMode = job.translationMode || 'legacy';
+        const existingRows = await TranslationChunk.find({ jobId: job.jobId }, 'chunkIndex content stage qualityStatus').lean();
+        const existingChunks = new Map(existingRows
+            .filter(row => typeof row.content === 'string')
+            .map(row => [row.chunkIndex, row.content]));
         await Job.updateOne(
             { jobId: job.jobId, processingToken: job.processingToken },
-            { $set: { chunkCount: chunkBuffers.length, completedChunks: existingRows.length } }
+            {
+                $set: {
+                    chunkCount: chunkBuffers.length,
+                    completedChunks: existingChunks.size,
+                    translationMode,
+                    translationPipelineVersion: translationMode === 'quality'
+                        ? QUALITY_PIPELINE_VERSION
+                        : (job.translationPipelineVersion || QUALITY_PIPELINE_VERSION),
+                }
+            }
         );
 
-        await processTranslation(chunkBuffers, emitLog, {
-            signal,
-            existingChunks,
-            onChunkTranslated: (chunkIndex, content) => this.saveTranslatedChunk(job, chunkIndex, content)
-        });
+        let qualityProgress = null;
+        if (translationMode === 'quality') {
+            qualityProgress = await this.processQualityChunks(job, splitResult, emitLog, signal);
+        } else {
+            await processTranslation(chunkBuffers, emitLog, {
+                signal,
+                mode: 'legacy',
+                existingChunks,
+                onChunkTranslated: (chunkIndex, content) => this.saveTranslatedChunk(job, chunkIndex, content)
+            });
+        }
 
         if (signal.aborted) {
             throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
@@ -487,7 +631,9 @@ export class QueueManager extends EventEmitter {
                     processingToken: null,
                     leaseExpiresAt: null,
                     nextRetryAt: null,
-                    completedChunks: chunkBuffers.length
+                    completedChunks: chunkBuffers.length,
+                    currentQualityStage: null,
+                    ...(qualityProgress || {})
                 }
             }
         );
@@ -500,8 +646,13 @@ export class QueueManager extends EventEmitter {
         await this.cleanupSourceSafely(job, 'completed');
         this.consecutiveFailures = 0;
         this.emitJobUpdate(job.jobId, 'completed', {
+            ...(translationMode === 'quality' ? {
+                translationMode: 'quality',
+                translationPipelineVersion: QUALITY_PIPELINE_VERSION,
+            } : {}),
             completedChunks: chunkBuffers.length,
-            chunkCount: chunkBuffers.length
+            chunkCount: chunkBuffers.length,
+            ...(qualityProgress || {})
         });
         emitLog('🎉 Đã dịch xong toàn bộ!');
         } finally {

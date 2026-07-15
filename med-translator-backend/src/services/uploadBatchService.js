@@ -121,6 +121,10 @@ export class UploadBatchService {
                 sourceState: 'prepared',
                 uploadBatchId: batchId,
                 maxAttempts: this.config.maxJobAttempts,
+                ...(this.config.translationMode ? {
+                    translationMode: this.config.translationMode,
+                    translationPipelineVersion: this.config.translationPipelineVersion,
+                } : {}),
             };
         });
 

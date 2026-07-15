@@ -137,11 +137,11 @@ P003 chỉ được coi là thành công nếu đạt đồng thời:
 | G0 | Bảo toàn worktree và chốt baseline | Đang thực hiện (6/7) | Có nhánh P003, baseline test/build và manifest 20 PDF |
 | G1 | Benchmark minimal/medium/high và pipeline nhiều lượt | Đang thực hiện | Có báo cáo so sánh mù, chốt cấu hình bằng bằng chứng |
 | G2 | Chuẩn hóa cấu hình Gemini, chunk 2 trang và telemetry | Hoàn thành | Một lượt high chạy ổn, metadata đầy đủ, MAX_TOKENS bị chặn |
-| G3 | Schema/artifact và state machine theo stage | Chưa làm | Resume được tại từng stage, migration additive đạt |
-| G4 | Prompt và structured output cho audit/verify | Chưa làm | JSON schema ổn định, không rewrite ở auditor |
-| G5 | Revision, verification và repair hữu hạn | Chưa làm | PASS/FAIL đúng, không lặp vô hạn, warning được lưu |
-| G6 | Key rotation/quota/retry/cancellation | Chưa làm | 429 chuyển key ngay; 7 key phân phối đều và an toàn |
-| G7 | Queue, API, SSE và frontend progress chất lượng | Chưa làm | UI hiển thị stage và warning; API cũ vẫn tương thích |
+| G3 | Schema/artifact và state machine theo stage | Hoàn thành | Resume được tại từng stage, migration additive đạt |
+| G4 | Prompt và structured output cho audit/verify | Đang thực hiện (8/9) | JSON schema ổn định, không rewrite ở auditor |
+| G5 | Revision, verification và repair hữu hạn | Hoàn thành | PASS/FAIL đúng, không lặp vô hạn, warning được lưu |
+| G6 | Key rotation/quota/retry/cancellation | Hoàn thành | 429 chuyển key ngay; 7 key phân phối đều và an toàn |
+| G7 | Queue, API, SSE và frontend progress chất lượng | Hoàn thành | UI hiển thị stage và warning; API cũ vẫn tương thích |
 | G8 | Regression, tải, lỗi và benchmark 20 PDF | Chưa làm | Test tự động đạt; benchmark thật có bằng chứng |
 | G9 | Rollout production và theo dõi | Chưa làm | Canary đạt, bật quality an toàn, rollback đã kiểm chứng |
 
@@ -202,15 +202,15 @@ Mục tiêu: tạo nền một lượt high đúng khuyến nghị và quan sát
 
 Mục tiêu: mỗi stage có checkpoint bền vững để restart/retry không lãng phí request hoặc ghi đè kết quả.
 
-- [ ] **P003-G3-S01 — Version pipeline.** Job mới ghi `translationPipelineVersion` và mode; job legacy không có field vẫn đọc/hoàn thành như cũ.
-- [ ] **P003-G3-S02 — Mở rộng TranslationChunk.** Thêm page range, stage hiện tại, draft, audit report, revised/final content, verification report, repair count, quality status và usage theo stage.
-- [ ] **P003-G3-S03 — Enum stage.** Chuẩn hóa `pending`, `translated`, `audited`, `revised`, `verified`, `repaired`, `reverified`, `completed`, `needs_review`.
-- [ ] **P003-G3-S04 — Persist sau từng stage.** Upsert atomic kèm pipeline version; crash sau stage nào tiếp tục từ stage kế tiếp.
-- [ ] **P003-G3-S05 — Nội dung cuối tương thích.** Trường `content` vẫn chứa Markdown cuối để API preview/download hiện tại không phải ghép artifact trung gian.
-- [ ] **P003-G3-S06 — Dọn artifact.** Sau PASS, bỏ các bản full-text trung gian không cần thiết nhưng giữ báo cáo compact và usage; `needs_review` giữ đủ dữ liệu chẩn đoán.
-- [ ] **P003-G3-S07 — Migration.** Script additive/idempotent, dry-run/count/index; không rewrite toàn bộ chunk cũ.
-- [ ] **P003-G3-S08 — Version mismatch.** Artifact dở dang từ pipeline version khác không được trộn; khởi động lại chunk đó từ S1 nhưng không đụng chunk final đã hoàn thành.
-- [ ] **P003-G3-S09 — Test resume.** Giả lập restart/lỗi DB sau mọi stage và assert không gọi lại stage đã commit.
+- [x] **P003-G3-S01 — Version pipeline.** Job mới ghi `translationPipelineVersion` và mode; job legacy không có field vẫn đọc/hoàn thành như cũ.
+- [x] **P003-G3-S02 — Mở rộng TranslationChunk.** Thêm page range, stage hiện tại, draft, audit report, revised/final content, verification report, repair count, quality status và usage theo stage.
+- [x] **P003-G3-S03 — Enum stage.** Chuẩn hóa `pending`, `translated`, `audited`, `revised`, `verified`, `repaired`, `reverified`, `completed`, `needs_review`.
+- [x] **P003-G3-S04 — Persist sau từng stage.** Upsert atomic kèm pipeline version; crash sau stage nào tiếp tục từ stage kế tiếp.
+- [x] **P003-G3-S05 — Nội dung cuối tương thích.** Trường `content` vẫn chứa Markdown cuối để API preview/download hiện tại không phải ghép artifact trung gian.
+- [x] **P003-G3-S06 — Dọn artifact.** Sau PASS, bỏ các bản full-text trung gian không cần thiết nhưng giữ báo cáo compact và usage; `needs_review` giữ đủ dữ liệu chẩn đoán.
+- [x] **P003-G3-S07 — Migration.** Script additive/idempotent, dry-run/count/index; không rewrite toàn bộ chunk cũ.
+- [x] **P003-G3-S08 — Version mismatch.** Artifact dở dang từ pipeline version khác không được trộn; khởi động lại chunk đó từ S1 nhưng không đụng chunk final đã hoàn thành.
+- [x] **P003-G3-S09 — Test resume.** Giả lập restart/lỗi DB sau mọi stage và assert không gọi lại stage đã commit.
 
 ## G4 — Prompt và structured output cho audit/verify
 
@@ -234,58 +234,58 @@ Mục tiêu: reviewer tìm lỗi có bằng chứng thay vì viết lại theo c
 }
 ```
 
-- [ ] **P003-G4-S01 — Prompt nền.** Rút gọn yêu cầu trừu tượng, giữ mục tiêu học thuật, toàn văn, thuật ngữ y khoa Việt Nam và Markdown.
-- [ ] **P003-G4-S02 — Quy tắc chuyên môn.** Nhấn mạnh phủ định, mức độ chắc chắn, quan hệ nhân quả, tác nhân–đích, giải phẫu, thuốc, liều, số liệu và viết tắt.
-- [ ] **P003-G4-S03 — Few-shot.** Thêm số lượng nhỏ ví dụ Anh–Việt đã kiểm duyệt cho các lỗi khó; ví dụ không phụ thuộc một chuyên khoa duy nhất.
-- [ ] **P003-G4-S04 — Audit prompt.** Nhận PDF + draft, kiểm từng phần nguồn, chỉ báo lỗi có exact excerpt; không chấm văn phong nếu không làm sai nghĩa.
-- [ ] **P003-G4-S05 — Verify prompt.** Nhận PDF + bản revised/final, đánh giá độc lập và không dựa mù vào audit cũ.
-- [ ] **P003-G4-S06 — Structured output.** Dùng `responseMimeType: application/json` và JSON schema SDK; parse/validate bằng code trước khi sử dụng.
-- [ ] **P003-G4-S07 — Chống prompt injection từ sách.** Nội dung PDF là dữ liệu nguồn, không phải chỉ thị; model không làm theo câu lệnh nằm trong sách.
-- [ ] **P003-G4-S08 — Invalid audit.** JSON lỗi/sai schema được retry stage với key khác; không chuyển thẳng sang revision bằng dữ liệu hỏng.
+- [x] **P003-G4-S01 — Prompt nền.** Rút gọn yêu cầu trừu tượng, giữ mục tiêu học thuật, toàn văn, thuật ngữ y khoa Việt Nam và Markdown.
+- [x] **P003-G4-S02 — Quy tắc chuyên môn.** Nhấn mạnh phủ định, mức độ chắc chắn, quan hệ nhân quả, tác nhân–đích, giải phẫu, thuốc, liều, số liệu và viết tắt.
+- [x] **P003-G4-S03 — Few-shot.** Thêm số lượng nhỏ ví dụ Anh–Việt đã kiểm duyệt cho các lỗi khó; ví dụ không phụ thuộc một chuyên khoa duy nhất.
+- [x] **P003-G4-S04 — Audit prompt.** Nhận PDF + draft, kiểm từng phần nguồn, chỉ báo lỗi có exact excerpt; không chấm văn phong nếu không làm sai nghĩa.
+- [x] **P003-G4-S05 — Verify prompt.** Nhận PDF + bản revised/final, đánh giá độc lập và không dựa mù vào audit cũ.
+- [x] **P003-G4-S06 — Structured output.** Dùng `responseMimeType: application/json` và JSON schema SDK; parse/validate bằng code trước khi sử dụng.
+- [x] **P003-G4-S07 — Chống prompt injection từ sách.** Nội dung PDF là dữ liệu nguồn, không phải chỉ thị; model không làm theo câu lệnh nằm trong sách.
+- [x] **P003-G4-S08 — Invalid audit.** JSON lỗi/sai schema được retry stage với key khác; không chuyển thẳng sang revision bằng dữ liệu hỏng.
 - [ ] **P003-G4-S09 — Test rubric.** Fixture lỗi có chủ đích cho omission, đảo phủ định, sai đơn vị, sai causal relation và lỗi thuật ngữ; audit phải bắt được theo ngưỡng đã chốt.
 
 ## G5 — Revision, verification và repair hữu hạn
 
 Mục tiêu: sửa đúng lỗi đã nêu, hạn chế model viết lại phần vốn đúng và không tạo vòng lặp vô hạn.
 
-- [ ] **P003-G5-S01 — Revision prompt.** Nhận PDF + draft + audit; áp dụng mọi lỗi critical/major hợp lệ, giữ nguyên phần khác và trả toàn bộ Markdown.
-- [ ] **P003-G5-S02 — Empty audit.** Nếu audit PASS, S3 vẫn có thể được bỏ qua theo quyết định benchmark; mặc định ban đầu vẫn chạy S3 để pipeline đồng nhất cho tới khi có dữ liệu.
-- [ ] **P003-G5-S03 — Verify gate.** Chỉ `PASS` mới đặt `qualityStatus = passed`; mọi error critical/major làm `FAIL`.
-- [ ] **P003-G5-S04 — Minor-only policy.** Minor thuần văn phong không kích hoạt repair; lưu warning compact nếu cần.
-- [ ] **P003-G5-S05 — Repair prompt.** Chỉ sửa lỗi từ S4 trên bản revised, không quay về draft và không sáng tác thêm giải thích.
-- [ ] **P003-G5-S06 — Reverify.** Kiểm tra độc lập bản repaired; PASS thì hoàn thành, FAIL thì `needs_review`.
-- [ ] **P003-G5-S07 — Bounded loop.** `repairCount <= 1` được enforce bằng code/schema/test, không chỉ bằng prompt.
-- [ ] **P003-G5-S08 — Chọn bản tốt nhất.** Khi reverify fail, mặc định giữ bản repaired; nếu repair response không hợp lệ thì fallback revised.
-- [ ] **P003-G5-S09 — Completion.** Job completed khi mọi chunk có `passed` hoặc `needs_review`; tổng warning được lưu và phát qua SSE.
+- [x] **P003-G5-S01 — Revision prompt.** Nhận PDF + draft + audit; áp dụng mọi lỗi critical/major hợp lệ, giữ nguyên phần khác và trả toàn bộ Markdown.
+- [x] **P003-G5-S02 — Empty audit.** Nếu audit PASS, S3 vẫn có thể được bỏ qua theo quyết định benchmark; mặc định ban đầu vẫn chạy S3 để pipeline đồng nhất cho tới khi có dữ liệu.
+- [x] **P003-G5-S03 — Verify gate.** Chỉ `PASS` mới đặt `qualityStatus = passed`; mọi error critical/major làm `FAIL`.
+- [x] **P003-G5-S04 — Minor-only policy.** Minor thuần văn phong không kích hoạt repair; lưu warning compact nếu cần.
+- [x] **P003-G5-S05 — Repair prompt.** Chỉ sửa lỗi từ S4 trên bản revised, không quay về draft và không sáng tác thêm giải thích.
+- [x] **P003-G5-S06 — Reverify.** Kiểm tra độc lập bản repaired; PASS thì hoàn thành, FAIL thì `needs_review`.
+- [x] **P003-G5-S07 — Bounded loop.** `repairCount <= 1` được enforce bằng code/schema/test, không chỉ bằng prompt.
+- [x] **P003-G5-S08 — Chọn bản tốt nhất.** Khi reverify fail, mặc định giữ bản repaired; nếu repair response không hợp lệ thì fallback revised.
+- [x] **P003-G5-S09 — Completion.** Job completed khi mọi chunk có `passed` hoặc `needs_review`; tổng warning được lưu và phát qua SSE.
 
 ## G6 — Key rotation, quota, retry và cancellation
 
 Mục tiêu: tận dụng 7 project Free tier mà không tạo retry chậm, vượt quota cục bộ hoặc gọi trùng stage.
 
-- [ ] **P003-G6-S01 — Round-robin theo request.** Mỗi stage reserve một key; không cần cùng key giữa các stage vì request stateless và luôn gửi đủ input.
-- [ ] **P003-G6-S02 — 429 immediate rotation.** Đánh dấu key cooling down và chuyển ngay key khác; không chờ 12/24/36 giây trên cùng key.
-- [ ] **P003-G6-S03 — Exhaustion policy.** Khi tất cả key 429, dùng Retry-After nếu có; nếu không có, exponential backoff + jitter và để queue retry bền vững.
-- [ ] **P003-G6-S04 — Auth/config.** 401/403 loại key khỏi vòng hiện tại; chỉ báo config failure khi mọi key đều bị từ chối.
-- [ ] **P003-G6-S05 — 5xx/network.** Retry hữu hạn, có thể chuyển key để loại trừ lỗi cục bộ nhưng không giả định đổi key luôn sửa được lỗi dịch vụ.
-- [ ] **P003-G6-S06 — Quota counters.** Theo dõi rolling RPM/TPM/RPD theo key index để quan sát, không coi counter cục bộ là nguồn sự thật tuyệt đối sau restart.
-- [ ] **P003-G6-S07 — Headroom.** Rollout đầu không chủ động vượt 12 RPM, 200k TPM hoặc 400 RPD/key dù ảnh cho thấy trần cao hơn.
-- [ ] **P003-G6-S08 — Cancellation.** Kiểm tra abort trước/sau mọi stage; cancel không bắt đầu stage mới và không ghi completed sau khi bị hủy.
-- [ ] **P003-G6-S09 — Circuit breaker.** Chỉ ngủ hệ thống khi toàn bộ key thực sự quota/unavailable; một key 429 không tăng failure toàn cục sai.
-- [ ] **P003-G6-S10 — Test 7 key.** Mock phân phối 700 request, 429 xen kẽ, key auth lỗi và toàn bộ key exhausted; không lộ secret trong log.
+- [x] **P003-G6-S01 — Round-robin theo request.** Mỗi stage reserve một key; không cần cùng key giữa các stage vì request stateless và luôn gửi đủ input.
+- [x] **P003-G6-S02 — 429 immediate rotation.** Đánh dấu key cooling down và chuyển ngay key khác; không chờ 12/24/36 giây trên cùng key.
+- [x] **P003-G6-S03 — Exhaustion policy.** Khi tất cả key 429, dùng Retry-After nếu có; nếu không có, exponential backoff + jitter và để queue retry bền vững.
+- [x] **P003-G6-S04 — Auth/config.** 401/403 loại key khỏi vòng hiện tại; chỉ báo config failure khi mọi key đều bị từ chối.
+- [x] **P003-G6-S05 — 5xx/network.** Retry hữu hạn, có thể chuyển key để loại trừ lỗi cục bộ nhưng không giả định đổi key luôn sửa được lỗi dịch vụ.
+- [x] **P003-G6-S06 — Quota counters.** Theo dõi rolling RPM/TPM/RPD theo key index để quan sát, không coi counter cục bộ là nguồn sự thật tuyệt đối sau restart.
+- [x] **P003-G6-S07 — Headroom.** Rollout đầu không chủ động vượt 12 RPM, 200k TPM hoặc 400 RPD/key dù ảnh cho thấy trần cao hơn.
+- [x] **P003-G6-S08 — Cancellation.** Kiểm tra abort trước/sau mọi stage; cancel không bắt đầu stage mới và không ghi completed sau khi bị hủy.
+- [x] **P003-G6-S09 — Circuit breaker.** Chỉ ngủ hệ thống khi toàn bộ key thực sự quota/unavailable; một key 429 không tăng failure toàn cục sai.
+- [x] **P003-G6-S10 — Test 7 key.** Mock phân phối 700 request, 429 xen kẽ, key auth lỗi và toàn bộ key exhausted; không lộ secret trong log.
 
 ## G7 — Queue, API, SSE và frontend
 
 Mục tiêu: người dùng thấy tiến độ chất lượng nhưng API kết quả cũ vẫn hoạt động.
 
-- [ ] **P003-G7-S01 — Chunk concurrency.** Giữ tối đa 2 chunk đang chạy; trong mỗi chunk, stage chạy tuần tự.
-- [ ] **P003-G7-S02 — Progress model.** Job trả `currentQualityStage`, số chunk passed, warning, completed và tổng chunk.
-- [ ] **P003-G7-S03 — SSE.** Phát stage bắt đầu/kết thúc, retry key, repair và needs-review bằng dữ liệu công khai, không gửi audit excerpt chứa nội dung sách nếu không cần.
-- [ ] **P003-G7-S04 — UI label.** Hiển thị `Đang dịch`, `Đang kiểm định`, `Đang hiệu chỉnh`, `Đang xác minh`, `Đang sửa lỗi` và `Hoàn thành có cảnh báo`.
-- [ ] **P003-G7-S05 — Result API.** Preview/copy/download chỉ trả final `content`; artifact audit có endpoint debug riêng hoặc không public trong v1.
-- [ ] **P003-G7-S06 — Warning UX.** Cho biết số chunk cần xem lại và page range tương ứng; không gọi bản dịch “đã kiểm chứng hoàn toàn”.
-- [ ] **P003-G7-S07 — Resume UX.** F5/reconnect đọc stage từ MongoDB, không reset progress về đầu.
-- [ ] **P003-G7-S08 — Legacy compatibility.** Job cũ không có quality fields vẫn hiển thị và download bình thường.
-- [ ] **P003-G7-S09 — Cancellation/delete.** Dọn artifact trung gian cùng TranslationChunk và source theo semantics P001–P002.
+- [x] **P003-G7-S01 — Chunk concurrency.** Giữ tối đa 2 chunk đang chạy; trong mỗi chunk, stage chạy tuần tự.
+- [x] **P003-G7-S02 — Progress model.** Job trả `currentQualityStage`, số chunk passed, warning, completed và tổng chunk.
+- [x] **P003-G7-S03 — SSE.** Phát stage bắt đầu/kết thúc, retry key, repair và needs-review bằng dữ liệu công khai, không gửi audit excerpt chứa nội dung sách nếu không cần.
+- [x] **P003-G7-S04 — UI label.** Hiển thị `Đang dịch`, `Đang kiểm định`, `Đang hiệu chỉnh`, `Đang xác minh`, `Đang sửa lỗi` và `Hoàn thành có cảnh báo`.
+- [x] **P003-G7-S05 — Result API.** Preview/copy/download chỉ trả final `content`; artifact audit có endpoint debug riêng hoặc không public trong v1.
+- [x] **P003-G7-S06 — Warning UX.** Cho biết số chunk cần xem lại và page range tương ứng; không gọi bản dịch “đã kiểm chứng hoàn toàn”.
+- [x] **P003-G7-S07 — Resume UX.** F5/reconnect đọc stage từ MongoDB, không reset progress về đầu.
+- [x] **P003-G7-S08 — Legacy compatibility.** Job cũ không có quality fields vẫn hiển thị và download bình thường.
+- [x] **P003-G7-S09 — Cancellation/delete.** Dọn artifact trung gian cùng TranslationChunk và source theo semantics P001–P002.
 
 ## G8 — Kiểm thử, benchmark đầy đủ và tiêu chí chất lượng
 

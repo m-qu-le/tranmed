@@ -133,6 +133,7 @@ export function validateRuntimeEnv() {
         maxFileSizeMb: MAX_FILE_SIZE_MB,
         maxJobAttempts: MAX_JOB_ATTEMPTS,
         geminiTimeoutMs: GEMINI_TIMEOUT_MS,
+        translation: p003Config,
         r2: Object.freeze({
             accountId: r2AccountId,
             accessKeyId: r2AccessKeyId,

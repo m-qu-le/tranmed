@@ -12,10 +12,14 @@ test('splitPdfToBuffers preserves page count and chunk order', async () => {
     }
 
     const sourceBytes = await source.save();
-    const { chunkBuffers, totalPages } = await splitPdfToBuffers(Buffer.from(sourceBytes), 3);
+    const { chunkBuffers, totalPages, pageRanges } = await splitPdfToBuffers(Buffer.from(sourceBytes), 3);
 
     assert.equal(totalPages, 4);
     assert.equal(chunkBuffers.length, 2);
+    assert.deepEqual(pageRanges, [
+        { pageStart: 1, pageEnd: 3 },
+        { pageStart: 4, pageEnd: 4 },
+    ]);
 
     const firstChunk = await PDFDocument.load(chunkBuffers[0]);
     const secondChunk = await PDFDocument.load(chunkBuffers[1]);

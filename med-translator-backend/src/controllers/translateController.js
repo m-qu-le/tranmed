@@ -7,6 +7,8 @@ import { r2Service, uploadBatchService } from '../services/runtimeServices.js';
 import { UploadBatchError } from '../services/uploadBatchService.js';
 import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
+import { qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
+import { buildPublicJobUpdate, buildPublicQualitySummary } from '../services/qualityPublicView.js';
 
 function sendUploadBatchError(res, error) {
     if (error instanceof UploadBatchError) {
@@ -142,14 +144,16 @@ export const getJobResult = async (req, res) => {
         if (job.status !== 'completed') return res.status(400).json({ error: 'Tài liệu chưa dịch xong.' });
         
         if (job.result) {
-            return res.status(200).json({ result: job.result });
+            const quality = buildPublicQualitySummary(job);
+            return res.status(200).json(quality ? { result: job.result, quality } : { result: job.result });
         }
 
-        const chunks = await TranslationChunk.find({ jobId }, 'content chunkIndex')
+        const chunks = await TranslationChunk.find({ jobId, content: { $type: 'string' } }, 'content chunkIndex')
             .sort({ chunkIndex: 1 })
             .lean();
         const result = chunks.map(chunk => chunk.content).join('\n\n');
-        res.status(200).json({ result });
+        const quality = buildPublicQualitySummary(job);
+        res.status(200).json(quality ? { result, quality } : { result });
     } catch (error) {
          res.status(500).json({ error: error.message });
     }
@@ -171,18 +175,7 @@ export const streamLogs = (req, res) => {
     }, 15000); 
 
     const onJobUpdated = (job) => {
-        const payload = {
-            type: 'status',
-            jobId: job.jobId,
-            status: job.status,
-            error: job.error,
-            errorCode: job.errorCode,
-            attemptCount: job.attemptCount,
-            maxAttempts: job.maxAttempts,
-            nextRetryAt: job.nextRetryAt,
-            completedChunks: job.completedChunks,
-            chunkCount: job.chunkCount
-        };
+        const payload = buildPublicJobUpdate(job);
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
@@ -289,7 +282,11 @@ export const getSystemStatus = async (req, res) => {
 export const getOperationalMetrics = async (req, res) => {
     try {
         const cleanupBacklog = await Job.countDocuments({ sourceCleanupState: { $in: ['pending', 'retry'] } });
-        res.status(200).json({ ...operationalMetrics.snapshot(), gauges: { cleanupBacklog } });
+        res.status(200).json({
+            ...operationalMetrics.snapshot(),
+            gauges: { cleanupBacklog },
+            geminiKeyPool: qualityKeyScheduler.snapshot(),
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -344,7 +341,7 @@ export const downloadJobResult = async (req, res) => {
         }
 
         let firstChunk = true;
-        const cursor = TranslationChunk.find({ jobId }, 'content chunkIndex')
+        const cursor = TranslationChunk.find({ jobId, content: { $type: 'string' } }, 'content chunkIndex')
             .sort({ chunkIndex: 1 })
             .cursor();
         for await (const chunk of cursor) {

@@ -17,6 +17,7 @@ import {
     MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
     MEDICAL_REVISION_SYSTEM_INSTRUCTION,
     MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
+    QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
 } from '../src/services/qualityPrompts.js';
 import {
     hasBlockingQualityErrors,
@@ -149,9 +150,11 @@ async function callWithBenchmarkRotation(request, keys, firstKeyIndex) {
     throw lastError;
 }
 
-function createGenerateConfig(variantConfig) {
+function createGenerateConfig(variantConfig, variant) {
     const config = {
-        systemInstruction: LEGACY_TRANSLATION_SYSTEM_INSTRUCTION,
+        systemInstruction: variant === 'B0'
+            ? LEGACY_TRANSLATION_SYSTEM_INSTRUCTION
+            : QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
         temperature: variantConfig.temperature,
         httpOptions: { timeout: GEMINI_TIMEOUT_MS },
     };
@@ -211,7 +214,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
     const translated = await executeStage({
         stage: 'translate',
         instruction: TRANSLATE_USER_INSTRUCTION,
-        systemInstruction: LEGACY_TRANSLATION_SYSTEM_INSTRUCTION,
+        systemInstruction: QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
     });
     const audit = await executeStage({
         stage: 'medical_audit',
@@ -290,7 +293,7 @@ export async function runBenchmark(options) {
             await writeFile(cachedInputPath, pageRange.buffer);
         }
     }
-    const generateConfig = createGenerateConfig(variantConfig);
+    const generateConfig = createGenerateConfig(variantConfig, options.variant);
     const source = {
         fileName: options.fileName,
         sourceSha256: createHash('sha256').update(sourceBytes).digest('hex'),
@@ -313,7 +316,9 @@ export async function runBenchmark(options) {
             retryMode: variantConfig.retryMode,
             firstKeyIndex: options.keyIndex,
             pipeline: variantConfig.pipeline || 'single_pass',
-            systemInstructionSha256: createHash('sha256').update(LEGACY_TRANSLATION_SYSTEM_INSTRUCTION).digest('hex'),
+            systemInstructionSha256: createHash('sha256')
+                .update(options.variant === 'B0' ? LEGACY_TRANSLATION_SYSTEM_INSTRUCTION : QUALITY_TRANSLATION_SYSTEM_INSTRUCTION)
+                .digest('hex'),
         },
     };
 

@@ -204,4 +204,86 @@ describe('App Cloud Uploader', () => {
     await act(async () => MockEventSource.instance.onopen())
     await waitFor(() => expect(api.get.mock.calls.filter(([url]) => url.endsWith('/upload-batches')).length).toBeGreaterThanOrEqual(2))
   })
+
+  it('shows every quality pipeline stage with persisted chunk progress', async () => {
+    const stages = [
+      ['translate', 'Đang dịch'],
+      ['medical_audit', 'Đang kiểm định'],
+      ['revise', 'Đang hiệu chỉnh'],
+      ['verify', 'Đang xác minh'],
+      ['repair', 'Đang sửa lỗi'],
+      ['reverify', 'Đang xác minh lại'],
+    ]
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      return Promise.resolve({ data: {
+        items: stages.map(([stage], index) => ({
+          jobId: `quality-${stage}`,
+          originalName: `${stage}.pdf`,
+          folderName: 'Quality stages',
+          status: 'processing',
+          translationMode: 'quality',
+          currentQualityStage: stage,
+          chunkCount: 5,
+          completedChunks: index,
+          passedChunks: index,
+          needsReviewChunks: 0,
+          qualityWarnings: [],
+        })),
+        nextCursor: null,
+      } })
+    })
+
+    render(<App />)
+    for (const [index, [, label]] of stages.entries()) {
+      expect(await screen.findByText(`⚙️ ${label} ${index}/5`)).toBeInTheDocument()
+    }
+    expect(screen.getAllByText(/Kiểm soát chất lượng:/i)).toHaveLength(stages.length)
+  })
+
+  it('shows completed quality warnings with page ranges and no diagnostic text', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      return Promise.resolve({ data: { items: [{
+        jobId: 'quality-warning',
+        originalName: 'warning.pdf',
+        folderName: 'Quality warnings',
+        status: 'completed',
+        translationMode: 'quality',
+        chunkCount: 4,
+        completedChunks: 4,
+        passedChunks: 3,
+        needsReviewChunks: 1,
+        qualityWarnings: [{ chunkIndex: 3, pageStart: 7, pageEnd: 8 }],
+      }], nextCursor: null } })
+    })
+
+    render(<App />)
+    expect(await screen.findByText('⚠️ Hoàn thành có cảnh báo')).toBeInTheDocument()
+    expect(screen.getByText('Phần 4: trang 7–8')).toBeInTheDocument()
+    expect(screen.queryByText(/audit|diagnostic/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps the legacy processing display unchanged and omits quality details', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      return Promise.resolve({ data: { items: [{
+        jobId: 'legacy-processing',
+        originalName: 'legacy.pdf',
+        folderName: 'Legacy',
+        status: 'processing',
+        translationMode: 'legacy',
+        translationPipelineVersion: 'p003-v1',
+        chunkCount: 3,
+        completedChunks: 1,
+      }], nextCursor: null } })
+    })
+
+    render(<App />)
+    expect(await screen.findByText('⚙️ Đang dịch 1/3')).toBeInTheDocument()
+    expect(screen.queryByText(/Kiểm soát chất lượng:/i)).not.toBeInTheDocument()
+  })
 })

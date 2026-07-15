@@ -43,6 +43,7 @@ export async function splitPdfToBuffers(pdfBuffer, pagesPerChunk = 2) {
     const originalPdf = await PDFDocument.load(pdfBuffer);
     const totalPages = originalPdf.getPageCount();
     const chunkBuffers = [];
+    const pageRanges = [];
 
     // 2. Vòng lặp để cắt từng khúc
     for (let i = 0; i < totalPages; i += pagesPerChunk) {
@@ -60,7 +61,8 @@ export async function splitPdfToBuffers(pdfBuffer, pagesPerChunk = 2) {
         // Giữ Uint8Array gốc để Worker có thể transfer ArrayBuffer mà không clone thêm.
         const chunkBytes = await chunkPdf.save();
         chunkBuffers.push(chunkBytes);
+        pageRanges.push(Object.freeze({ pageStart: i + 1, pageEnd: endIndex }));
     }
 
-    return { chunkBuffers, totalPages };
+    return { chunkBuffers, totalPages, pageRanges };
 }

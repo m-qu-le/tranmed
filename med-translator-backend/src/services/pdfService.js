@@ -34,7 +34,11 @@ export const processPdf = (filePath, signal) => {
         worker.on('message', (message) => {
             if (message.success) {
                 console.log(`✅ [WORKER] Cắt thành công! Sách có ${message.totalPages} trang, chia thành ${message.chunkBuffers.length} chunk nhỏ.`);
-                settle(resolve, message.chunkBuffers); // Trả mảng chunks về cho queueManager
+                settle(resolve, {
+                    chunkBuffers: message.chunkBuffers,
+                    totalPages: message.totalPages,
+                    pageRanges: message.pageRanges,
+                });
             } else {
                 settle(reject, new Error(message.error));
             }
