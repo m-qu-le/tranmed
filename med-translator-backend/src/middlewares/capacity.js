@@ -15,26 +15,36 @@ export async function getCapacity(req, res) {
 }
 
 export async function reserveUploadCapacity(req, res, next) {
+    const release = () => { uploadInProgress = false; };
     try {
+        // Chiếm khóa trước await đầu tiên để hai request đồng thời không cùng vượt guard.
+        if (uploadInProgress) {
+            return res.status(409).json({
+                error: 'Server đang nhận một file khác. File vẫn được giữ trong Local Queue.'
+            });
+        }
+        uploadInProgress = true;
+
         const contentLength = Number.parseInt(req.headers['content-length'] || '0', 10);
         if (Number.isFinite(contentLength) && contentLength > budgetBytes) {
+            release();
             return res.status(413).json({ error: 'Request lớn hơn ngân sách lưu trữ của server.' });
         }
 
-        const capacity = await getCapacityStatus(uploadInProgress);
+        const capacity = await getCapacityStatus(false);
         if (!capacity.canAcceptUpload) {
+            release();
             return res.status(409).json({
                 error: 'Server đang xử lý một tài liệu khác. File vẫn được giữ trong Local Queue.',
                 capacity
             });
         }
 
-        uploadInProgress = true;
-        const release = () => { uploadInProgress = false; };
         res.once('finish', release);
         res.once('close', release);
         next();
     } catch (error) {
+        release();
         next(error);
     }
 }
