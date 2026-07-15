@@ -224,17 +224,6 @@ function App() {
         setJobs(prevJobs => prevJobs.map(job => 
           job.jobId === data.jobId ? { ...job, ...data } : job
         ));
-        if (data.status === 'failed' && data.errorCode === 'FILE_MISSING') {
-          setLocalQueue(previous => previous.map(task => task.currentJobId === data.jobId
-            ? {
-                ...task,
-                status: 'pending',
-                nextFileIndex: Math.max(0, task.nextFileIndex - 1),
-                currentJobId: null,
-                progressMsg: '♻️ Render đã mất file tạm; sẽ tự tải lại từ thiết bị...'
-              }
-            : task));
-        }
       } 
     };
 
@@ -249,14 +238,45 @@ function App() {
       const nextTask = localQueue.find(task => task.status === 'pending');
       if (!nextTask) return;
 
-      const currentServerJob = jobs.find(job => job.jobId === nextTask.currentJobId);
-      if (currentServerJob?.status === 'failed' && currentServerJob.errorCode === 'FILE_MISSING') {
+      if (nextTask.currentJobId) {
+        const currentServerJob = jobs.find(job => job.jobId === nextTask.currentJobId);
+        if (!currentServerJob) return;
+
+        if (['pending', 'processing'].includes(currentServerJob.status)) return;
+
+        if (currentServerJob.status === 'completed') {
+          setLocalQueue(previous => previous.map(task => task.id === nextTask.id
+            ? {
+                ...task,
+                currentJobId: null,
+                progressMsg: `✅ Server đã hoàn thành ${task.nextFileIndex}/${task.totalFiles} file...`
+              }
+            : task));
+          return;
+        }
+
+        const retryIndex = Math.max(0, nextTask.nextFileIndex - 1);
+        if (currentServerJob.status === 'failed' && currentServerJob.errorCode === 'FILE_MISSING') {
+          setLocalQueue(previous => previous.map(task => task.id === nextTask.id
+            ? {
+                ...task,
+                status: 'pending',
+                nextFileIndex: retryIndex,
+                currentJobId: null,
+                progressMsg: '♻️ Render đã mất file tạm; đang tải lại đúng file từ thiết bị...'
+              }
+            : task));
+          return;
+        }
+
         setLocalQueue(previous => previous.map(task => task.id === nextTask.id
           ? {
               ...task,
-              nextFileIndex: Math.max(0, task.nextFileIndex - 1),
+              status: 'error',
+              nextFileIndex: retryIndex,
               currentJobId: null,
-              progressMsg: '♻️ Render đã mất file tạm; sẽ tự tải lại từ thiết bị...'
+              uploadIds: task.uploadIds.map((id, index) => index === retryIndex ? crypto.randomUUID() : id),
+              progressMsg: `❌ ${currentServerJob.error || 'Server không thể xử lý file hiện tại.'}`
             }
           : task));
         return;
