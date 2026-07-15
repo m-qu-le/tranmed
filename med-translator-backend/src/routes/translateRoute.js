@@ -16,7 +16,9 @@ import {
     deleteFolderQueue, // [THÊM DÒNG NÀY]
     prepareUploadBatch,
     confirmUploadBatch,
-    getUploadBatchStatus
+    getUploadBatchStatus,
+    listUploadBatches,
+    abandonUploadBatchItems
 } from '../controllers/translateController.js'; 
 
 const router = express.Router();
@@ -33,6 +35,8 @@ router.post('/', uploadRateLimit, reserveUploadCapacity, upload.array('files', 1
 router.get('/capacity', getCapacity);
 router.post('/upload-batches/prepare', uploadRateLimit, prepareUploadBatch);
 router.post('/upload-batches/:batchId/confirm', uploadRateLimit, confirmUploadBatch);
+router.post('/upload-batches/:batchId/abandon', uploadRateLimit, abandonUploadBatchItems);
+router.get('/upload-batches', listUploadBatches);
 router.get('/upload-batches/:batchId', getUploadBatchStatus);
 
 // 2. Các API lấy trạng thái và kết quả

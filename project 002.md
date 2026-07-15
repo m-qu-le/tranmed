@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G4 hoàn tất cục bộ; bước tiếp theo là G5 Frontend Cloud Uploader |
+| Trạng thái tổng | G1–G5 hoàn tất cục bộ; bước tiếp theo là G6 worker tải source từ R2 |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -104,7 +104,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G2 | Tích hợp R2 SDK và kiểm tra kết nối | Hoàn thành cục bộ | Put/Head/Get/Delete smoke đạt, không lộ secret |
 | G3 | Mở rộng schema và vòng đời source | Hoàn thành code + dry-run | Job uploading không bị worker claim; object/job idempotent |
 | G4 | API chuẩn bị/xác nhận batch và presigned URL | Hoàn thành code + smoke | 200 URL được tạo, object được HEAD xác nhận trước khi pending |
-| G5 | Frontend Cloud Uploader | Chưa làm | Upload song song toàn batch; chỉ báo có thể tắt máy sau cloud confirmation |
+| G5 | Frontend Cloud Uploader | Hoàn thành code + mock | Upload song song toàn batch; chỉ báo có thể tắt máy sau cloud confirmation |
 | G6 | Worker tải source từ R2 và phục hồi restart | Chưa làm | Restart làm worker tải lại từ R2, không còn `FILE_MISSING` do disk Render |
 | G7 | Xóa, hủy, retry và garbage collection | Chưa làm | Không có object R2 mồ côi ngoài retention window |
 | G8 | UX, realtime và quan sát vận hành | Chưa làm | UI phân biệt upload cloud/dịch; reconnect resync đúng |
@@ -319,18 +319,18 @@ Mục tiêu: frontend nhận URL tạm, upload thẳng lên R2 và backend chỉ
 
 Mục tiêu: tải nhanh toàn batch lên R2 và đưa ra tín hiệu “có thể tắt máy” chính xác.
 
-- [ ] **P002-G5-S01 — Thay Local Feeder theo translation.** Không còn chờ job trước completed mới upload file sau.
-- [ ] **P002-G5-S02 — Prepare manifest.** Gửi metadata toàn batch, nhận job IDs và presigned URLs.
-- [ ] **P002-G5-S03 — Upload pool.** Upload trực tiếp tối đa 4 file đồng thời; concurrency cấu hình được và không tạo 200 request đồng thời.
-- [ ] **P002-G5-S04 — Progress theo byte.** Hiển thị tổng MB, MB đã upload, phần trăm tổng và số file confirmed; không chỉ đếm file.
-- [ ] **P002-G5-S05 — Retry upload.** Retry network/5xx có backoff; 4xx signature expired phải xin URL mới đúng object key; không upload trùng job.
-- [ ] **P002-G5-S06 — Confirm theo lô nhỏ.** Xác nhận ngay các upload thành công và flush phần còn lại; retry confirm độc lập với PUT.
-- [ ] **P002-G5-S07 — Tín hiệu đóng máy.** Chỉ `canCloseClient=true` khi toàn bộ file mong muốn đã HEAD-confirmed hoặc người dùng chủ động bỏ các file lỗi khỏi batch.
-- [ ] **P002-G5-S08 — Cảnh báo đóng sớm.** `beforeunload` chỉ bật khi còn file chưa confirmed; tắt ngay khi batch an toàn trên R2, dù dịch chưa xong.
-- [ ] **P002-G5-S09 — Resync.** F5 sau khi upload xong phải đọc batch/job từ MongoDB và không cần `File` object cũ.
-- [ ] **P002-G5-S10 — Partial failure UI.** Cho retry file lỗi, bỏ file lỗi khỏi batch hoặc chọn lại đúng file; không gọi batch an toàn khi còn lỗi chưa xử lý.
-- [ ] **P002-G5-S11 — Không proxy qua Vercel/Render.** Network test phải cho thấy request chứa PDF đi từ browser tới `r2.cloudflarestorage.com`.
-- [ ] **P002-G5-S12 — Test 200 file.** Mock đủ prepare, PUT pool, confirm, retry và xác nhận concurrency không vượt cấu hình.
+- [x] **P002-G5-S01 — Thay Local Feeder theo translation.** Không còn chờ job trước completed mới upload file sau.
+- [x] **P002-G5-S02 — Prepare manifest.** Gửi metadata toàn batch, nhận job IDs và presigned URLs.
+- [x] **P002-G5-S03 — Upload pool.** Upload trực tiếp tối đa 4 file đồng thời; concurrency cấu hình được và không tạo 200 request đồng thời.
+- [x] **P002-G5-S04 — Progress theo byte.** Hiển thị tổng MB, MB đã upload, phần trăm tổng và số file confirmed; không chỉ đếm file.
+- [x] **P002-G5-S05 — Retry upload.** Retry network/5xx có backoff; 4xx signature expired phải xin URL mới đúng object key; không upload trùng job.
+- [x] **P002-G5-S06 — Confirm theo lô nhỏ.** Xác nhận ngay các upload thành công và flush phần còn lại; retry confirm độc lập với PUT.
+- [x] **P002-G5-S07 — Tín hiệu đóng máy.** Chỉ `canCloseClient=true` khi toàn bộ file mong muốn đã HEAD-confirmed hoặc người dùng chủ động bỏ các file lỗi khỏi batch.
+- [x] **P002-G5-S08 — Cảnh báo đóng sớm.** `beforeunload` chỉ bật khi còn file chưa confirmed; tắt ngay khi batch an toàn trên R2, dù dịch chưa xong.
+- [x] **P002-G5-S09 — Resync.** F5 sau khi upload xong phải đọc batch/job từ MongoDB và không cần `File` object cũ.
+- [x] **P002-G5-S10 — Partial failure UI.** Cho retry file lỗi, bỏ file lỗi khỏi batch hoặc chọn lại đúng file; không gọi batch an toàn khi còn lỗi chưa xử lý.
+- [x] **P002-G5-S11 — Không proxy qua Vercel/Render.** Network test phải cho thấy request chứa PDF đi từ browser tới `r2.cloudflarestorage.com`.
+- [x] **P002-G5-S12 — Test 200 file.** Mock đủ prepare, PUT pool, confirm, retry và xác nhận concurrency không vượt cấu hình.
 
 **Cổng G5:** 200 file được PUT mà không chờ dịch; UI báo “có thể tắt máy” dựa trên backend confirmation, không dựa trên state cục bộ đơn thuần.
 
@@ -501,6 +501,9 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G3 / migration dry-run | `npm run migrate:p002:dry` | 5 Job legacy được nhận diện; 0 R2 Job/UploadBatch; `modifiedCount=0`, không tạo index | stdout không chứa URI |
 | 15-07-2026 | G4 / API service mock | `npm test` | Mock prepare 200 file tạo 200 key ổn định; prepare/confirm lặp idempotent; HEAD size/ETag trước pending | stdout phiên local |
 | 15-07-2026 | G4 / presigned production smoke | `npm run smoke:r2-presign` | Sai Content-Type bị từ chối; PUT đúng + HEAD đạt; URL hết hạn bị từ chối; cleanup đạt | Không in URL ký/key |
+| 15-07-2026 | G5 / Cloud Uploader 200 file | Frontend Vitest | 200 PUT mock, peak concurrency ≤4, retry 503/403, confirm chunk ≤10, 200 ID duy nhất | Không gọi Render với PDF body |
+| 15-07-2026 | G5 / close-safe + resync | React Testing Library | `beforeunload` bật trước confirm, tắt sau `canCloseClient`; batch ready phục hồi từ Mongo không cần File | Frontend 8/8, lint/build đạt |
+| 15-07-2026 | G5 / partial failure | Backend + frontend test | Retry giữ nguyên client IDs; abandon chỉ close-safe sau DELETE R2 và `confirmed + skipped = total` | Backend 29/29 |
 
 ## 10. Nhật ký thay đổi
 
@@ -511,6 +514,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G2-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Thêm AWS SDK, env fail-fast, `r2Service`, streaming download, smoke, redaction và readiness; rollback `ae14db7` | Codex | Hoàn thành cục bộ, smoke thật đạt |
 | 15-07-2026 | P002-G3-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Schema Job additive, UploadBatch, source key, claim invariant, index và migration P002 dry-run/idempotent | Codex | Hoàn thành code; production migration để G10 |
 | 15-07-2026 | P002-G4-S01..S11 | Chưa commit | API prepare/confirm/status, manifest limits, scoped presign, reconciler, capacity split và mock 200 file | Codex | Hoàn thành code + smoke thật |
+| 15-07-2026 | P002-G5-S01..S12 | Chưa commit | Cloud upload pool, byte progress, retry/refresh URL, chunk confirm, close-safe banner, resync và abandon file lỗi | Codex | Hoàn thành code + mock 200 file |
 
 ## 11. Nhật ký vấn đề và quyết định
 

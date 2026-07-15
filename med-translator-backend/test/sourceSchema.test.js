@@ -77,7 +77,7 @@ test('upload batch becomes close-safe only when every file is confirmed', async 
     assert.equal(batch.canCloseClient, true);
 
     batch.confirmedFiles = 1;
-    await assert.rejects(batch.validate(), /xác nhận đủ/);
+    await assert.rejects(batch.validate(), /xác nhận hoặc bỏ qua đủ/);
 });
 
 test('job schema declares unique idempotency and storage indexes', () => {

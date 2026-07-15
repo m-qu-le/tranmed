@@ -14,6 +14,7 @@ const uploadBatchSchema = new mongoose.Schema({
     confirmedFiles: { type: Number, default: 0, min: 0 },
     confirmedBytes: { type: Number, default: 0, min: 0 },
     failedFiles: { type: Number, default: 0, min: 0 },
+    skippedFiles: { type: Number, default: 0, min: 0 },
     readyAt: { type: Date, default: null },
 }, {
     timestamps: true,
@@ -22,18 +23,18 @@ const uploadBatchSchema = new mongoose.Schema({
 });
 
 uploadBatchSchema.virtual('canCloseClient').get(function canCloseClient() {
-    return this.status === 'ready' && this.confirmedFiles === this.totalFiles;
+    return this.status === 'ready' && this.confirmedFiles + this.skippedFiles === this.totalFiles;
 });
 
 uploadBatchSchema.pre('validate', function validateBatchCounts() {
-    if (this.confirmedFiles + this.failedFiles > this.totalFiles) {
+    if (this.confirmedFiles + this.failedFiles + this.skippedFiles > this.totalFiles) {
         this.invalidate('confirmedFiles', 'Tổng confirmed/failed không được vượt totalFiles.');
     }
     if (this.confirmedBytes > this.totalBytes) {
         this.invalidate('confirmedBytes', 'confirmedBytes không được vượt totalBytes.');
     }
-    if (this.status === 'ready' && this.confirmedFiles !== this.totalFiles) {
-        this.invalidate('status', 'Batch ready phải xác nhận đủ toàn bộ file.');
+    if (this.status === 'ready' && this.confirmedFiles + this.skippedFiles !== this.totalFiles) {
+        this.invalidate('status', 'Batch ready phải xác nhận hoặc bỏ qua đủ toàn bộ file.');
     }
 });
 

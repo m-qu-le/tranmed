@@ -232,7 +232,7 @@ export class QueueManager extends EventEmitter {
         const filter = cursor ? { _id: { $lt: cursor } } : {};
         const rows = await Job.find(
             filter,
-            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks createdAt'
+            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt'
         )
             .sort({ _id: -1 })
             .limit(limit + 1)

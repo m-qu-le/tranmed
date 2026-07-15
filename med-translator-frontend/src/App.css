@@ -263,6 +263,7 @@ body {
 }
 
 .status-badge.pending { background-color: var(--btn-sand); color: var(--text-plum); }
+.status-badge.uploading { background-color: #dcecff; color: #174c85; }
 .status-badge.processing { background-color: var(--btn-light); color: var(--text-plum); }
 .status-badge.completed { background-color: var(--success-green); color: var(--text-white); }
 .status-badge.failed { background-color: var(--error-red); color: var(--text-white); }
@@ -441,4 +442,53 @@ body {
   background: var(--bg-white);
   color: var(--text-plum);
   cursor: pointer;
+}
+
+.cloud-safe-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid #35a765;
+  border-radius: 14px;
+  background: #eaf9f0;
+  color: #103c25;
+}
+
+.cloud-queue {
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  background: #f8f9fa;
+}
+
+.cloud-queue h4 { margin-bottom: 12px; font-size: 14px; color: #495057; }
+.cloud-queue ul { display: flex; flex-direction: column; gap: 10px; list-style: none; }
+
+.cloud-task {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #eaeaea;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.cloud-task.safe { border-color: #35a765; }
+.cloud-task.error { border-color: #d64c4c; }
+.cloud-task-main { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
+.cloud-task-main strong span, .cloud-task-main small { color: #6c757d; font-weight: 400; }
+.cloud-task-message { color: #174c85; font-size: 13px; font-weight: 600; }
+.cloud-task.error .cloud-task-message { color: #9e0a0a; }
+.cloud-task.safe .cloud-task-message { color: #176b3a; }
+.cloud-task progress { width: 100%; height: 10px; accent-color: #2879d0; }
+.cloud-task.safe progress { accent-color: #16803a; }
+.cloud-task-actions { display: flex; gap: 8px; }
+
+@media (max-width: 576px) {
+  .cloud-task { align-items: stretch; flex-direction: column; }
+  .cloud-task-actions { width: 100%; }
 }

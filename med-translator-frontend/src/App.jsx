@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 import api, { API_BASE_URL } from './api/client.js';
+import { uploadBatchToCloud } from './cloudUploader.js';
 
-const LOCAL_QUEUE_KEEP_ALIVE_MS = 5 * 60 * 1000;
+const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
 
 // Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ mặc định
 // -------------------------------------------------------------
@@ -60,6 +61,7 @@ const JobCard = ({ job, onDelete }) => {
         <div className="job-info">
           <span className="job-name">📄 {job.originalName || job.fileName || 'Tài liệu'}</span>
           <span className={`status-badge ${job.status}`}>
+            {job.status === 'uploading' && '☁️ Đang lên Cloud...'}
             {job.status === 'pending' && (job.nextRetryAt ? '🔄 Chờ thử lại...' : '⏳ Đang chờ...')}
             {job.status === 'processing' && `⚙️ Đang dịch${job.chunkCount ? ` ${job.completedChunks || 0}/${job.chunkCount}` : '...'}`}
             {job.status === 'completed' && '✅ Hoàn thành'}
@@ -119,14 +121,12 @@ function App() {
   const [selectedFiles, setSelectedFiles] = useState(null);
   const [folderName, setFolderName] = useState(''); 
   
-  // KHAI BÁO STATE CHO LOCAL QUEUE
-  const [localQueue, setLocalQueue] = useState([]); // Array chứa các thư mục chờ đẩy lên
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false); // Cờ khóa luồng
+  const [localQueue, setLocalQueue] = useState([]);
+  const [activeUploadTaskId, setActiveUploadTaskId] = useState(null);
   
   const [jobs, setJobs] = useState([]); 
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
   const [collapsedFolders, setCollapsedFolders] = useState({});
-  const [feederTick, setFeederTick] = useState(0);
   const [sseConnected, setSseConnected] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
 
@@ -154,6 +154,34 @@ function App() {
         } else {
             throw new Error("Cloud Server trả về dữ liệu không hợp lệ.");
         }
+
+        try {
+          const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
+          const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
+          const restoredTasks = batches.map(batch => ({
+            id: `server-${batch.batchId}`,
+            batchId: batch.batchId,
+            clientBatchId: batch.clientBatchId,
+            folderName: batch.folderName,
+            entries: [],
+            totalFiles: batch.totalFiles,
+            totalBytes: batch.totalBytes,
+            uploadedBytes: batch.confirmedBytes,
+            confirmedFiles: batch.confirmedFiles,
+            percent: batch.totalBytes > 0 ? Math.round(batch.confirmedBytes * 100 / batch.totalBytes) : 0,
+            canCloseClient: batch.canCloseClient,
+            status: batch.canCloseClient ? 'safe' : 'error',
+            progressMsg: batch.canCloseClient
+              ? '✅ Batch đã an toàn trên Cloud; trạng thái được phục hồi từ MongoDB.'
+              : '⚠️ Batch chưa upload đủ. Hãy chọn lại đúng các file còn thiếu để tiếp tục.',
+          }));
+          setLocalQueue(previous => {
+            const knownBatchIds = new Set(previous.map(task => task.batchId).filter(Boolean));
+            return [...previous, ...restoredTasks.filter(task => !knownBatchIds.has(task.batchId))];
+          });
+        } catch (batchError) {
+          console.error('Không thể phục hồi upload batch:', batchError);
+        }
       } catch (error) {
         console.error("Lỗi khởi tạo dữ liệu:", error);
         alert("⚠️ Không thể tải danh sách tài liệu từ Cloud. Máy chủ đang khởi động hoặc quá tải do phục hồi dữ liệu. Vui lòng nhấn F5 (Tải lại trang) sau 30 giây.");
@@ -163,17 +191,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const hasLocalWork = localQueue.some(task => ['pending', 'uploading'].includes(task.status));
-    if (!hasLocalWork) return undefined;
-
-    const interval = setInterval(() => setFeederTick(value => value + 1), 5000);
-    // Render Free spin down nếu 15 phút không có request HTTP mới. SSE heartbeat chỉ đi
-    // từ server ra trình duyệt, vì vậy dùng một request nhẹ khi Local Queue còn công việc.
-    const keepAliveInterval = setInterval(() => {
-      api.get('/status', { timeout: 30_000 }).catch(error => {
-        console.error('Không thể giữ Render thức khi Local Queue đang chạy:', error);
-      });
-    }, LOCAL_QUEUE_KEEP_ALIVE_MS);
+    const hasUnsafeUpload = localQueue.some(task => !task.canCloseClient && task.status !== 'hidden');
+    if (!hasUnsafeUpload) return undefined;
     const warnBeforeUnload = (event) => {
       event.preventDefault();
       event.returnValue = '';
@@ -181,8 +200,6 @@ function App() {
     window.addEventListener('beforeunload', warnBeforeUnload);
 
     return () => {
-      clearInterval(interval);
-      clearInterval(keepAliveInterval);
       window.removeEventListener('beforeunload', warnBeforeUnload);
     };
   }, [localQueue]);
@@ -240,180 +257,133 @@ function App() {
     return () => eventSource.close();
   }, []); 
 
-  // BACKGROUND WORKER (Tự động chạy ngầm tải lên tuần tự)
-  useEffect(() => {
-    const processQueue = async () => {
-      // Bỏ qua nếu đang xử lý 1 task khác hoặc hàng đợi không có pending task
-      if (isProcessingQueue) return;
-      const nextTask = localQueue.find(task => task.status === 'pending');
-      if (!nextTask) return;
+  const updateCloudTask = (taskId, changes) => {
+    setLocalQueue(previous => previous.map(task => task.id === taskId
+      ? { ...task, ...(typeof changes === 'function' ? changes(task) : changes) }
+      : task));
+  };
 
-      if (nextTask.currentJobId) {
-        const currentServerJob = jobs.find(job => job.jobId === nextTask.currentJobId);
-        if (!currentServerJob) return;
+  const startCloudUpload = async (task) => {
+    if (activeUploadTaskId) return;
+    setActiveUploadTaskId(task.id);
+    updateCloudTask(task.id, { status: 'preparing', progressMsg: 'Đang chuẩn bị URL upload an toàn...' });
+    try {
+      const result = await uploadBatchToCloud({
+        clientBatchId: task.clientBatchId,
+        folderName: task.folderName,
+        entries: task.entries,
+        concurrency: 4,
+        onPrepared: prepared => {
+          updateCloudTask(task.id, { batchId: prepared.batchId, status: 'uploading' });
+          const preparedJobs = prepared.items.map(item => ({
+            jobId: item.jobId,
+            originalName: item.name,
+            folderName: task.folderName,
+            status: item.status,
+            logs: [],
+            result: null,
+          }));
+          setJobs(previous => {
+            const known = new Set(previous.map(job => job.jobId));
+            return [...preparedJobs.filter(job => !known.has(job.jobId)), ...previous];
+          });
+        },
+        onProgress: progress => updateCloudTask(task.id, {
+          ...progress,
+          progressMsg: progress.canCloseClient
+            ? 'Đã lưu an toàn trên Cloud — có thể tắt máy.'
+            : `Đang upload lên R2: ${progress.percent}% · xác nhận ${progress.confirmedFiles}/${progress.totalFiles} file`,
+        }),
+        onItemState: (clientUploadId, state) => updateCloudTask(task.id, current => ({
+          itemStates: { ...current.itemStates, [clientUploadId]: state },
+        })),
+      });
+      updateCloudTask(task.id, {
+        status: 'safe',
+        canCloseClient: true,
+        files: [],
+        confirmedFiles: result.confirmedFiles,
+        confirmedBytes: result.confirmedBytes,
+        progressMsg: '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Render sẽ tiếp tục dịch.',
+      });
+    } catch (error) {
+      updateCloudTask(task.id, {
+        status: 'error',
+        canCloseClient: false,
+        error: error.message,
+        failedItems: error.details?.failedItems || [],
+        batchId: error.details?.batchId || task.batchId,
+        progressMsg: `❌ ${error.message} Hãy bấm “Thử lại”.`,
+      });
+    } finally {
+      setActiveUploadTaskId(null);
+    }
+  };
 
-        if (['pending', 'processing'].includes(currentServerJob.status)) return;
-
-        if (currentServerJob.status === 'completed') {
-          setLocalQueue(previous => previous.map(task => task.id === nextTask.id
-            ? {
-                ...task,
-                currentJobId: null,
-                progressMsg: `✅ Server đã hoàn thành ${task.nextFileIndex}/${task.totalFiles} file...`
-              }
-            : task));
-          return;
-        }
-
-        const retryIndex = Math.max(0, nextTask.nextFileIndex - 1);
-        if (currentServerJob.status === 'failed' && currentServerJob.errorCode === 'FILE_MISSING') {
-          setLocalQueue(previous => previous.map(task => task.id === nextTask.id
-            ? {
-                ...task,
-                status: 'pending',
-                nextFileIndex: retryIndex,
-                currentJobId: null,
-                progressMsg: '♻️ Render đã mất file tạm; đang tải lại đúng file từ thiết bị...'
-              }
-            : task));
-          return;
-        }
-
-        setLocalQueue(previous => previous.map(task => task.id === nextTask.id
-          ? {
-              ...task,
-              status: 'error',
-              nextFileIndex: retryIndex,
-              currentJobId: null,
-              uploadIds: task.uploadIds.map((id, index) => index === retryIndex ? crypto.randomUUID() : id),
-              progressMsg: `❌ ${currentServerJob.error || 'Server không thể xử lý file hiện tại.'}`
-            }
-          : task));
-        return;
-      }
-
-      setIsProcessingQueue(true); // Khóa luồng
-
-      // Cập nhật trạng thái UI là đang chạy
-      setLocalQueue(prev => prev.map(t => 
-        t.id === nextTask.id ? { ...t, status: 'uploading', progressMsg: '🚀 Bắt đầu nạp dữ liệu...' } : t
-      ));
-
-      const filesArray = nextTask.files;
-      const totalFiles = filesArray.length;
-
-      try {
-        const capacityRes = await api.get('/capacity', { timeout: 15_000 });
-        if (!capacityRes.data.canAcceptUpload) {
-          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
-            ? { ...task, status: 'pending', progressMsg: `⏸️ Server đang bận, giữ ${totalFiles - task.nextFileIndex} file trên thiết bị...` }
-            : task));
-          return;
-        }
-
-        if (nextTask.nextFileIndex >= totalFiles) {
-          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
-            ? { ...task, status: 'completed', files: [], progressMsg: `✅ Đã xử lý xong ${totalFiles}/${totalFiles} file` }
-            : task));
-          return;
-        }
-
-        const currentIndex = nextTask.nextFileIndex;
-        const file = filesArray[currentIndex];
-        if (file.size > capacityRes.data.maxFileSizeBytes) {
-          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
-            ? {
-                ...task,
-                status: 'error',
-                progressMsg: `❌ ${file.name} vượt giới hạn ${Math.round(capacityRes.data.maxFileSizeBytes / 1024 / 1024)} MB`
-              }
-            : task));
-          return;
-        }
-        const formData = new FormData();
-        formData.append('folderName', nextTask.folderName);
-        formData.append('clientUploadId', nextTask.uploadIds[currentIndex]);
-        formData.append('files', file);
-
-        const response = await api.post('/', formData, {
-          timeout: 15 * 60_000,
-          onUploadProgress: (progressEvent) => {
-            const total = progressEvent.total || file.size || 1;
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / total);
-            setLocalQueue(prev => prev.map(task => task.id === nextTask.id
-              ? { ...task, progressMsg: `⬆️ Đang tải ${currentIndex + 1}/${totalFiles}: ${percentCompleted}%` }
-              : task));
-          }
-        });
-
-        const newJobs = response.data.jobs.map(job => ({ ...job, logs: [], result: null }));
-        setJobs(prevJobs => {
-          const existingIds = new Set(prevJobs.map(job => job.jobId));
-          return [...newJobs.filter(job => !existingIds.has(job.jobId)), ...prevJobs];
-        });
-
-        setLocalQueue(prev => prev.map(t => 
-          t.id === nextTask.id ? {
-            ...t,
-            status: 'pending',
-            nextFileIndex: currentIndex + 1,
-            currentJobId: newJobs[0]?.jobId || null,
-            progressMsg: `☁️ Đã giao ${currentIndex + 1}/${totalFiles} file; chờ server dịch xong...`
-          } : t
-        ));
-
-      } catch (error) {
-        const isServerBusy = [409, 507].includes(error.response?.status);
-        setLocalQueue(prev => prev.map(t => 
-          t.id === nextTask.id ? {
-            ...t,
-            status: isServerBusy ? 'pending' : 'error',
-            progressMsg: isServerBusy
-              ? '⏸️ Server chưa đủ dung lượng, sẽ tự thử lại...'
-              : `❌ Upload lỗi: ${error.response?.data?.error || error.message}`
-          } : t
-        ));
-      } finally {
-        setIsProcessingQueue(false); // Mở khóa luồng cho task tiếp theo
-      }
-    };
-
-    processQueue();
-  }, [localQueue, isProcessingQueue, feederTick, jobs]);
-
-  // Thêm thao tác của người dùng vào Local Queue
   const handleAddToQueue = () => {
-    if (!selectedFiles || selectedFiles.length === 0) return;
-
-    const newTask = {
-      id: Date.now(), // Unique ID cho mỗi task tải lên
+    if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
+    const files = Array.from(selectedFiles);
+    if (files.length > 500) {
+      alert('Mỗi batch chỉ được tối đa 500 file PDF.');
+      return;
+    }
+    const invalidFile = files.find(file => !file.name.toLowerCase().endsWith('.pdf')
+      || (file.type && file.type !== 'application/pdf'));
+    if (invalidFile) {
+      alert(`${invalidFile.name} không phải file PDF hợp lệ.`);
+      return;
+    }
+    const task = {
+      id: crypto.randomUUID(),
+      clientBatchId: crypto.randomUUID(),
       folderName: folderName.trim() || 'Mặc định',
-      files: Array.from(selectedFiles),
-      uploadIds: Array.from(selectedFiles, () => crypto.randomUUID()),
-      totalFiles: selectedFiles.length,
-      nextFileIndex: 0,
-      currentJobId: null,
-      status: 'pending', // pending, uploading, completed, error
-      progressMsg: '⏳ Đang xếp hàng chờ tải lên...'
+      entries: files.map(file => ({ file, clientUploadId: crypto.randomUUID() })),
+      totalFiles: files.length,
+      totalBytes: files.reduce((sum, file) => sum + file.size, 0),
+      uploadedBytes: 0,
+      confirmedFiles: 0,
+      percent: 0,
+      canCloseClient: false,
+      itemStates: {},
+      status: 'preparing',
+      progressMsg: 'Đang chuẩn bị upload lên Cloud...',
     };
-
-    setLocalQueue(prev => [...prev, newTask]);
-    
-    // Reset Form Input ngay lập tức để người dùng có thể chọn tiếp
+    setLocalQueue(previous => [...previous, task]);
     document.getElementById('fileInput').value = '';
     setSelectedFiles(null);
     setFolderName('');
+    void startCloudUpload(task);
   };
 
-  // NÚT XÓA TASK KHỎI HÀNG CHỜ KHI CHƯA CHẠY
   const handleRemoveFromQueue = (taskId) => {
-    setLocalQueue(prev => prev.filter(task => task.id !== taskId || task.status === 'uploading'));
+    setLocalQueue(previous => previous.filter(task => task.id !== taskId || task.id === activeUploadTaskId));
   };
 
   const handleRetryLocalTask = (taskId) => {
-    setLocalQueue(prev => prev.map(task => task.id === taskId
-      ? { ...task, status: 'pending', progressMsg: '🔄 Đang thử upload lại...' }
-      : task));
+    const task = localQueue.find(candidate => candidate.id === taskId);
+    if (task && !activeUploadTaskId) void startCloudUpload(task);
+  };
+
+  const handleAbandonFailedItems = async (task) => {
+    const jobIds = (task.failedItems || []).map(item => item.jobId).filter(Boolean);
+    if (!task.batchId || jobIds.length === 0) return;
+    if (!window.confirm(`Bỏ ${jobIds.length} file lỗi khỏi batch này? Các file đó sẽ không được dịch.`)) return;
+    try {
+      const response = await api.post(
+        `/upload-batches/${encodeURIComponent(task.batchId)}/abandon`,
+        { items: jobIds.map(jobId => ({ jobId })) },
+      );
+      updateCloudTask(task.id, {
+        ...response.data,
+        status: response.data.canCloseClient ? 'safe' : 'error',
+        canCloseClient: response.data.canCloseClient,
+        progressMsg: response.data.canCloseClient
+          ? '✅ Các file còn lại đã an toàn trên Cloud; file lỗi đã được bỏ theo yêu cầu.'
+          : 'Đã bỏ file lỗi nhưng batch vẫn còn file chưa xác nhận.',
+      });
+    } catch (error) {
+      updateCloudTask(task.id, { progressMsg: `❌ Không thể bỏ file lỗi: ${error.response?.data?.error || error.message}` });
+    }
   };
 
   const handleLoadMoreJobs = async () => {
@@ -685,38 +655,49 @@ function App() {
           
           <button 
             onClick={handleAddToQueue} 
-            disabled={!selectedFiles || selectedFiles.length === 0}
+            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId)}
             className="upload-btn"
             style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', background: (!selectedFiles || selectedFiles.length === 0) ? '#e9ecef' : '#007bff', color: (!selectedFiles || selectedFiles.length === 0) ? '#adb5bd' : '#ffffff', border: 'none', cursor: (!selectedFiles || selectedFiles.length === 0) ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: (!selectedFiles || selectedFiles.length === 0) ? 'none' : '0 4px 12px rgba(0, 123, 255, 0.3)' }}
           >
-            <span style={{ fontSize: '1.2em' }}>➕</span> Thêm {selectedFiles ? selectedFiles.length : 0} file vào Local Queue
+            <span style={{ fontSize: '1.2em' }}>☁️</span> Upload {selectedFiles ? selectedFiles.length : 0} file lên Cloud
           </button>
 
-          {/* HIỂN THỊ DANH SÁCH LOCAL QUEUE */}
+          {localQueue.some(task => task.canCloseClient) && (
+            <div className="cloud-safe-banner" role="status">
+              <strong>✅ Đã lưu an toàn trên Cloud — có thể tắt máy</strong>
+              <span>Render sẽ tiếp tục dịch các tài liệu đã xác nhận, không cần giữ tab này mở.</span>
+            </div>
+          )}
+
           {localQueue.length > 0 && (
-            <div style={{ marginTop: '10px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '12px', padding: '16px' }}>
-              <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#495057', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                ⏳ Hàng chờ thiết bị ({localQueue.filter(t => t.status !== 'completed').length} đang đợi)
+            <div className="cloud-queue">
+              <h4>
+                ☁️ Tiến độ lưu lên Cloud ({localQueue.filter(task => !task.canCloseClient).length} batch chưa an toàn)
               </h4>
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <ul>
                 {localQueue.map(task => (
-                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13.5px', background: '#fff', padding: '12px 16px', border: '1px solid #eaeaea', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <strong>📁 {task.folderName} <span style={{fontWeight: 'normal', color: '#6c757d', fontSize: '0.9em'}}>({task.totalFiles} files)</span></strong>
-                      <span style={{ fontSize: '12.5px', color: task.status === 'error' ? '#dc3545' : task.status === 'completed' ? '#28a745' : '#007bff', fontWeight: '500' }}>
+                  <li key={task.id} className={`cloud-task ${task.status}`}>
+                    <div className="cloud-task-main">
+                      <strong>📁 {task.folderName} <span>({task.totalFiles} files · {formatMegabytes(task.totalBytes)})</span></strong>
+                      <span className="cloud-task-message">
                         {task.progressMsg}
                       </span>
+                      <progress value={task.percent || 0} max="100" aria-label={`Tiến độ upload ${task.folderName}`} />
+                      <small>
+                        {formatMegabytes(task.uploadedBytes)} / {formatMegabytes(task.totalBytes)} · xác nhận {task.confirmedFiles || 0}/{task.totalFiles}
+                      </small>
                     </div>
-                    {task.status === 'pending' && task.nextFileIndex === 0 && (
-                      <button onClick={() => handleRemoveFromQueue(task.id)} style={{ background: '#ffebee', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', padding: '6px 12px', borderRadius: '6px', transition: 'background 0.2s' }} onMouseEnter={(e) => e.target.style.background = '#ffcdd2'} onMouseLeave={(e) => e.target.style.background = '#ffebee'}>✕ Xóa</button>
-                    )}
                     {task.status === 'error' && (
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={() => handleRetryLocalTask(task.id)}>Thử lại</button>
-                        <button onClick={() => handleRemoveFromQueue(task.id)}>Xóa</button>
+                      <div className="cloud-task-actions">
+                        {task.entries?.length > 0 && (
+                          <button onClick={() => handleRetryLocalTask(task.id)} disabled={Boolean(activeUploadTaskId)}>Thử lại</button>
+                        )}
+                        {task.failedItems?.length > 0 && (
+                          <button onClick={() => handleAbandonFailedItems(task)}>Bỏ file lỗi</button>
+                        )}
                       </div>
                     )}
-                    {task.status === 'completed' && (
+                    {task.status === 'safe' && (
                       <button onClick={() => handleRemoveFromQueue(task.id)}>Ẩn</button>
                     )}
                   </li>

@@ -174,15 +174,16 @@ export class UploadBatchService {
     }
 
     async refreshBatch(batch) {
-        const [confirmedFiles, failedFiles, bytes] = await Promise.all([
+        const [confirmedFiles, failedFiles, skippedFiles, bytes] = await Promise.all([
             this.Job.countDocuments({ uploadBatchId: batch.batchId, uploadConfirmedAt: { $ne: null } }),
             this.Job.countDocuments({ uploadBatchId: batch.batchId, status: 'failed' }),
+            this.Job.countDocuments({ uploadBatchId: batch.batchId, status: 'cancelled' }),
             this.Job.aggregate([
                 { $match: { uploadBatchId: batch.batchId, uploadConfirmedAt: { $ne: null } } },
                 { $group: { _id: null, total: { $sum: '$sourceSize' } } },
             ]),
         ]);
-        const ready = confirmedFiles === batch.totalFiles && failedFiles === 0;
+        const ready = confirmedFiles + skippedFiles === batch.totalFiles && failedFiles === 0;
         const status = ready ? 'ready' : failedFiles > 0 ? 'partial' : 'uploading';
         const confirmedBytes = bytes[0]?.total || 0;
         await this.UploadBatch.updateOne(
@@ -192,12 +193,13 @@ export class UploadBatchService {
                     confirmedFiles,
                     confirmedBytes,
                     failedFiles,
+                    skippedFiles,
                     status,
                     readyAt: ready ? (batch.readyAt || new Date()) : null,
                 },
             }
         );
-        return { confirmedFiles, confirmedBytes, failedFiles, status, canCloseClient: ready };
+        return { confirmedFiles, confirmedBytes, failedFiles, skippedFiles, status, canCloseClient: ready };
     }
 
     async confirmBatch(batchId, requestedJobIds) {
@@ -241,9 +243,56 @@ export class UploadBatchService {
             confirmedFiles: batch.confirmedFiles,
             confirmedBytes: batch.confirmedBytes,
             failedFiles: batch.failedFiles,
-            canCloseClient: batch.status === 'ready' && batch.confirmedFiles === batch.totalFiles,
+            skippedFiles: batch.skippedFiles || 0,
+            canCloseClient: batch.status === 'ready'
+                && batch.confirmedFiles + (batch.skippedFiles || 0) === batch.totalFiles,
             jobsByStatus: Object.fromEntries(statuses.map(row => [row._id, row.count])),
         };
+    }
+
+    async listRecentBatches(limit = 20) {
+        const batches = await this.UploadBatch.find({}, 'batchId clientBatchId folderName status totalFiles totalBytes confirmedFiles confirmedBytes failedFiles skippedFiles readyAt createdAt')
+            .sort({ createdAt: -1 })
+            .limit(Math.min(100, Math.max(1, limit)))
+            .lean();
+        return batches.map(batch => ({
+            ...batch,
+            canCloseClient: batch.status === 'ready'
+                && batch.confirmedFiles + (batch.skippedFiles || 0) === batch.totalFiles,
+        }));
+    }
+
+    async abandonItems(batchId, requestedJobIds) {
+        if (!Array.isArray(requestedJobIds) || requestedJobIds.length === 0) {
+            throw new UploadBatchError('INVALID_ABANDON_LIST', 'Danh sách file cần bỏ không hợp lệ.');
+        }
+        const jobIds = [...new Set(requestedJobIds)];
+        const batch = await this.UploadBatch.findOne({ batchId }).lean();
+        if (!batch) throw new UploadBatchError('BATCH_NOT_FOUND', 'Không tìm thấy upload batch.', 404);
+        const jobs = await this.Job.find({
+            uploadBatchId: batchId,
+            jobId: { $in: jobIds },
+            status: 'uploading',
+        }).lean();
+        if (jobs.length !== jobIds.length) {
+            throw new UploadBatchError('JOB_NOT_ABANDONABLE', 'Có file đã xác nhận hoặc không thuộc batch.', 409);
+        }
+
+        await runBoundedTasks(jobs, this.config.confirmConcurrency, async job => {
+            await this.r2.deleteObject(job.storageKey);
+            await this.Job.updateOne(
+                { jobId: job.jobId, status: 'uploading' },
+                {
+                    $set: {
+                        status: 'cancelled',
+                        cancelRequested: true,
+                        sourceState: 'deleted',
+                        sourceDeletedAt: new Date(),
+                    },
+                }
+            );
+        });
+        return { batchId, ...(await this.refreshBatch(batch)) };
     }
 
     async reconcileUploadingJobs(limit = 50) {

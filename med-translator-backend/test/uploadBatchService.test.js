@@ -119,6 +119,7 @@ test('confirm verifies size and ETag once, then remains idempotent', async () =>
         async countDocuments(filter) {
             if (filter.uploadConfirmedAt) return jobs.filter(job => job.uploadConfirmedAt).length;
             if (filter.status === 'failed') return jobs.filter(job => job.status === 'failed').length;
+            if (filter.status === 'cancelled') return jobs.filter(job => job.status === 'cancelled').length;
             return jobs.length;
         },
         async aggregate(pipeline) {
@@ -150,4 +151,41 @@ test('confirm verifies size and ETag once, then remains idempotent', async () =>
     assert.equal(second.canCloseClient, true);
     assert.equal(headCalls, 2);
     assert.equal(jobs.every(job => job.status === 'pending' && job.sourceState === 'ready'), true);
+});
+
+test('abandon marks only unconfirmed items skipped after R2 deletion and makes the remainder close-safe', async () => {
+    const batch = { batchId: 'batch-skip', totalFiles: 2, totalBytes: 300, status: 'uploading' };
+    const jobs = [
+        { jobId: 'confirmed', uploadBatchId: 'batch-skip', status: 'pending', sourceSize: 100, uploadConfirmedAt: new Date() },
+        { jobId: 'skip', uploadBatchId: 'batch-skip', status: 'uploading', storageKey: 'incoming/batch-skip/skip.pdf', sourceSize: 200 },
+    ];
+    const deleted = [];
+    const UploadBatch = {
+        findOne: () => query(batch),
+        async updateOne(filter, update) { Object.assign(batch, update.$set); },
+    };
+    const Job = {
+        find: filter => query(jobs.filter(job => filter.jobId.$in.includes(job.jobId) && job.status === filter.status)),
+        async updateOne(filter, update) {
+            const job = jobs.find(row => row.jobId === filter.jobId);
+            Object.assign(job, update.$set);
+        },
+        async countDocuments(filter) {
+            if (filter.uploadConfirmedAt) return jobs.filter(job => job.uploadConfirmedAt).length;
+            return jobs.filter(job => job.status === filter.status).length;
+        },
+        async aggregate() { return [{ _id: null, total: 100 }]; },
+    };
+    const service = new UploadBatchService({
+        Job, UploadBatch, config,
+        r2: { async deleteObject(key) { deleted.push(key); } },
+    });
+
+    const result = await service.abandonItems('batch-skip', ['skip']);
+    assert.deepEqual(deleted, ['incoming/batch-skip/skip.pdf']);
+    assert.equal(jobs[1].status, 'cancelled');
+    assert.equal(jobs[1].sourceState, 'deleted');
+    assert.ok(jobs[1].sourceDeletedAt instanceof Date);
+    assert.equal(result.skippedFiles, 1);
+    assert.equal(result.canCloseClient, true);
 });

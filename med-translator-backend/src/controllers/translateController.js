@@ -43,6 +43,25 @@ export const getUploadBatchStatus = async (req, res) => {
     }
 };
 
+export const listUploadBatches = async (req, res) => {
+    try {
+        const requestedLimit = Number.parseInt(req.query.limit || '20', 10);
+        res.status(200).json({ items: await uploadBatchService.listRecentBatches(requestedLimit) });
+    } catch {
+        res.status(500).json({ error: 'Không thể đọc danh sách upload batch.' });
+    }
+};
+
+export const abandonUploadBatchItems = async (req, res) => {
+    try {
+        const jobIds = Array.isArray(req.body?.items) ? req.body.items.map(item => item?.jobId) : [];
+        res.status(200).json(await uploadBatchService.abandonItems(req.params.batchId, jobIds));
+    } catch (error) {
+        try { return sendUploadBatchError(res, error); }
+        catch { return res.status(500).json({ error: 'Không thể bỏ các file upload lỗi.' }); }
+    }
+};
+
 // API 1: Bọc try-catch, dùng Promise.all để ghi đa file vào DB
 export const uploadFiles = async (req, res) => {
     try {
