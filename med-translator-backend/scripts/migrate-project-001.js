@@ -24,8 +24,14 @@ try {
     const report = Object.fromEntries(await Promise.all(
         Object.entries(filters).map(async ([name, filter]) => [name, await Job.countDocuments(filter)])
     ));
+    const totals = {
+        jobs: await Job.countDocuments({}),
+        systems: await System.countDocuments({}),
+        translationChunks: await TranslationChunk.countDocuments({})
+    };
 
-    console.log(`🔎 P001 migration ${dryRun ? 'dry-run' : 'thực thi'}:`, report);
+    console.log(`🔎 P001 migration ${dryRun ? 'dry-run' : 'thực thi'} — tổng document:`, totals);
+    console.log('🔎 Document Job cần bổ sung field:', report);
     if (dryRun) {
         console.log('✅ Dry-run hoàn thành; không document hoặc index nào bị thay đổi.');
     } else {
