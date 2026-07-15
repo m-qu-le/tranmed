@@ -22,6 +22,7 @@
     "reconcile:r2": "node scripts/reconcile-r2.js",
     "benchmark:p002-source": "node --expose-gc scripts/benchmark-source-stream.js",
     "benchmark:p002-upload": "node scripts/benchmark-r2-upload.js",
+    "benchmark:p003": "node scripts/benchmark-project-003.js",
     "manifest:p003": "node scripts/create-project-003-manifest.js"
   },
   "keywords": [],
