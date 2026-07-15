@@ -37,9 +37,10 @@ Mặc định không chạy với production trước khi backup MongoDB. Ngoạ
 ```powershell
 npm run migrate:p001:dry
 npm run migrate:p001
+npm run verify:p001
 ```
 
-Dry-run chỉ đếm document thiếu field, không update hoặc sync index. Migration thật bổ sung default additive và sync indexes; code vẫn đọc job legacy có `result`.
+Dry-run chỉ đếm document/collection, không update hoặc sync index. Migration thật bổ sung default additive và sync indexes; `verify:p001` kiểm tra tổng document cùng các unique index bắt buộc. Code vẫn đọc job legacy có `result`.
 
 ## Checklist bàn giao/deploy
 
