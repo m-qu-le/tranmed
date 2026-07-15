@@ -50,6 +50,8 @@ Dry-run chỉ đếm document/collection, không update hoặc sync index. Migra
 4. Deploy frontend với đúng `VITE_API_URL`, smoke Local Feeder nhiều file.
 5. Theo dõi RAM, disk, restart, retry/orphan trong 24 giờ trước khi đóng Project 001.
 
+Production P001 đã deploy theo hai commit tách thứ tự: backend `e207ab0`, frontend `7436399`. Smoke PDF một trang đã đạt; vẫn cần smoke batch nhiều chương qua UI và theo dõi 24 giờ.
+
 ## Git an toàn
 
 - Không stage ba deletion tài liệu gốc đang có sẵn trong worktree nếu chưa được chủ dự án xác nhận.

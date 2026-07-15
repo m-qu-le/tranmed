@@ -12,7 +12,8 @@
     "test:keys": "node src/test-keys.js",
     "migrate:p001:dry": "node scripts/migrate-project-001.js --dry-run",
     "migrate:p001": "node scripts/migrate-project-001.js",
-    "verify:p001": "node scripts/verify-project-001.js"
+    "verify:p001": "node scripts/verify-project-001.js",
+    "smoke:fixture": "node scripts/create-smoke-pdf.js"
   },
   "keywords": [],
   "author": "",

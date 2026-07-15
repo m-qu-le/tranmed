@@ -2,9 +2,11 @@
 
 Cập nhật sau kiểm tra local Project 001 ngày 15-07-2026.
 
-## Chưa được xác nhận trên production
+## Trạng thái production
 
-- Chưa backup/migrate MongoDB production, chưa deploy Render/Vercel và chưa chạy smoke Gemini thật.
+- Migration MongoDB, unique index verification, deploy backend trước/frontend sau và Gemini smoke PDF một trang đã đạt ngày 15-07-2026.
+- Sau smoke, PDF nguồn được dọn và MongoDB trở lại `jobs=0`, `systems=0`, `translationChunks=0`.
+- Chưa chạy batch nhiều chương bằng UI thật và chưa theo dõi production đủ 24 giờ.
 - Chưa đo peak RAM với PDF nhỏ/trung bình/gần giới hạn. Transfer buffer đã giảm một bản clone nhưng `pdf-lib` vẫn cần giữ PDF gốc và các chunk trong worker trong lúc cắt.
 - Chưa chạy bài tích hợp thực tế file kết quả trên 16 MB, restart Render giữa job, disk gần 400 MB hoặc mất MongoDB giữa upload.
 - Chưa theo dõi 24 giờ sau deploy. Xem các cổng G5/G9 trong `project 001.md`.
