@@ -239,9 +239,9 @@ Mục tiêu: đưa đại tu lên production có kiểm soát và có đường 
 
 - [ ] **P001-G9-S01 — Test matrix local.** Chạy toàn bộ bảng tình huống bên dưới với Gemini mock; chọn một smoke test Gemini thật kích thước nhỏ.
 - [x] **P001-G9-S02 — Backup MongoDB.** Không áp dụng theo quyết định D005: chủ dự án xác nhận đã dọn toàn bộ job, không có job khoảng một tuần và không có dữ liệu cần giữ. Trước migration vẫn phải dry-run/count; nếu phát hiện dữ liệu thì dừng và backup.
-- [ ] **P001-G9-S03 — Deploy backend trước.** Backend mới phải tương thích frontend cũ trong cửa sổ chuyển đổi.
+- [x] **P001-G9-S03 — Deploy backend trước.** Commit backend-only `e207ab0` được push fast-forward lên `main`; endpoint capacity mới chỉ trả 200 sau khi Render hoàn tất, trước khi triển khai frontend.
 - [x] **P001-G9-S04 — Chạy migration production.** Dry-run và migration thật ngày 15-07-2026 đều đạt với ba collection trống; `verify:p001` xác nhận unique index `jobId`, sparse unique `clientUploadId`, `System.key` và `{jobId, chunkIndex}`.
-- [ ] **P001-G9-S05 — Smoke backend.** Health, capacity, jobs pagination, SSE, upload 1 PDF, result và cleanup.
+- [ ] **P001-G9-S05 — Smoke backend.** Health, capacity, jobs pagination, status và SSE đã đạt trên Render; còn upload 1 PDF, result và cleanup sau khi frontend mới lên production.
 - [ ] **P001-G9-S06 — Deploy frontend.** Xác nhận `VITE_API_URL` là `https://tranmed.onrender.com/api/translate`.
 - [ ] **P001-G9-S07 — Smoke end-to-end.** Chọn nhiều chương, quan sát Local Feeder, hoàn thành, preview, copy, download, delete.
 - [ ] **P001-G9-S08 — Theo dõi 24 giờ.** RAM, disk, restart, số API call/chunk, job retry, orphan, SSE reconnect và lỗi MongoDB.
@@ -318,6 +318,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | 15-07-2026 | P001-G6-S05 | `b1f8dc3` | Chiếm khóa upload trước I/O để đóng race hai request đồng thời | Codex | Hoàn thành + unit test |
 | 15-07-2026 | P001-G9-S04 | `16d060a` | Bổ sung tổng collection vào báo cáo migration dry-run | Codex | Xác nhận database trống; chưa mutate |
 | 15-07-2026 | P001-G9-S04 | `8af2965` | Chạy migration production và thêm lệnh xác minh index | Codex | Migration + index verification đạt |
+| 15-07-2026 | P001-G9-S03 | `e207ab0` (`main`) | Deploy riêng backend trước frontend | Codex | Render endpoint mới hoạt động |
 
 ## 9. Bằng chứng kiểm thử
 
@@ -334,6 +335,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | 15-07-2026 | G5 | PDF Worker unit | Abort dừng worker; Uint8Array dùng transfer list | `pdfSplitter.test.js` |
 | 15-07-2026 | G9 migration dry-run | `npm run migrate:p001:dry` | `jobs=0`, `systems=0`, `translationChunks=0`; không update/index change | MongoDB production, read-only |
 | 15-07-2026 | G9 migration production | `npm run migrate:p001` + `npm run verify:p001` | 0 document cần update; 4 unique index bắt buộc tồn tại đúng cấu hình | MongoDB production |
+| 15-07-2026 | G9 backend smoke | Health, capacity, jobs, status, SSE trên `tranmed.onrender.com` | Đều đạt; capacity 400 MB/350 MB, jobs trống, circuit thức, SSE connected | Render production |
 
 ## 10. Nhật ký vấn đề và quyết định
 
