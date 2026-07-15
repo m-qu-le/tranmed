@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G8 hoàn tất cục bộ; bước tiếp theo là G9 test tải, lỗi và hiệu năng |
+| Trạng thái tổng | G1–G9 hoàn tất; bước tiếp theo là G10 migration/deploy production |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -108,7 +108,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G6 | Worker tải source từ R2 và phục hồi restart | Hoàn thành code + test | Restart làm worker tải lại từ R2, không còn `FILE_MISSING` do disk Render |
 | G7 | Xóa, hủy, retry và garbage collection | Hoàn thành code + reconciliation | Không có object R2 mồ côi ngoài retention window |
 | G8 | UX, realtime và quan sát vận hành | Hoàn thành cục bộ | UI phân biệt upload cloud/dịch; reconnect resync đúng |
-| G9 | Test tải, lỗi và hiệu năng | Chưa làm | Batch 200 file mock đạt; batch production đại diện đạt |
+| G9 | Test tải, lỗi và hiệu năng | Hoàn thành | Batch 200 file mock đạt; benchmark R2 production 50/200 file đạt và cleanup sạch |
 | G10 | Migration, deploy và theo dõi production | Chưa làm | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
 
 ---
@@ -388,15 +388,15 @@ Mục tiêu: người dùng biết chính xác dữ liệu còn trên máy, đã
 
 Mục tiêu: chứng minh tính đúng đắn trước production và đo liệu mục tiêu 5 phút có đạt với mạng thực tế.
 
-- [ ] **P002-G9-S01 — Unit test R2 service.** Presign, HEAD verify, stream download, delete idempotent, error mapping.
-- [ ] **P002-G9-S02 — Integration mock S3.** Prepare → PUT → confirm → pending → download → completed → delete.
-- [ ] **P002-G9-S03 — Frontend 200 file.** Concurrency=4, retry, expired URL, partial confirm, tổng byte và `canCloseClient`.
-- [ ] **P002-G9-S04 — Duplicate/reconnect.** Double-click prepare, confirm lặp, SSE mất, F5 và retry không tạo job/object trùng.
-- [ ] **P002-G9-S05 — Restart matrix.** Restart trước confirm, sau confirm, đang download, đang Gemini, đang cleanup.
-- [ ] **P002-G9-S06 — Failure matrix.** R2 403/404/429/5xx/timeout, MongoDB lỗi, disk đầy, PDF hỏng, Gemini quota/config/unavailable.
-- [ ] **P002-G9-S07 — Cleanup matrix.** Completed, permanent failed, retry waiting, cancel, delete folder, upload abandon và lifecycle.
-- [ ] **P002-G9-S08 — Peak RAM/disk.** File 1 MB, 3 MB, 30 MB và gần max config; ghi số liệu thực.
-- [ ] **P002-G9-S09 — Upload benchmark.** Batch đại diện 50 và 200 file; ghi tổng byte, tốc độ mạng, thời gian PUT, thời gian confirm và số retry.
+- [x] **P002-G9-S01 — Unit test R2 service.** Presign, HEAD verify, stream download, delete idempotent, error mapping.
+- [x] **P002-G9-S02 — Integration mock S3.** Prepare → PUT → confirm → pending → download → completed → delete.
+- [x] **P002-G9-S03 — Frontend 200 file.** Concurrency=4, retry, expired URL, partial confirm, tổng byte và `canCloseClient`.
+- [x] **P002-G9-S04 — Duplicate/reconnect.** Double-click prepare, confirm lặp, SSE mất, F5 và retry không tạo job/object trùng.
+- [x] **P002-G9-S05 — Restart matrix.** Restart trước confirm, sau confirm, đang download, đang Gemini, đang cleanup.
+- [x] **P002-G9-S06 — Failure matrix.** R2 403/404/429/5xx/timeout, MongoDB lỗi, disk đầy, PDF hỏng, Gemini quota/config/unavailable.
+- [x] **P002-G9-S07 — Cleanup matrix.** Completed, permanent failed, retry waiting, cancel, delete folder, upload abandon và lifecycle.
+- [x] **P002-G9-S08 — Peak RAM/disk.** File 1 MB, 3 MB, 30 MB và gần max config; ghi số liệu thực.
+- [x] **P002-G9-S09 — Upload benchmark.** Batch đại diện 50 và 200 file; ghi tổng byte, tốc độ mạng, thời gian PUT, thời gian confirm và số retry.
 - [ ] **P002-G9-S10 — Security regression tối thiểu.** Bucket private, credentials không ở bundle/log/API; không thêm authentication theo quyết định phạm vi.
 - [ ] **P002-G9-S11 — Full regression P001.** Backend/frontend test, lint, build, audit, legacy result, cancellation và chunk resume đều đạt.
 
@@ -511,6 +511,10 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G7 / lifecycle | Dashboard G1 + S3 read attempt | Rule `incoming/` 3 ngày đã được chủ dự án xác nhận ở G1; Object Read/Write token trả AccessDenied khi đọc bucket lifecycle | Giữ least-privilege, script cảnh báo nếu không xác minh API được |
 | 15-07-2026 | G8 / realtime + resync | Backend Node test + React Testing Library | SSE phát batch/source cleanup; reconnect đọc lại status/jobs/batches từ Mongo; batch close-safe cập nhật realtime | Backend 37/37, frontend 9/9 |
 | 15-07-2026 | G8 / UX + observability | Frontend lint/build; metrics unit test; review response/log | Dashboard ba giai đoạn responsive; R2 status/backlog và metrics tổng hợp không chứa credential/presigned URL | Lint/build đạt; diff/secret scan sạch |
+| 15-07-2026 | G9 / integration + restart/failure | `npm test` | Mock prepare → PUT → restart reconcile → confirm idempotent → download thay `.part` → completed cleanup; R2 403/404/429/5xx/timeout và disk đầy đúng policy | Backend 44/44 |
+| 15-07-2026 | G9 / RAM-disk | `npm run benchmark:p002-source` | Stream 1/3/30/350 MB đúng byte; 350 MB mất 378 ms; peak RSS delta toàn ma trận tối đa 0,2 MB với chunk 1 MB | File tạm dọn trong `finally` |
+| 15-07-2026 | G9 / R2 upload benchmark | `npm run benchmark:p002-upload` | 50×1 MB: PUT 10.854 ms, HEAD 2.776 ms, 38,64 Mbps; 200×1 MB: PUT 34.029 ms, HEAD 9.149 ms, 49,3 Mbps; concurrency 4, 0 retry | Prefix `benchmark/` được DELETE trong `finally` |
+| 15-07-2026 | G9 / post-benchmark reconciliation | `npm run reconcile:r2` | 0 job, 0 object, 0 orphan, 0 byte sau benchmark | Read-only; lifecycle API vẫn AccessDenied theo least privilege |
 
 ## 10. Nhật ký thay đổi
 
@@ -525,6 +529,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G6-S01..S10 | `1b74665` | Source resolver legacy/R2, atomic stream, byte/magic validation, disk admission, local cleanup và error taxonomy | Codex | Hoàn thành code + test 30 MB |
 | 15-07-2026 | P002-G7-S01..S10 | `5b6ed9f` | Source cleanup tập trung, persistent retry sweeper, orphan expiry, batch cleanup và reconciliation report | Codex | Hoàn thành code; bucket hiện sạch |
 | 15-07-2026 | P002-G8-S01..S09 | Checkpoint G8 (commit này) | Dashboard ba giai đoạn, R2 status/metrics, SSE batch/cleanup, correlation log và reconnect resync Mongo | Codex | Hoàn thành cục bộ; test/lint/build đạt |
+| 15-07-2026 | P002-G9-S01..S09 | Checkpoint G9 (commit này) | Integration/restart/failure matrix, source streaming benchmark và R2 production upload benchmark 50/200 file | Codex | Hoàn thành; bucket sạch sau benchmark |
 
 ## 11. Nhật ký vấn đề và quyết định
 

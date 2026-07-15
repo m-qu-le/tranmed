@@ -79,3 +79,67 @@ test('legacy source resolver keeps the original file path', async () => {
         await fs.rm(tempDir, { recursive: true, force: true });
     }
 });
+
+test('R2 auth, rate-limit, timeout and unavailable errors keep the expected retry policy', async t => {
+    const cases = [
+        { name: 'AccessDenied', status: 403, code: ErrorCodes.R2_AUTH, retryable: false },
+        { name: 'SlowDown', status: 429, code: ErrorCodes.R2_RATE_LIMIT, retryable: true },
+        { name: 'TimeoutError', status: undefined, code: ErrorCodes.R2_TIMEOUT, retryable: true },
+        { name: 'ServiceUnavailable', status: 503, code: ErrorCodes.R2_UNAVAILABLE, retryable: true },
+    ];
+    for (const fixture of cases) {
+        await t.test(fixture.name, async () => {
+            const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tranmed-source-policy-'));
+            const service = new SourceService({
+                uploadDir: tempDir,
+                assertCapacity: async () => {},
+                r2: {
+                    async downloadToFile() {
+                        const error = new Error(fixture.name);
+                        error.name = fixture.name;
+                        if (fixture.status) error.$metadata = { httpStatusCode: fixture.status };
+                        throw error;
+                    },
+                },
+            });
+            try {
+                await assert.rejects(
+                    service.resolve({
+                        jobId: `policy-${fixture.name}`,
+                        storageProvider: 'r2',
+                        storageKey: `incoming/policy/${fixture.name}.pdf`,
+                        sourceState: 'ready',
+                        sourceSize: 100,
+                    }),
+                    error => error.code === fixture.code
+                        && error.retryable === fixture.retryable
+                        && error.quotaRelated === false,
+                );
+            } finally {
+                await fs.rm(tempDir, { recursive: true, force: true });
+            }
+        });
+    }
+});
+
+test('worker disk admission fails before issuing an R2 download', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tranmed-source-disk-'));
+    let downloads = 0;
+    const service = new SourceService({
+        uploadDir: tempDir,
+        assertCapacity: async () => { throw new Error('disk full'); },
+        r2: { async downloadToFile() { downloads += 1; } },
+    });
+    try {
+        await assert.rejects(
+            service.resolve({
+                jobId: 'disk-full', storageProvider: 'r2', storageKey: 'incoming/disk/full.pdf',
+                sourceState: 'ready', sourceSize: 1024,
+            }),
+            error => error.code === ErrorCodes.DISK_CAPACITY && error.retryable === true,
+        );
+        assert.equal(downloads, 0);
+    } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+    }
+});
