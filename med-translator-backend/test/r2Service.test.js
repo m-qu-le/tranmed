@@ -7,8 +7,10 @@ import path from 'path';
 import {
     DeleteObjectCommand,
     GetObjectCommand,
+    GetBucketLifecycleConfigurationCommand,
     HeadBucketCommand,
     HeadObjectCommand,
+    ListObjectsV2Command,
     PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { createR2Service } from '../src/services/r2Service.js';
@@ -28,6 +30,12 @@ test('R2 service scopes commands to one bucket and streams downloads to disk', a
             }
             if (command instanceof GetObjectCommand) {
                 return { Body: Readable.from(['fixture']) };
+            }
+            if (command instanceof ListObjectsV2Command) {
+                return { Contents: [{ Key: 'incoming/file.pdf', Size: 7 }], IsTruncated: false };
+            }
+            if (command instanceof GetBucketLifecycleConfigurationCommand) {
+                return { Rules: [{ ID: 'cleanup', Status: 'Enabled' }] };
             }
             return {};
         },
@@ -50,6 +58,8 @@ test('R2 service scopes commands to one bucket and streams downloads to disk', a
         await service.deleteObject('smoke/file.txt');
         const url = await service.createPresignedPut({ key: 'incoming/job.pdf' });
         await service.checkReadiness();
+        const listed = await service.listObjects({ prefix: 'incoming/' });
+        const lifecycleRules = await service.getLifecycleRules();
 
         assert.equal(head.etag, 'etag-value');
         assert.equal((await readFile(destinationPath, 'utf8')), 'fixture');
@@ -59,9 +69,13 @@ test('R2 service scopes commands to one bucket and streams downloads to disk', a
         assert.ok(commands[2] instanceof GetObjectCommand);
         assert.ok(commands[3] instanceof DeleteObjectCommand);
         assert.ok(commands[4] instanceof HeadBucketCommand);
+        assert.ok(commands[5] instanceof ListObjectsV2Command);
+        assert.ok(commands[6] instanceof GetBucketLifecycleConfigurationCommand);
         assert.equal(commands.every(command => command.input.Bucket === 'fixture-bucket'), true);
         assert.equal(signCalls[0][2].expiresIn, 1800);
         assert.equal(signCalls[0][2].signableHeaders.has('content-type'), true);
+        assert.deepEqual(listed.objects.map(object => object.key), ['incoming/file.pdf']);
+        assert.equal(lifecycleRules[0].ID, 'cleanup');
     } finally {
         await rm(tempDir, { recursive: true, force: true });
     }

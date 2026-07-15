@@ -23,6 +23,14 @@ const jobSchema = new mongoose.Schema({
     uploadBatchId: { type: String, default: null },
     uploadConfirmedAt: { type: Date, default: null },
     sourceDeletedAt: { type: Date, default: null },
+    sourceCleanupState: {
+        type: String,
+        enum: ['not_required', 'pending', 'retry', 'succeeded'],
+        default: null
+    },
+    sourceCleanupAttempts: { type: Number, default: 0, min: 0 },
+    sourceCleanupNextRetryAt: { type: Date, default: null },
+    sourceCleanupLastError: { type: String, default: null },
     result: { type: String, default: null }, // Legacy: job mới lưu nội dung theo TranslationChunk
     error: { type: String, default: null },
     errorCode: { type: String, default: null },
@@ -91,5 +99,6 @@ jobSchema.index({ clientUploadId: 1 }, { unique: true, sparse: true });
 jobSchema.index({ storageKey: 1 }, { unique: true, sparse: true });
 jobSchema.index({ uploadBatchId: 1, createdAt: 1 });
 jobSchema.index({ sourceState: 1, updatedAt: 1 });
+jobSchema.index({ sourceCleanupState: 1, sourceCleanupNextRetryAt: 1 });
 
 export default mongoose.model('Job', jobSchema);

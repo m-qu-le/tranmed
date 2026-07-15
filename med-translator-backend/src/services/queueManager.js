@@ -6,9 +6,13 @@ import { processTranslation } from './geminiService.js';
 import Job from '../models/jobModel.js';
 import System from '../models/systemModel.js';
 import TranslationChunk from '../models/translationChunkModel.js';
+import UploadBatch from '../models/uploadBatchModel.js';
 import { MAX_JOB_ATTEMPTS } from '../config/env.js';
 import { cleanupOrphanUploads } from './storageService.js';
-import { sourceService as runtimeSourceService } from './runtimeServices.js';
+import {
+    sourceCleanupService as runtimeSourceCleanupService,
+    sourceService as runtimeSourceService
+} from './runtimeServices.js';
 import {
     ErrorCodes,
     ProcessingError,
@@ -22,7 +26,10 @@ const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
 
 export class QueueManager extends EventEmitter {
-    constructor({ sourceService = runtimeSourceService } = {}) {
+    constructor({
+        sourceService = runtimeSourceService,
+        sourceCleanupService = runtimeSourceCleanupService,
+    } = {}) {
         super();
         this.isProcessing = false;
         this.currentJobId = null;
@@ -34,6 +41,8 @@ export class QueueManager extends EventEmitter {
         this.hibernationTimer = null;
         this.retryTimer = null;
         this.sourceService = sourceService;
+        this.sourceCleanupService = sourceCleanupService;
+        this.cleanupTimer = null;
     }
 
     async initDB() {
@@ -47,10 +56,10 @@ export class QueueManager extends EventEmitter {
                     { leaseExpiresAt: null }
                 ]
             },
-            'jobId filePath'
+            'jobId filePath storageProvider storageKey sourceState sourceCleanupState sourceCleanupAttempts'
         ).lean();
         for (const job of cancelledJobs) {
-            await this.cleanupJob(job.jobId, job.filePath);
+            await this.cleanupJob(job.jobId, job);
         }
 
         const recovery = await Job.updateMany(
@@ -102,6 +111,9 @@ export class QueueManager extends EventEmitter {
         if (orphanCount > 0) {
             console.log(`🧹 [GC] Đã xóa ${orphanCount} PDF mồ côi khi khởi động.`);
         }
+
+        await this.runSourceCleanupSweep();
+        this.startSourceCleanupSweeper();
 
         await this.startWorker();
     }
@@ -313,10 +325,10 @@ export class QueueManager extends EventEmitter {
                 cancelRequested: true,
                 leaseExpiresAt: { $lte: now }
             },
-            'jobId filePath'
+            'jobId filePath storageProvider storageKey sourceState sourceCleanupState sourceCleanupAttempts'
         ).lean();
         for (const job of cancelledJobs) {
-            await this.cleanupJob(job.jobId, job.filePath);
+            await this.cleanupJob(job.jobId, job);
         }
 
         const result = await Job.updateMany(
@@ -483,6 +495,7 @@ export class QueueManager extends EventEmitter {
         }
 
         await this.safeUnlink(job.filePath);
+        await this.cleanupSourceSafely(job, 'completed');
         this.consecutiveFailures = 0;
         this.emitJobUpdate(job.jobId, 'completed', {
             completedChunks: chunkBuffers.length,
@@ -502,7 +515,7 @@ export class QueueManager extends EventEmitter {
             cancelRequested: true
         }));
         if (cancellationRequested) {
-            await this.cleanupJob(job.jobId, job.filePath);
+            await this.cleanupJob(job.jobId, job);
             this.emitJobUpdate(job.jobId, 'cancelled', { error: null, errorCode: ErrorCodes.CANCELLED });
             return;
         }
@@ -557,6 +570,7 @@ export class QueueManager extends EventEmitter {
         if (![ErrorCodes.FILE_MISSING, ErrorCodes.R2_SOURCE_MISSING].includes(error.code)) {
             await TranslationChunk.deleteMany({ jobId: job.jobId });
         }
+        await this.cleanupSourceSafely(job, 'permanent_failure');
         this.emitJobUpdate(job.jobId, 'failed', {
             error: error.publicMessage,
             errorCode: error.code,
@@ -628,11 +642,59 @@ export class QueueManager extends EventEmitter {
         }
     }
 
-    async cleanupJob(jobId, knownFilePath = null) {
-        const job = knownFilePath ? null : await Job.findOne({ jobId }, 'filePath').lean();
-        await this.safeUnlink(knownFilePath || job?.filePath);
+    async cleanupSourceSafely(job, reason) {
+        try {
+            return await this.sourceCleanupService.cleanupSource(job, { reason });
+        } catch (error) {
+            console.error(`[R2 CLEANUP] Không thể ghi trạng thái cleanup cho ${job.jobId}:`, error.message);
+            return { cleaned: false, retryScheduled: false };
+        }
+    }
+
+    async cleanupJob(jobId, knownJob = null) {
+        const job = typeof knownJob === 'string'
+            ? { jobId, filePath: knownJob }
+            : knownJob || await Job.findOne({ jobId }).lean();
+        if (!job) return { deleted: false, cleanupPending: false };
+        const sourceCleanup = await this.cleanupSourceSafely(job, 'cancel_or_delete');
+        if (!sourceCleanup.cleaned) {
+            await Job.updateOne({ jobId }, { $set: { status: 'cancelled', cancelRequested: true } });
+            return { deleted: false, cleanupPending: true };
+        }
+        await this.safeUnlink(job.filePath);
         await TranslationChunk.deleteMany({ jobId });
         await Job.deleteOne({ jobId });
+        if (job.uploadBatchId) {
+            const batchStillHasJobs = await Job.exists({ uploadBatchId: job.uploadBatchId });
+            if (!batchStillHasJobs) await UploadBatch.deleteOne({ batchId: job.uploadBatchId });
+        }
+        return { deleted: true, cleanupPending: false };
+    }
+
+    async runSourceCleanupSweep() {
+        const rows = await this.sourceCleanupService.sweepRetries();
+        for (const { job, result } of rows) {
+            if (result.cleaned && job.status === 'cancelled') {
+                await this.safeUnlink(job.filePath);
+                await TranslationChunk.deleteMany({ jobId: job.jobId });
+                await Job.deleteOne({ jobId: job.jobId, status: 'cancelled' });
+                if (job.uploadBatchId) {
+                    const batchStillHasJobs = await Job.exists({ uploadBatchId: job.uploadBatchId });
+                    if (!batchStillHasJobs) await UploadBatch.deleteOne({ batchId: job.uploadBatchId });
+                }
+            }
+        }
+        return rows.length;
+    }
+
+    startSourceCleanupSweeper(intervalMs = 60_000) {
+        if (this.cleanupTimer) return;
+        this.cleanupTimer = setInterval(() => {
+            this.runSourceCleanupSweep().catch(error => {
+                console.error('[R2 CLEANUP] Sweeper thất bại:', error.message);
+            });
+        }, intervalMs);
+        this.cleanupTimer.unref?.();
     }
 
     async cancelAndDeleteJob(jobId) {
@@ -654,8 +716,11 @@ export class QueueManager extends EventEmitter {
             // Worker có thể claim đúng giữa hai query; đánh giá lại theo trạng thái mới.
             if (!cancelledJob) return this.cancelAndDeleteJob(jobId);
 
-            await this.cleanupJob(jobId, cancelledJob.filePath);
-            return { found: true, pending: false };
+            const cleanup = await this.cleanupJob(
+                jobId,
+                cancelledJob.storageProvider === 'r2' ? cancelledJob : cancelledJob.filePath
+            );
+            return { found: true, pending: cleanup?.cleanupPending || false };
         }
 
         if (job.status === 'processing') {
@@ -669,8 +734,8 @@ export class QueueManager extends EventEmitter {
             return { found: true, pending: true };
         }
 
-        await this.cleanupJob(jobId, job.filePath);
-        return { found: true, pending: false };
+        const cleanup = await this.cleanupJob(jobId, job.storageProvider === 'r2' ? job : job.filePath);
+        return { found: true, pending: cleanup?.cleanupPending || false };
     }
 
     async cancelAndDeleteJobs(jobIds) {

@@ -316,7 +316,31 @@ export class UploadBatchService {
             const batch = await this.UploadBatch.findOne({ batchId }).lean();
             if (batch) await this.refreshBatch(batch);
         }
-        return { scanned: jobs.length, confirmed };
+        const expired = await this.expireStaleUploads(limit);
+        return { scanned: jobs.length, confirmed, expired };
+    }
+
+    async expireStaleUploads(limit = 50, maxAgeMs = 60 * 60 * 1000) {
+        const staleJobs = await this.Job.find({
+            status: 'uploading',
+            sourceState: 'prepared',
+            createdAt: { $lte: new Date(Date.now() - maxAgeMs) },
+        }).sort({ createdAt: 1 }).limit(limit).lean();
+        const byBatch = new Map();
+        for (const job of staleJobs) {
+            if (!byBatch.has(job.uploadBatchId)) byBatch.set(job.uploadBatchId, []);
+            byBatch.get(job.uploadBatchId).push(job.jobId);
+        }
+        let expired = 0;
+        for (const [batchId, jobIds] of byBatch) {
+            try {
+                await this.abandonItems(batchId, jobIds);
+                expired += jobIds.length;
+            } catch (error) {
+                console.error(`[UPLOAD EXPIRE] Batch ${batchId} chưa dọn được:`, redactError(error));
+            }
+        }
+        return expired;
     }
 
     startReconciler(intervalMs = 60_000) {

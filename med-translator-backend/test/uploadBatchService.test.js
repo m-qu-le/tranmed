@@ -189,3 +189,21 @@ test('abandon marks only unconfirmed items skipped after R2 deletion and makes t
     assert.equal(result.skippedFiles, 1);
     assert.equal(result.canCloseClient, true);
 });
+
+test('stale uploading jobs expire through the same abandon cleanup path', async () => {
+    const staleJobs = [
+        { jobId: 'stale-1', uploadBatchId: 'batch-stale' },
+        { jobId: 'stale-2', uploadBatchId: 'batch-stale' },
+    ];
+    const service = new UploadBatchService({
+        Job: { find: () => query(staleJobs) },
+        UploadBatch: {},
+        r2: {},
+        config,
+    });
+    const calls = [];
+    service.abandonItems = async (batchId, jobIds) => { calls.push({ batchId, jobIds }); };
+    const expired = await service.expireStaleUploads();
+    assert.equal(expired, 2);
+    assert.deepEqual(calls, [{ batchId: 'batch-stale', jobIds: ['stale-1', 'stale-2'] }]);
+});

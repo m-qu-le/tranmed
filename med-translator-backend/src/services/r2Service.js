@@ -3,8 +3,10 @@ import { pipeline } from 'stream/promises';
 import {
     DeleteObjectCommand,
     GetObjectCommand,
+    GetBucketLifecycleConfigurationCommand,
     HeadBucketCommand,
     HeadObjectCommand,
+    ListObjectsV2Command,
     PutObjectCommand,
     S3Client,
 } from '@aws-sdk/client-s3';
@@ -78,6 +80,30 @@ export function createR2Service(config, dependencies = {}) {
                 Bucket: bucket,
                 Key: requireObjectKey(key),
             }));
+        },
+
+        async listObjects({ prefix = '', continuationToken, maxKeys = 1000 } = {}) {
+            const output = await client.send(new ListObjectsV2Command({
+                Bucket: bucket,
+                Prefix: prefix,
+                ContinuationToken: continuationToken,
+                MaxKeys: maxKeys,
+            }));
+            return {
+                objects: (output.Contents || []).map(object => ({
+                    key: object.Key,
+                    size: object.Size || 0,
+                    lastModified: object.LastModified || null,
+                    etag: object.ETag?.replace(/^"|"$/g, '') || null,
+                })),
+                nextContinuationToken: output.NextContinuationToken || null,
+                truncated: Boolean(output.IsTruncated),
+            };
+        },
+
+        async getLifecycleRules() {
+            const output = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucket }));
+            return output.Rules || [];
         },
 
         async createPresignedPut({
