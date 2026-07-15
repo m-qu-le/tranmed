@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "pagesPerChunk": 2,
+  "sourceDirectory": "samplepdf/",
+  "totals": {
+    "fileCount": 20,
+    "pageCount": 370,
+    "chunkCount": 191,
+    "sizeBytes": 21662171
+  },
+  "files": [
+    {
+      "fileName": "27. Hormones and Disorders of Mineral Metabolism.pdf",
+      "specialty": "Nội tiết và chuyển hóa xương",
+      "pageCount": 77,
+      "chunkCount": 39,
+      "sizeBytes": 4702262,
+      "sha256": "9a223687f376078dd5e7540fc56e67c1a64de1d768c9db795c83d829cfcd4036"
+    },
+    {
+      "fileName": "28. Endocrine Functions of Bone.pdf",
+      "specialty": "Nội tiết và chuyển hóa xương",
+      "pageCount": 7,
+      "chunkCount": 4,
+      "sizeBytes": 357128,
+      "sha256": "64f91737976502753774434614fedd9f0480a6dba56de1cc856822a040f38acd"
+    },
+    {
+      "fileName": "29. Osteoporosis Basic and Clinical Aspects.pdf",
+      "specialty": "Nội tiết và chuyển hóa xương",
+      "pageCount": 55,
+      "chunkCount": 28,
+      "sizeBytes": 5428175,
+      "sha256": "431000bb53682cf5eda29b8512d578e5aee855979c0745940746c584f05dfbe7"
+    },
+    {
+      "fileName": "30. Rickets and Osteomalacia.pdf",
+      "specialty": "Nội tiết và chuyển hóa xương",
+      "pageCount": 26,
+      "chunkCount": 13,
+      "sizeBytes": 1417347,
+      "sha256": "795514bfbc4cc0140ced04639d51e21e2c5901fa976c7a0b3f3f954b92bb2edc"
+    },
+    {
+      "fileName": "31. Kidney Stones.pdf",
+      "specialty": "Thận học",
+      "pageCount": 23,
+      "chunkCount": 12,
+      "sizeBytes": 1251083,
+      "sha256": "cafa874fce9f5c01c11a235a8a5a42b703820af7efe3007f009a24cc4053a974"
+    },
+    {
+      "fileName": "51. Management of Neurological Disease.pdf",
+      "specialty": "Thần kinh học",
+      "pageCount": 5,
+      "chunkCount": 3,
+      "sizeBytes": 145843,
+      "sha256": "11367d0fc86315c864c91c694395e3f5e1dff75ded0390b23614bf2226af14ee"
+    },
+    {
+      "fileName": "52. Pain Management.pdf",
+      "specialty": "Thần kinh học",
+      "pageCount": 22,
+      "chunkCount": 11,
+      "sizeBytes": 834844,
+      "sha256": "d1f55b863934750b2370f4bbdde4d084823dbf24f0b21c9d9ef71e999d276a1c"
+    },
+    {
+      "fileName": "53. Neurointensive Care.pdf",
+      "specialty": "Thần kinh học",
+      "pageCount": 17,
+      "chunkCount": 9,
+      "sizeBytes": 374021,
+      "sha256": "1377c625538b6c5721b63137327cc3010521e5c8baa69d55e20978dc4ec63af4"
+    },
+    {
+      "fileName": "54. Principles of Neuroendovascular Therapy.pdf",
+      "specialty": "Thần kinh học",
+      "pageCount": 26,
+      "chunkCount": 13,
+      "sizeBytes": 1994245,
+      "sha256": "b3c3def213f1ea61b9a191399b0e45852982aef7053114c6f4af2ca82e0d4f26"
+    },
+    {
+      "fileName": "55. Neurological Rehabilitation.pdf",
+      "specialty": "Thần kinh học",
+      "pageCount": 32,
+      "chunkCount": 16,
+      "sizeBytes": 545306,
+      "sha256": "3023ccd59f2bcd236e28982f12c493774902ca7bf25cca86e5a880a7b93d7b9d"
+    },
+    {
+      "fileName": "76 Hematopoietic Stem Cell Transplantation.pdf",
+      "specialty": "Huyết học và ghép tế bào gốc",
+      "pageCount": 5,
+      "chunkCount": 3,
+      "sizeBytes": 122209,
+      "sha256": "c7807feadec1ff8eaae7da5ac5157e2abbfc4cc57a199c8a51b0d9119e26afd9"
+    },
+    {
+      "fileName": "77 Allergy Assessment.pdf",
+      "specialty": "Dị ứng và miễn dịch lâm sàng",
+      "pageCount": 3,
+      "chunkCount": 2,
+      "sizeBytes": 132891,
+      "sha256": "e2a5b85c3595fdbf84c6c389980bcc1de4a3042151b0f87aa8bd442a8fddc727"
+    },
+    {
+      "fileName": "78 Asthma.pdf",
+      "specialty": "Dị ứng và miễn dịch lâm sàng",
+      "pageCount": 11,
+      "chunkCount": 6,
+      "sizeBytes": 670173,
+      "sha256": "750e0e6a5005ac0a4d5a08bdeb5b8aacbaf8e0d68b34895050d2435dac241f6f"
+    },
+    {
+      "fileName": "79 Allergic Rhinitis.pdf",
+      "specialty": "Dị ứng và miễn dịch lâm sàng",
+      "pageCount": 3,
+      "chunkCount": 2,
+      "sizeBytes": 119906,
+      "sha256": "f20d1374ce3d877ff5f027143f2fdfac2dbabe73af6fbcabc479e5f810e4f4bc"
+    },
+    {
+      "fileName": "80 Atopic Dermatitis.pdf",
+      "specialty": "Dị ứng và miễn dịch lâm sàng",
+      "pageCount": 4,
+      "chunkCount": 2,
+      "sizeBytes": 941781,
+      "sha256": "4669b819d6d430da7d9d4e37be40ad8ce592cf1b7b03125c8087a9d58581a889"
+    },
+    {
+      "fileName": "319 Approach to the Patient with Renal Disease or Urinary Tract Disease.pdf",
+      "specialty": "Thận học",
+      "pageCount": 11,
+      "chunkCount": 6,
+      "sizeBytes": 363203,
+      "sha256": "0956ec567f67a89c4bb7801c52580db767dccbac60d0796cb088632f91f0202e"
+    },
+    {
+      "fileName": "320 Cell Biology and Physiology of the Kidney.pdf",
+      "specialty": "Thận học",
+      "pageCount": 10,
+      "chunkCount": 5,
+      "sizeBytes": 792249,
+      "sha256": "60595d05eebea28ae0fd37c51a672e22a3515f517a2541320387c50081dcd709"
+    },
+    {
+      "fileName": "321 Acute Kidney Injury.pdf",
+      "specialty": "Thận học",
+      "pageCount": 14,
+      "chunkCount": 7,
+      "sizeBytes": 729691,
+      "sha256": "e8b95ca9f72ccce438ec98697f6c8e1ae82cbd91fc776b1a39c6e0571e1f6d92"
+    },
+    {
+      "fileName": "322 Chronic Kidney Disease.pdf",
+      "specialty": "Thận học",
+      "pageCount": 14,
+      "chunkCount": 7,
+      "sizeBytes": 523731,
+      "sha256": "bef29c088e8ed31940b3409bd35d1224b998b46fc17be401d856fc3912cd8817"
+    },
+    {
+      "fileName": "323 Dialysis in the Treatment of Kidney Failure.pdf",
+      "specialty": "Thận học",
+      "pageCount": 5,
+      "chunkCount": 3,
+      "sizeBytes": 216083,
+      "sha256": "2f2a0004ad1737aaaf5ae261a38371d1487e99c5e6f747f3f9825a3146147e91"
+    }
+  ]
+}
