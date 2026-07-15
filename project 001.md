@@ -254,7 +254,7 @@ Mục tiêu: đưa đại tu lên production có kiểm soát và có đường 
 
 | ID | Tình huống | Kết quả mong đợi | Trạng thái |
 | --- | --- | --- | --- |
-| T01 | Upload đồng thời nhiều file | Mỗi job chỉ claim một lần | Đạt unit: 20 claim đồng thời chỉ 1 thành công |
+| T01 | Upload đồng thời nhiều file | Mỗi job chỉ claim một lần | Đạt unit: 20 claim chỉ 1 thành công; 2 upload chỉ 1 qua capacity |
 | T02 | Chọn 100 PDF trên frontend | Chúng ở Local Queue; backend chỉ nhận theo capacity | Đạt mô phỏng: 100 File, chỉ 1 POST |
 | T03 | PDF lớn hơn disk budget | Bị từ chối trước/sau Multer và không để orphan | Chưa chạy |
 | T04 | PDF hỏng | Failed vĩnh viễn, không retry, không hibernate, file được xóa | Đạt unit một phần: magic + error policy |
@@ -315,6 +315,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | --- | --- | --- | --- | --- | --- |
 | 15-07-2026 | P001-PLAN | `f024643` | Tạo kế hoạch đại tu | Codex | Hoàn thành tài liệu |
 | 15-07-2026 | P001-G0…G8 | `f024643` | Đại tu queue, retry/cancel, chunk storage, disk guard, Local Feeder, API/SSE và test | Codex | Hoàn thành code lõi; giữ G9 production mở |
+| 15-07-2026 | P001-G6-S05 | `b1f8dc3` | Chiếm khóa upload trước I/O để đóng race hai request đồng thời | Codex | Hoàn thành + unit test |
 
 ## 9. Bằng chứng kiểm thử
 
@@ -325,7 +326,7 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 | Trước P001 | Baseline review | Backend `npm audit --omit=dev` | 3 high, 2 moderate | Cần xử lý tại G1 |
 | Trước P001 | Baseline review | Frontend `npm audit` | 3 high, 1 moderate, 1 low | Cần xử lý tại G1 |
 | 15-07-2026 | G1 | `npm audit` ở backend và frontend | 0 vulnerability ở cả hai | npm audit |
-| 15-07-2026 | G3–G7 | Backend `npm test` | 12 test đạt, 0 lỗi | Node test runner |
+| 15-07-2026 | G3–G7 | Backend `npm test` | 13 test đạt, 0 lỗi | Node test runner |
 | 15-07-2026 | G6/G8 | Frontend `npm test -- --run` | 2 test đạt; fixture 100 chương chỉ POST 1 file | Vitest/RTL |
 | 15-07-2026 | G8 | Frontend `npm run lint` + `npm run build` | Thành công; Vite production build sạch | ESLint/Vite |
 | 15-07-2026 | G5 | PDF Worker unit | Abort dừng worker; Uint8Array dùng transfer list | `pdfSplitter.test.js` |
