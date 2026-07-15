@@ -10,6 +10,8 @@ React 19 + Vite. `src/api/client.js` chuẩn hóa `VITE_API_URL`, fallback đầ
 - Sau upload, feeder chờ server kết thúc/giải phóng capacity rồi mới gửi file kế tiếp.
 - Nếu job failed `FILE_MISSING`, feeder lùi index và re-upload cùng ID để backend resume chunk.
 - File references chỉ được giải phóng khi task hoàn tất hoặc người dùng xóa task. `beforeunload` cảnh báo khi còn công việc local.
+- Khi đã upload một file, feeder chỉ chuyển file kế tiếp sau khi Job hiện tại được xác nhận `completed`; capacity trống không phải tín hiệu hoàn thành.
+- Khi Local Queue còn việc, trình duyệt gọi `/status` mỗi 5 phút để tạo inbound HTTP traffic, hạn chế Render Free spin-down sau 15 phút idle.
 - F5/đóng tab vẫn làm mất Local Feeder; MongoDB không thể phục hồi các File chưa upload từ máy người dùng.
 
 ## Cloud jobs và SSE
@@ -27,7 +29,7 @@ React 19 + Vite. `src/api/client.js` chuẩn hóa `VITE_API_URL`, fallback đầ
 
 ## Kiểm thử
 
-Vitest + Testing Library. Bài test feeder tạo 100 `File`, xác nhận chỉ file đầu được POST, giữ folder và gửi UUID. Chạy `npm test -- --run`, `npm run lint`, `npm run build`.
+Vitest + Testing Library. Test feeder tạo 100 `File`, xác nhận chỉ file đầu được POST; test restart xác nhận `FILE_MISSING` re-upload đúng file cũ với cùng UUID và không gửi file kế tiếp. Chạy `npm test -- --run`, `npm run lint`, `npm run build`.
 
 ## Khoản nợ còn lại
 

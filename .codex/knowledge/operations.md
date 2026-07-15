@@ -52,6 +52,8 @@ Dry-run chỉ đếm document/collection, không update hoặc sync index. Migra
 
 Production P001 đã deploy theo hai commit tách thứ tự: backend `e207ab0`, frontend `7436399`. Smoke PDF một trang đã đạt; vẫn cần smoke batch nhiều chương qua UI và theo dõi 24 giờ.
 
+Hotfix incident batch 5 file: backend `74a79ab` dừng idle polling; frontend `e9ed41a` chờ completed/retry đúng file và `437009c` gửi HTTP keepalive 5 phút. Trước retest phải hard refresh để nhận bundle mới.
+
 ## Git an toàn
 
 - Không stage ba deletion tài liệu gốc đang có sẵn trong worktree nếu chưa được chủ dự án xác nhận.
