@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import './App.css';
 import api, { API_BASE_URL } from './api/client.js';
 
+const LOCAL_QUEUE_KEEP_ALIVE_MS = 5 * 60 * 1000;
+
 // Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ mặc định
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
@@ -165,6 +167,13 @@ function App() {
     if (!hasLocalWork) return undefined;
 
     const interval = setInterval(() => setFeederTick(value => value + 1), 5000);
+    // Render Free spin down nếu 15 phút không có request HTTP mới. SSE heartbeat chỉ đi
+    // từ server ra trình duyệt, vì vậy dùng một request nhẹ khi Local Queue còn công việc.
+    const keepAliveInterval = setInterval(() => {
+      api.get('/status', { timeout: 30_000 }).catch(error => {
+        console.error('Không thể giữ Render thức khi Local Queue đang chạy:', error);
+      });
+    }, LOCAL_QUEUE_KEEP_ALIVE_MS);
     const warnBeforeUnload = (event) => {
       event.preventDefault();
       event.returnValue = '';
@@ -173,6 +182,7 @@ function App() {
 
     return () => {
       clearInterval(interval);
+      clearInterval(keepAliveInterval);
       window.removeEventListener('beforeunload', warnBeforeUnload);
     };
   }, [localQueue]);
