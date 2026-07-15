@@ -11,11 +11,11 @@ import {
     MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
     MEDICAL_REVISION_SYSTEM_INSTRUCTION,
     MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
+    QUALITY_TRANSLATE_USER_INSTRUCTION,
     QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
 } from './qualityPrompts.js';
 import { isQualityReport, QUALITY_REPORT_JSON_SCHEMA } from './translationQuality.js';
-
-const TRANSLATE_INSTRUCTION = 'Dựa trên PDF nguồn ở trên, dịch toàn văn sang tiếng Việt và chỉ trả Markdown hoàn chỉnh.';
+import { normalizeQualityMarkdown } from './qualityMarkdown.js';
 
 export const qualityKeyScheduler = new GeminiKeyScheduler({ keysProvider: getGeminiApiKeys });
 
@@ -42,8 +42,8 @@ export function createQualityGeminiExecutors({
     generate = generateGeminiContent,
     onSchedulerEvent = () => {},
 } = {}) {
-    const execute = ({ stage, pdfBuffer, instruction, systemInstruction, responseType = 'text', signal }) => (
-        scheduler.execute(
+    const execute = async ({ stage, pdfBuffer, instruction, systemInstruction, responseType = 'text', signal }) => {
+        const result = await scheduler.execute(
             ({ apiKey, keyIndex }) => generate({
                 apiKey,
                 keyIndex,
@@ -61,14 +61,17 @@ export function createQualityGeminiExecutors({
                 signal,
                 onEvent: event => onSchedulerEvent({ stage, ...event }),
             }
-        )
-    );
+        );
+        return responseType === 'text'
+            ? { ...result, text: normalizeQualityMarkdown(result.text) }
+            : result;
+    };
 
     return Object.freeze({
         translate: ({ pdfBuffer, signal }) => execute({
             stage: 'translate',
             pdfBuffer,
-            instruction: TRANSLATE_INSTRUCTION,
+            instruction: QUALITY_TRANSLATE_USER_INSTRUCTION,
             systemInstruction: QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
             signal,
         }),

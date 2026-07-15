@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "method": "Chọn cặp 2 trang có mật độ chữ cao, ưu tiên bảng/hình/vector; bỏ trang đầu ở tài liệu trên 4 trang để tránh bìa/mục lục. Chỉ lưu thống kê bố cục, không lưu nội dung sách.",
+  "samples": [
+    { "fileName": "27. Hormones and Disorders of Mineral Metabolism.pdf", "startPage": 9, "endPage": 10, "textChars": 12110, "words": 1764, "images": 18, "drawings": 248, "blocks": 91 },
+    { "fileName": "28. Endocrine Functions of Bone.pdf", "startPage": 2, "endPage": 3, "textChars": 13105, "words": 1958, "images": 6, "drawings": 258, "blocks": 38 },
+    { "fileName": "29. Osteoporosis Basic and Clinical Aspects.pdf", "startPage": 34, "endPage": 35, "textChars": 10597, "words": 1530, "images": 2, "drawings": 106, "blocks": 38 },
+    { "fileName": "30. Rickets and Osteomalacia.pdf", "startPage": 18, "endPage": 19, "textChars": 12365, "words": 1712, "images": 7, "drawings": 12, "blocks": 25 },
+    { "fileName": "31. Kidney Stones.pdf", "startPage": 11, "endPage": 12, "textChars": 10417, "words": 1567, "images": 2, "drawings": 38, "blocks": 52 },
+    { "fileName": "51. Management of Neurological Disease.pdf", "startPage": 2, "endPage": 3, "textChars": 14210, "words": 2100, "images": 0, "drawings": 10, "blocks": 18 },
+    { "fileName": "52. Pain Management.pdf", "startPage": 18, "endPage": 19, "textChars": 13181, "words": 2017, "images": 329, "drawings": 1759, "blocks": 28 },
+    { "fileName": "53. Neurointensive Care.pdf", "startPage": 12, "endPage": 13, "textChars": 15172, "words": 2199, "images": 2, "drawings": 34, "blocks": 31 },
+    { "fileName": "54. Principles of Neuroendovascular Therapy.pdf", "startPage": 17, "endPage": 18, "textChars": 9952, "words": 1438, "images": 9, "drawings": 5, "blocks": 14 },
+    { "fileName": "55. Neurological Rehabilitation.pdf", "startPage": 18, "endPage": 19, "textChars": 12361, "words": 1930, "images": 2, "drawings": 42, "blocks": 15 },
+    { "fileName": "76 Hematopoietic Stem Cell Transplantation.pdf", "startPage": 2, "endPage": 3, "textChars": 10818, "words": 1508, "images": 0, "drawings": 36, "blocks": 50 },
+    { "fileName": "77 Allergy Assessment.pdf", "startPage": 2, "endPage": 3, "textChars": 9419, "words": 1321, "images": 0, "drawings": 84, "blocks": 72 },
+    { "fileName": "78 Asthma.pdf", "startPage": 5, "endPage": 6, "textChars": 11610, "words": 1681, "images": 0, "drawings": 68, "blocks": 75 },
+    { "fileName": "79 Allergic Rhinitis.pdf", "startPage": 2, "endPage": 3, "textChars": 11138, "words": 1536, "images": 0, "drawings": 27, "blocks": 44 },
+    { "fileName": "80 Atopic Dermatitis.pdf", "startPage": 3, "endPage": 4, "textChars": 10610, "words": 1467, "images": 0, "drawings": 54, "blocks": 63 },
+    { "fileName": "319 Approach to the Patient with Renal Disease or Urinary Tract Disease.pdf", "startPage": 9, "endPage": 10, "textChars": 12989, "words": 1853, "images": 31, "drawings": 693, "blocks": 45 },
+    { "fileName": "320 Cell Biology and Physiology of the Kidney.pdf", "startPage": 2, "endPage": 3, "textChars": 10393, "words": 1439, "images": 26, "drawings": 3790, "blocks": 57 },
+    { "fileName": "321 Acute Kidney Injury.pdf", "startPage": 2, "endPage": 3, "textChars": 10068, "words": 1366, "images": 75, "drawings": 71, "blocks": 41 },
+    { "fileName": "322 Chronic Kidney Disease.pdf", "startPage": 12, "endPage": 13, "textChars": 14740, "words": 2152, "images": 0, "drawings": 73, "blocks": 51 },
+    { "fileName": "323 Dialysis in the Treatment of Kidney Failure.pdf", "startPage": 2, "endPage": 3, "textChars": 14874, "words": 2115, "images": 0, "drawings": 2454, "blocks": 34 }
+  ]
+}

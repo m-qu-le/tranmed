@@ -74,6 +74,22 @@ class CommitThenThrowOnceModel extends MemoryChunkModel {
     }
 }
 
+class ThrowBeforeCommitOnceModel extends MemoryChunkModel {
+    constructor(stage) {
+        super();
+        this.stage = stage;
+        this.hasThrown = false;
+    }
+
+    async findOneAndUpdate(filter, update, options = {}) {
+        if (!this.hasThrown && filter.stage === this.stage) {
+            this.hasThrown = true;
+            throw new Error(`database unavailable before committing ${this.stage}`);
+        }
+        return super.findOneAndUpdate(filter, update, options);
+    }
+}
+
 const passReport = { status: 'PASS', errors: [] };
 const failReport = {
     status: 'FAIL',
@@ -196,6 +212,53 @@ test('restart after an ambiguous DB acknowledgement never repeats a committed st
         assert.equal(final.stage, 'completed', `restart từ ${scenario.stage}`);
         assert.deepEqual(calls, scenario.expected, `không lặp stage đã commit ${scenario.stage}`);
     }
+});
+
+test('restart repeats only the uncommitted stage after a DB failure before persist', async () => {
+    const model = new ThrowBeforeCommitOnceModel('audited');
+    const calls = [];
+    const service = new QualityPipelineService({ ChunkModel: model, executors: createExecutors(calls) });
+    await assert.rejects(run(service), /before committing audited/);
+    assert.equal(model.row.stage, 'audited');
+    const final = await run(service);
+    assert.equal(final.stage, 'completed');
+    assert.deepEqual(calls, ['translate', 'medical_audit', 'revise', 'revise', 'verify']);
+});
+
+test('FAIL verify followed by one successful repair/reverify completes with repaired content', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls, { verifyReport: failReport, reverifyReport: passReport }),
+    });
+    const final = await run(service);
+    assert.deepEqual(calls, ['translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify']);
+    assert.equal(final.stage, 'completed');
+    assert.equal(final.qualityStatus, 'passed');
+    assert.equal(final.content, 'repair markdown');
+    assert.equal(final.repairCount, 1);
+});
+
+test('an expired worker token after a stage response cannot persist or start the next stage', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    let activeChecks = 0;
+    const service = new QualityPipelineService({ ChunkModel: model, executors: createExecutors(calls) });
+    await assert.rejects(
+        run(service, {
+            assertActive: async () => {
+                activeChecks += 1;
+                if (activeChecks === 2) {
+                    throw new ProcessingError(ErrorCodes.CANCELLED, 'worker token expired');
+                }
+            },
+        }),
+        error => error.code === ErrorCodes.CANCELLED
+    );
+    assert.deepEqual(calls, ['translate']);
+    assert.equal(model.row.stage, 'pending');
+    assert.equal(model.row.draftContent, undefined);
 });
 
 test('quality pipeline performs at most one repair and keeps diagnostics after reverify failure', async () => {

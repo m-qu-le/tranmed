@@ -65,6 +65,17 @@ test('strict Gemini validation rejects MAX_TOKENS, missing candidates and invali
         () => validateGeminiResponse(mockResponse({ text: '{broken' }), { responseType: 'json' }),
         error => error.code === ErrorCodes.GEMINI_SCHEMA_INVALID
     );
+    assert.throws(
+        () => validateGeminiResponse(mockResponse({ text: '   ' })),
+        error => error.code === ErrorCodes.GEMINI_RESPONSE_INVALID
+    );
+    for (const finishReason of ['SAFETY', 'RECITATION']) {
+        assert.throws(
+            () => validateGeminiResponse(mockResponse({ candidates: [{ finishReason }] })),
+            error => error.code === ErrorCodes.GEMINI_RESPONSE_INVALID
+                && error.geminiMetadata.finishReason === finishReason
+        );
+    }
 });
 
 test('legacy validation records MAX_TOKENS without changing baseline acceptance behavior', () => {

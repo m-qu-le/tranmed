@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-15T18:16:21.531Z",
+  "source": {
+    "fileName": "31. Kidney Stones.pdf",
+    "startPage": 11,
+    "endPage": 12
+  },
+  "threshold": {
+    "requiredDetected": 4,
+    "totalFixtures": 5
+  },
+  "detectedCount": 5,
+  "passed": true,
+  "fixtures": [
+    {
+      "id": "omission",
+      "expectedCategories": [
+        "omission"
+      ],
+      "detected": true,
+      "returnedStatus": "FAIL",
+      "returnedCategories": [
+        "omission"
+      ],
+      "returnedSeverities": [
+        "major"
+      ],
+      "errorCount": 1
+    },
+    {
+      "id": "negation_modality",
+      "expectedCategories": [
+        "negation_modality",
+        "mistranslation"
+      ],
+      "detected": true,
+      "returnedStatus": "FAIL",
+      "returnedCategories": [
+        "mistranslation"
+      ],
+      "returnedSeverities": [
+        "critical"
+      ],
+      "errorCount": 1
+    },
+    {
+      "id": "number_unit",
+      "expectedCategories": [
+        "number_unit"
+      ],
+      "detected": true,
+      "returnedStatus": "FAIL",
+      "returnedCategories": [
+        "number_unit",
+        "mistranslation"
+      ],
+      "returnedSeverities": [
+        "critical",
+        "minor"
+      ],
+      "errorCount": 2
+    },
+    {
+      "id": "causal_relation",
+      "expectedCategories": [
+        "causal_relation",
+        "mistranslation",
+        "addition"
+      ],
+      "detected": true,
+      "returnedStatus": "FAIL",
+      "returnedCategories": [
+        "mistranslation"
+      ],
+      "returnedSeverities": [
+        "major",
+        "minor"
+      ],
+      "errorCount": 2
+    },
+    {
+      "id": "terminology",
+      "expectedCategories": [
+        "terminology",
+        "mistranslation"
+      ],
+      "detected": true,
+      "returnedStatus": "FAIL",
+      "returnedCategories": [
+        "terminology"
+      ],
+      "returnedSeverities": [
+        "critical"
+      ],
+      "errorCount": 1
+    }
+  ]
+}

@@ -156,3 +156,32 @@ test('headroom and cancellation are enforced before issuing extra requests', asy
         error => error.code === ErrorCodes.CANCELLED
     );
 });
+
+test('5xx and network failures rotate finitely, while all 403 keys fail as auth config', async () => {
+    for (const status of [500, 502, 503, 504, null]) {
+        const scheduler = new GeminiKeyScheduler({ keysProvider: () => ['key-a', 'key-b'] });
+        const calls = [];
+        const result = await scheduler.execute(async ({ keyIndex }) => {
+            calls.push(keyIndex);
+            if (keyIndex === 0) {
+                const error = new Error(status == null ? 'network timeout' : `http ${status}`);
+                if (status != null) error.status = status;
+                throw error;
+            }
+            return { value: 'ok', metadata: { usage: { promptTokenCount: 1 } } };
+        }, { estimatedInputTokens: 1 });
+        assert.equal(result.value, 'ok');
+        assert.deepEqual(calls, [0, 1]);
+    }
+
+    const authScheduler = new GeminiKeyScheduler({ keysProvider: () => ['key-a', 'key-b'] });
+    await assert.rejects(
+        authScheduler.execute(async () => {
+            const error = new Error('forbidden');
+            error.status = 403;
+            throw error;
+        }),
+        error => error.code === ErrorCodes.GEMINI_AUTH
+    );
+    assert.equal(authScheduler.snapshot().every(key => key.disabled), true);
+});

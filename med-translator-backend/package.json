@@ -25,6 +25,9 @@
     "benchmark:p002-source": "node --expose-gc scripts/benchmark-source-stream.js",
     "benchmark:p002-upload": "node scripts/benchmark-r2-upload.js",
     "benchmark:p003": "node scripts/benchmark-project-003.js",
+    "benchmark:p003:batch": "node scripts/benchmark-project-003-batch.js",
+    "benchmark:p003:analyze": "node scripts/analyze-project-003-benchmark.js",
+    "benchmark:p003:audit-fixtures": "node scripts/audit-project-003-fixtures.js",
     "manifest:p003": "node scripts/create-project-003-manifest.js"
   },
   "keywords": [],

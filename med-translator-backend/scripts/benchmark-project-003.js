@@ -15,8 +15,10 @@ import {
     buildRevisionInstruction,
     buildVerifyInstruction,
     MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
+    MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
     MEDICAL_REVISION_SYSTEM_INSTRUCTION,
     MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
+    QUALITY_TRANSLATE_USER_INSTRUCTION,
     QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
 } from '../src/services/qualityPrompts.js';
 import {
@@ -26,12 +28,16 @@ import {
 } from '../src/services/translationQuality.js';
 import { extractPdfPageRange } from '../src/utils/pdfSplitter.js';
 import { redactSensitiveText } from '../src/utils/redactSecrets.js';
+import { normalizeQualityMarkdown } from '../src/services/qualityMarkdown.js';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '../..');
 const sampleDirectory = path.join(repositoryRoot, 'samplepdf');
 const localOutputDirectory = path.join(repositoryRoot, '.p003-local', 'benchmarks');
 const localInputDirectory = path.join(repositoryRoot, '.p003-local', 'benchmark-inputs');
+const MIN_KEY_INTERVAL_MS = 5200;
+const nextKeyRequestAt = new Map();
+let rateGate = Promise.resolve();
 
 export const BENCHMARK_VARIANTS = Object.freeze({
     B0: Object.freeze({
@@ -116,6 +122,18 @@ function publicError(error) {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function waitForBenchmarkHeadroom(keyIndex) {
+    let release;
+    const previousGate = rateGate;
+    rateGate = new Promise(resolve => { release = resolve; });
+    await previousGate;
+    const now = Date.now();
+    const scheduledAt = Math.max(now, nextKeyRequestAt.get(keyIndex) || 0);
+    nextKeyRequestAt.set(keyIndex, scheduledAt + MIN_KEY_INTERVAL_MS);
+    release();
+    if (scheduledAt > now) await delay(scheduledAt - now);
+}
+
 async function callWithBenchmarkRotation(request, keys, firstKeyIndex) {
     const attempts = [];
     let lastError;
@@ -125,6 +143,7 @@ async function callWithBenchmarkRotation(request, keys, firstKeyIndex) {
         const retriesOnKey = request.retryMode === 'legacy' ? 3 : 0;
         for (let retry = 0; retry <= retriesOnKey; retry += 1) {
             try {
+                await waitForBenchmarkHeadroom(keyIndex);
                 const result = await generateGeminiContent({
                     ...request,
                     apiKey: keys[keyIndex],
@@ -201,6 +220,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
             structuredValidator: responseType === 'json' ? isQualityReport : undefined,
             retryMode: 'quality',
         }, keys, nextKeyIndex);
+        if (responseType === 'text') result.text = normalizeQualityMarkdown(result.text);
         attempts.push(...result.attempts.map(attempt => ({ stage, ...attempt })));
         nextKeyIndex = (result.metadata.keyIndex + 1) % keys.length;
         stages[stage] = {
@@ -213,7 +233,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
 
     const translated = await executeStage({
         stage: 'translate',
-        instruction: TRANSLATE_USER_INSTRUCTION,
+        instruction: QUALITY_TRANSLATE_USER_INSTRUCTION,
         systemInstruction: QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
     });
     const audit = await executeStage({
@@ -242,7 +262,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
         const repaired = await executeStage({
             stage: 'repair',
             instruction: buildRepairInstruction(revised.text, verified.json),
-            systemInstruction: MEDICAL_REVISION_SYSTEM_INSTRUCTION,
+            systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
         });
         repairCount = 1;
         finalText = repaired.text;
@@ -267,7 +287,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
     };
 }
 
-function safeFileStem(fileName) {
+export function benchmarkSafeFileStem(fileName) {
     return path.basename(fileName, path.extname(fileName))
         .normalize('NFKD')
         .replace(/[^a-zA-Z0-9]+/g, '-')
@@ -276,27 +296,41 @@ function safeFileStem(fileName) {
         .slice(0, 80);
 }
 
+export function benchmarkArtifactPath(plan) {
+    const outputName = `${plan.variant.toLowerCase()}-${benchmarkSafeFileStem(plan.source.fileName)}-p${plan.source.startPage}-${plan.source.endPage}.json`;
+    return path.join(localOutputDirectory, outputName);
+}
+
 export async function runBenchmark(options) {
     const variantConfig = BENCHMARK_VARIANTS[options.variant];
     const sourcePath = path.join(sampleDirectory, options.fileName);
     const sourceBytes = await readFile(sourcePath);
+    const sourceSha256 = createHash('sha256').update(sourceBytes).digest('hex');
     const pageRange = await extractPdfPageRange(sourceBytes, options.startPage, variantConfig.pagesPerChunk);
-    const inputSha256 = createHash('sha256').update(pageRange.buffer).digest('hex');
     let benchmarkInput = pageRange.buffer;
-    if (!options.dryRun) {
-        await mkdir(localInputDirectory, { recursive: true });
-        const cachedInputPath = path.join(localInputDirectory, `${inputSha256}.pdf`);
-        try {
-            benchmarkInput = await readFile(cachedInputPath);
-        } catch (error) {
-            if (error?.code !== 'ENOENT') throw error;
-            await writeFile(cachedInputPath, pageRange.buffer);
+    await mkdir(localInputDirectory, { recursive: true });
+    const cachedInputPath = path.join(
+        localInputDirectory,
+        `${sourceSha256}-p${pageRange.startPage}-${pageRange.endPage}.pdf`
+    );
+    try {
+        benchmarkInput = await readFile(cachedInputPath);
+    } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+        if (!options.dryRun) {
+            try {
+                await writeFile(cachedInputPath, pageRange.buffer, { flag: 'wx' });
+            } catch (writeError) {
+                if (writeError?.code !== 'EEXIST') throw writeError;
+                benchmarkInput = await readFile(cachedInputPath);
+            }
         }
     }
+    const inputSha256 = createHash('sha256').update(benchmarkInput).digest('hex');
     const generateConfig = createGenerateConfig(variantConfig, options.variant);
     const source = {
         fileName: options.fileName,
-        sourceSha256: createHash('sha256').update(sourceBytes).digest('hex'),
+        sourceSha256,
         totalPages: pageRange.totalPages,
         startPage: pageRange.startPage,
         endPage: pageRange.endPage,
@@ -319,6 +353,14 @@ export async function runBenchmark(options) {
             systemInstructionSha256: createHash('sha256')
                 .update(options.variant === 'B0' ? LEGACY_TRANSLATION_SYSTEM_INSTRUCTION : QUALITY_TRANSLATION_SYSTEM_INSTRUCTION)
                 .digest('hex'),
+            pipelineInstructionSha256: options.variant === 'B4'
+                ? createHash('sha256').update([
+                    MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
+                    MEDICAL_REVISION_SYSTEM_INSTRUCTION,
+                    MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
+                    MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
+                ].join('\n')).digest('hex')
+                : null,
         },
     };
 
@@ -330,7 +372,10 @@ export async function runBenchmark(options) {
         ? await runQualityPipeline({ ...pageRange, buffer: benchmarkInput }, keys, options.keyIndex % keys.length)
         : await callWithBenchmarkRotation({
             model: GEMINI_MODEL,
-            contents: createPdfContents(benchmarkInput, TRANSLATE_USER_INSTRUCTION),
+            contents: createPdfContents(
+                benchmarkInput,
+                options.variant === 'B0' ? TRANSLATE_USER_INSTRUCTION : QUALITY_TRANSLATE_USER_INSTRUCTION
+            ),
             config: generateConfig,
             stage: options.variant,
             validationMode: variantConfig.validationMode,
@@ -352,8 +397,7 @@ export async function runBenchmark(options) {
     };
 
     await mkdir(localOutputDirectory, { recursive: true });
-    const outputName = `${options.variant.toLowerCase()}-${safeFileStem(options.fileName)}-p${source.startPage}-${source.endPage}.json`;
-    const artifactPath = path.join(localOutputDirectory, outputName);
+    const artifactPath = benchmarkArtifactPath(plan);
     await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
     return {
         plan,

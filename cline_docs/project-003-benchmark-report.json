@@ -1,0 +1,772 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-15T18:25:09.941Z",
+  "scope": {
+    "pdfCount": 20,
+    "variants": [
+      "B0",
+      "B1",
+      "B2",
+      "B3",
+      "B4"
+    ],
+    "artifactCount": 100
+  },
+  "automatedChecks": {
+    "inputConsistencyFailures": [],
+    "lengthWarnings": [
+      {
+        "fileName": "78 Asthma.pdf",
+        "variant": "B4",
+        "ratioToMedian": 0.548
+      }
+    ],
+    "nonStopTotal": 0,
+    "emptyTotal": 0,
+    "invalidStructuredTotal": 0
+  },
+  "errors": {
+    "attempts429": 2,
+    "attempts5xx": 0,
+    "attemptsAuth": 0,
+    "attemptErrors": 6,
+    "errorCodeDistribution": {
+      "NO_CODE": 2,
+      "GEMINI_SCHEMA_INVALID": 4
+    },
+    "errorStatusDistribution": {
+      "429": 2,
+      "NO_STATUS": 4
+    }
+  },
+  "keyDistribution": {
+    "0": 25,
+    "1": 25,
+    "2": 26,
+    "3": 25,
+    "4": 23,
+    "5": 24,
+    "6": 26
+  },
+  "byVariant": {
+    "B0": {
+      "samples": 20,
+      "modelCalls": 20,
+      "requestAttempts": 20,
+      "attemptErrors": 0,
+      "attempts429": 0,
+      "latencyMs": {
+        "mean": 14719,
+        "p50": 14919,
+        "p95": 19317,
+        "min": 8762,
+        "max": 20405
+      },
+      "promptTokens": {
+        "mean": 2244,
+        "p50": 2333,
+        "p95": 2355,
+        "min": 1755,
+        "max": 2355
+      },
+      "outputTokens": {
+        "mean": 4486,
+        "p50": 4146,
+        "p95": 6372,
+        "min": 2625,
+        "max": 6391
+      },
+      "thoughtTokens": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "min": null,
+        "max": null
+      },
+      "outputChars": {
+        "mean": 16401,
+        "p50": 15651,
+        "p95": 23096,
+        "min": 8942,
+        "max": 24169
+      },
+      "nonStop": 0,
+      "empty": 0,
+      "invalidStructured": 0,
+      "horizontalRules": 12,
+      "qualityPassed": 0,
+      "needsReview": 0,
+      "repairs": 0
+    },
+    "B1": {
+      "samples": 20,
+      "modelCalls": 20,
+      "requestAttempts": 20,
+      "attemptErrors": 0,
+      "attempts429": 0,
+      "latencyMs": {
+        "mean": 11507,
+        "p50": 11720,
+        "p95": 13581,
+        "min": 7556,
+        "max": 14985
+      },
+      "promptTokens": {
+        "mean": 1343,
+        "p50": 1349,
+        "p95": 1357,
+        "min": 1317,
+        "max": 1357
+      },
+      "outputTokens": {
+        "mean": 3262,
+        "p50": 3149,
+        "p95": 4219,
+        "min": 2109,
+        "max": 4233
+      },
+      "thoughtTokens": {
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "min": null,
+        "max": null
+      },
+      "outputChars": {
+        "mean": 11747,
+        "p50": 11248,
+        "p95": 15463,
+        "min": 7754,
+        "max": 15467
+      },
+      "nonStop": 0,
+      "empty": 0,
+      "invalidStructured": 0,
+      "horizontalRules": 17,
+      "qualityPassed": 0,
+      "needsReview": 0,
+      "repairs": 0
+    },
+    "B2": {
+      "samples": 20,
+      "modelCalls": 20,
+      "requestAttempts": 21,
+      "attemptErrors": 1,
+      "attempts429": 1,
+      "latencyMs": {
+        "mean": 13999,
+        "p50": 13882,
+        "p95": 16056,
+        "min": 8110,
+        "max": 16368
+      },
+      "promptTokens": {
+        "mean": 1343,
+        "p50": 1349,
+        "p95": 1357,
+        "min": 1317,
+        "max": 1357
+      },
+      "outputTokens": {
+        "mean": 3388,
+        "p50": 3213,
+        "p95": 4185,
+        "min": 2341,
+        "max": 4209
+      },
+      "thoughtTokens": {
+        "mean": 1095,
+        "p50": 1012,
+        "p95": 2210,
+        "min": 673,
+        "max": 2231
+      },
+      "outputChars": {
+        "mean": 12243,
+        "p50": 11435,
+        "p95": 15353,
+        "min": 8812,
+        "max": 15356
+      },
+      "nonStop": 0,
+      "empty": 0,
+      "invalidStructured": 0,
+      "horizontalRules": 8,
+      "qualityPassed": 0,
+      "needsReview": 0,
+      "repairs": 0
+    },
+    "B3": {
+      "samples": 20,
+      "modelCalls": 20,
+      "requestAttempts": 21,
+      "attemptErrors": 1,
+      "attempts429": 1,
+      "latencyMs": {
+        "mean": 21009,
+        "p50": 20724,
+        "p95": 27020,
+        "min": 14244,
+        "max": 27937
+      },
+      "promptTokens": {
+        "mean": 1343,
+        "p50": 1349,
+        "p95": 1357,
+        "min": 1317,
+        "max": 1357
+      },
+      "outputTokens": {
+        "mean": 3416,
+        "p50": 3246,
+        "p95": 4128,
+        "min": 2622,
+        "max": 4202
+      },
+      "thoughtTokens": {
+        "mean": 3699,
+        "p50": 2689,
+        "p95": 6569,
+        "min": 1674,
+        "max": 6675
+      },
+      "outputChars": {
+        "mean": 12283,
+        "p50": 11570,
+        "p95": 15355,
+        "min": 9420,
+        "max": 15370
+      },
+      "nonStop": 0,
+      "empty": 0,
+      "invalidStructured": 0,
+      "horizontalRules": 13,
+      "qualityPassed": 0,
+      "needsReview": 0,
+      "repairs": 0
+    },
+    "B4": {
+      "samples": 20,
+      "modelCalls": 88,
+      "requestAttempts": 92,
+      "attemptErrors": 4,
+      "attempts429": 0,
+      "latencyMs": {
+        "mean": 14179,
+        "p50": 12942,
+        "p95": 20615,
+        "min": 7729,
+        "max": 27497
+      },
+      "promptTokens": {
+        "mean": 3940,
+        "p50": 4418,
+        "p95": 5435,
+        "min": 1317,
+        "max": 5719
+      },
+      "outputTokens": {
+        "mean": 1781,
+        "p50": 552,
+        "p95": 4000,
+        "min": 8,
+        "max": 4161
+      },
+      "thoughtTokens": {
+        "mean": 3207,
+        "p50": 2837,
+        "p95": 6456,
+        "min": 593,
+        "max": 7576
+      },
+      "outputChars": {
+        "mean": 11970,
+        "p50": 11733,
+        "p95": 15008,
+        "min": 4249,
+        "max": 15375
+      },
+      "nonStop": 0,
+      "empty": 0,
+      "invalidStructured": 0,
+      "horizontalRules": 0,
+      "qualityPassed": 19,
+      "needsReview": 1,
+      "repairs": 4
+    }
+  },
+  "b4Quality": {
+    "bySpecialty": {
+      "Nội tiết và chuyển hóa xương": {
+        "samples": 4,
+        "passed": 4,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      "Thận học": {
+        "samples": 6,
+        "passed": 6,
+        "needsReview": 0,
+        "repairs": 2
+      },
+      "Thần kinh học": {
+        "samples": 5,
+        "passed": 5,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      "Huyết học và ghép tế bào gốc": {
+        "samples": 1,
+        "passed": 1,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      "Dị ứng và miễn dịch lâm sàng": {
+        "samples": 4,
+        "passed": 3,
+        "needsReview": 1,
+        "repairs": 2
+      }
+    },
+    "stageMetrics": {
+      "translate": {
+        "calls": 20,
+        "latencyMs": {
+          "mean": 19101,
+          "p50": 17665,
+          "p95": 25829,
+          "min": 13950,
+          "max": 27497
+        },
+        "promptTokens": {
+          "mean": 1343,
+          "p50": 1349,
+          "p95": 1357,
+          "min": 1317,
+          "max": 1357
+        },
+        "outputTokens": {
+          "mean": 3416,
+          "p50": 3239,
+          "p95": 4142,
+          "min": 2843,
+          "max": 4148
+        },
+        "thoughtTokens": {
+          "mean": 3626,
+          "p50": 2772,
+          "p95": 6845,
+          "min": 1758,
+          "max": 7576
+        }
+      },
+      "medical_audit": {
+        "calls": 20,
+        "latencyMs": {
+          "mean": 13483,
+          "p50": 12620,
+          "p95": 20599,
+          "min": 7729,
+          "max": 20615
+        },
+        "promptTokens": {
+          "mean": 4656,
+          "p50": 4455,
+          "p95": 5394,
+          "min": 4095,
+          "max": 5398
+        },
+        "outputTokens": {
+          "mean": 287,
+          "p50": 262,
+          "p95": 502,
+          "min": 17,
+          "max": 552
+        },
+        "thoughtTokens": {
+          "mean": 4112,
+          "p50": 3647,
+          "p95": 6670,
+          "min": 2285,
+          "max": 7330
+        }
+      },
+      "revise": {
+        "calls": 20,
+        "latencyMs": {
+          "mean": 12598,
+          "p50": 12327,
+          "p95": 14856,
+          "min": 10040,
+          "max": 16539
+        },
+        "promptTokens": {
+          "mean": 4877,
+          "p50": 4745,
+          "p95": 5572,
+          "min": 4246,
+          "max": 5697
+        },
+        "outputTokens": {
+          "mean": 3426,
+          "p50": 3246,
+          "p95": 4148,
+          "min": 2836,
+          "max": 4160
+        },
+        "thoughtTokens": {
+          "mean": 1397,
+          "p50": 1200,
+          "p95": 2369,
+          "min": 799,
+          "max": 2603
+        }
+      },
+      "verify": {
+        "calls": 20,
+        "latencyMs": {
+          "mean": 11976,
+          "p50": 10844,
+          "p95": 17393,
+          "min": 8141,
+          "max": 18673
+        },
+        "promptTokens": {
+          "mean": 4687,
+          "p50": 4481,
+          "p95": 5415,
+          "min": 4111,
+          "max": 5435
+        },
+        "outputTokens": {
+          "mean": 101,
+          "p50": 17,
+          "p95": 386,
+          "min": 8,
+          "max": 402
+        },
+        "thoughtTokens": {
+          "mean": 3742,
+          "p50": 3397,
+          "p95": 5206,
+          "min": 2271,
+          "max": 6153
+        }
+      },
+      "repair": {
+        "calls": 4,
+        "latencyMs": {
+          "mean": 11281,
+          "p50": 9312,
+          "p95": 10243,
+          "min": 9290,
+          "max": 16279
+        },
+        "promptTokens": {
+          "mean": 4734,
+          "p50": 4416,
+          "p95": 4494,
+          "min": 4306,
+          "max": 5719
+        },
+        "outputTokens": {
+          "mean": 2879,
+          "p50": 3024,
+          "p95": 3032,
+          "min": 1298,
+          "max": 4161
+        },
+        "thoughtTokens": {
+          "mean": 1383,
+          "p50": 1126,
+          "p95": 1794,
+          "min": 593,
+          "max": 2019
+        }
+      },
+      "reverify": {
+        "calls": 4,
+        "latencyMs": {
+          "mean": 14873,
+          "p50": 13552,
+          "p95": 16932,
+          "min": 9338,
+          "max": 19668
+        },
+        "promptTokens": {
+          "mean": 4132,
+          "p50": 4267,
+          "p95": 4291,
+          "min": 2533,
+          "max": 5436
+        },
+        "outputTokens": {
+          "mean": 160,
+          "p50": 17,
+          "p95": 147,
+          "min": 17,
+          "max": 458
+        },
+        "thoughtTokens": {
+          "mean": 4791,
+          "p50": 4444,
+          "p95": 5466,
+          "min": 2638,
+          "max": 6615
+        }
+      }
+    },
+    "auditFindings": {
+      "categories": {
+        "mistranslation": 16,
+        "terminology": 22,
+        "addition": 1,
+        "omission": 3
+      },
+      "severities": {
+        "major": 13,
+        "minor": 29
+      }
+    },
+    "finalFindings": {
+      "categories": {
+        "formatting": 1,
+        "terminology": 4,
+        "mistranslation": 2,
+        "omission": 3
+      },
+      "severities": {
+        "minor": 9,
+        "major": 1
+      }
+    },
+    "cases": [
+      {
+        "fileName": "27. Hormones and Disorders of Mineral Metabolism.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "startPage": 9,
+        "endPage": 10,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "28. Endocrine Functions of Bone.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "29. Osteoporosis Basic and Clinical Aspects.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "startPage": 34,
+        "endPage": 35,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "30. Rickets and Osteomalacia.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "startPage": 18,
+        "endPage": 19,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": [
+          {
+            "category": "formatting",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "31. Kidney Stones.pdf",
+        "specialty": "Thận học",
+        "startPage": 11,
+        "endPage": 12,
+        "qualityStatus": "passed",
+        "repairCount": 1,
+        "finalErrors": []
+      },
+      {
+        "fileName": "319 Approach to the Patient with Renal Disease or Urinary Tract Disease.pdf",
+        "specialty": "Thận học",
+        "startPage": 9,
+        "endPage": 10,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": [
+          {
+            "category": "terminology",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "320 Cell Biology and Physiology of the Kidney.pdf",
+        "specialty": "Thận học",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "321 Acute Kidney Injury.pdf",
+        "specialty": "Thận học",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "322 Chronic Kidney Disease.pdf",
+        "specialty": "Thận học",
+        "startPage": 12,
+        "endPage": 13,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": [
+          {
+            "category": "mistranslation",
+            "severity": "minor"
+          },
+          {
+            "category": "terminology",
+            "severity": "minor"
+          },
+          {
+            "category": "omission",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "323 Dialysis in the Treatment of Kidney Failure.pdf",
+        "specialty": "Thận học",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 1,
+        "finalErrors": []
+      },
+      {
+        "fileName": "51. Management of Neurological Disease.pdf",
+        "specialty": "Thần kinh học",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "52. Pain Management.pdf",
+        "specialty": "Thần kinh học",
+        "startPage": 18,
+        "endPage": 19,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": [
+          {
+            "category": "omission",
+            "severity": "minor"
+          },
+          {
+            "category": "mistranslation",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "53. Neurointensive Care.pdf",
+        "specialty": "Thần kinh học",
+        "startPage": 12,
+        "endPage": 13,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "54. Principles of Neuroendovascular Therapy.pdf",
+        "specialty": "Thần kinh học",
+        "startPage": 17,
+        "endPage": 18,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "55. Neurological Rehabilitation.pdf",
+        "specialty": "Thần kinh học",
+        "startPage": 18,
+        "endPage": 19,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "76 Hematopoietic Stem Cell Transplantation.pdf",
+        "specialty": "Huyết học và ghép tế bào gốc",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "77 Allergy Assessment.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 1,
+        "finalErrors": [
+          {
+            "category": "terminology",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "78 Asthma.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "startPage": 5,
+        "endPage": 6,
+        "qualityStatus": "needs_review",
+        "repairCount": 1,
+        "finalErrors": [
+          {
+            "category": "omission",
+            "severity": "major"
+          },
+          {
+            "category": "terminology",
+            "severity": "minor"
+          }
+        ]
+      },
+      {
+        "fileName": "79 Allergic Rhinitis.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "startPage": 2,
+        "endPage": 3,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      },
+      {
+        "fileName": "80 Atopic Dermatitis.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "startPage": 3,
+        "endPage": 4,
+        "qualityStatus": "passed",
+        "repairCount": 0,
+        "finalErrors": []
+      }
+    ]
+  }
+}
