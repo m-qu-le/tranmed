@@ -1,6 +1,47 @@
 import { translationQueue } from '../services/queueManager.js';
 import TranslationChunk from '../models/translationChunkModel.js';
 import mongoose from 'mongoose';
+import { uploadBatchService } from '../services/runtimeServices.js';
+import { UploadBatchError } from '../services/uploadBatchService.js';
+
+function sendUploadBatchError(res, error) {
+    if (error instanceof UploadBatchError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    throw error;
+}
+
+export const prepareUploadBatch = async (req, res) => {
+    try {
+        res.status(201).json(await uploadBatchService.prepareBatch(req.body));
+    } catch (error) {
+        try { return sendUploadBatchError(res, error); }
+        catch { return res.status(500).json({ error: 'Không thể chuẩn bị upload batch.' }); }
+    }
+};
+
+export const confirmUploadBatch = async (req, res) => {
+    try {
+        const jobIds = Array.isArray(req.body?.items)
+            ? req.body.items.map(item => item?.jobId)
+            : [];
+        const result = await uploadBatchService.confirmBatch(req.params.batchId, jobIds);
+        if (result.items.some(item => item.status === 'pending')) void translationQueue.startWorker();
+        res.status(200).json(result);
+    } catch (error) {
+        try { return sendUploadBatchError(res, error); }
+        catch { return res.status(500).json({ error: 'Không thể xác nhận upload batch.' }); }
+    }
+};
+
+export const getUploadBatchStatus = async (req, res) => {
+    try {
+        res.status(200).json(await uploadBatchService.getBatchStatus(req.params.batchId));
+    } catch (error) {
+        try { return sendUploadBatchError(res, error); }
+        catch { return res.status(500).json({ error: 'Không thể đọc trạng thái upload batch.' }); }
+    }
+};
 
 // API 1: Bọc try-catch, dùng Promise.all để ghi đa file vào DB
 export const uploadFiles = async (req, res) => {

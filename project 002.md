@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G3 hoàn tất cục bộ; sẵn sàng triển khai G4 API upload batch |
+| Trạng thái tổng | G1–G4 hoàn tất cục bộ; bước tiếp theo là G5 Frontend Cloud Uploader |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -103,7 +103,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G1 | Đăng ký và cấu hình Cloudflare R2 | Hoàn thành | Có bucket private Standard, token đúng quyền, CORS/lifecycle và biến môi trường cục bộ |
 | G2 | Tích hợp R2 SDK và kiểm tra kết nối | Hoàn thành cục bộ | Put/Head/Get/Delete smoke đạt, không lộ secret |
 | G3 | Mở rộng schema và vòng đời source | Hoàn thành code + dry-run | Job uploading không bị worker claim; object/job idempotent |
-| G4 | API chuẩn bị/xác nhận batch và presigned URL | Chưa làm | 200 URL được tạo, object được HEAD xác nhận trước khi pending |
+| G4 | API chuẩn bị/xác nhận batch và presigned URL | Hoàn thành code + smoke | 200 URL được tạo, object được HEAD xác nhận trước khi pending |
 | G5 | Frontend Cloud Uploader | Chưa làm | Upload song song toàn batch; chỉ báo có thể tắt máy sau cloud confirmation |
 | G6 | Worker tải source từ R2 và phục hồi restart | Chưa làm | Restart làm worker tải lại từ R2, không còn `FILE_MISSING` do disk Render |
 | G7 | Xóa, hủy, retry và garbage collection | Chưa làm | Không có object R2 mồ côi ngoài retention window |
@@ -301,17 +301,17 @@ Mục tiêu: biểu diễn rõ file đang upload lên R2, đã sẵn sàng cho w
 
 Mục tiêu: frontend nhận URL tạm, upload thẳng lên R2 và backend chỉ đưa job vào queue sau khi xác minh object.
 
-- [ ] **P002-G4-S01 — `POST /upload-batches/prepare`.** Nhận manifest gồm folder và danh sách `{clientUploadId, name, size, type}`; không nhận byte PDF.
-- [ ] **P002-G4-S02 — Validation manifest.** Mặc định tối đa 500 file/batch, size từng file không vượt giới hạn cấu hình, tổng byte có giới hạn hợp lý, MIME/extension PDF và tên folder được chuẩn hóa.
-- [ ] **P002-G4-S03 — Presigned PUT.** URL hết hạn mặc định 30 phút, khóa đúng object key và `Content-Type: application/pdf`; response không bao gồm credentials.
-- [ ] **P002-G4-S04 — Response phân trang/chunk nếu cần.** 500 presigned URL phải nằm dưới Express response limit và không gây timeout; nếu quá lớn, cấp URL theo cửa sổ.
-- [ ] **P002-G4-S05 — `POST /upload-batches/:batchId/confirm`.** Nhận danh sách item đã PUT; backend gọi HEAD và kiểm tra object tồn tại, size khớp, ETag hợp lệ trước khi atomically chuyển `uploading -> pending`.
-- [ ] **P002-G4-S06 — Confirm idempotent.** Gọi lại sau mất mạng trả cùng trạng thái, không tăng count hai lần và không tạo job trùng.
-- [ ] **P002-G4-S07 — Reconciler.** Nếu browser PUT thành công nhưng request confirm bị mất, backend định kỳ HEAD job `uploading` và tự promote object hợp lệ.
-- [ ] **P002-G4-S08 — API trạng thái batch.** Trả `totalFiles`, `uploadedFiles`, `confirmedFiles`, `failedFiles`, `totalBytes`, `confirmedBytes`, `canCloseClient`.
-- [ ] **P002-G4-S09 — Capacity API mới.** Phân biệt `r2UploadAvailable` và `renderWorkerDiskAvailable`; không chặn R2 upload chỉ vì Render đang dịch file khác.
-- [ ] **P002-G4-S10 — Giới hạn tài nguyên không đăng nhập.** Giữ rate limit/batch-size/file-size để tránh request lỗi; không thêm login, password hoặc upload secret.
-- [ ] **P002-G4-S11 — Test presigned URL.** Kiểm tra đúng method/key/expiry/content type; URL hết hạn hoặc sửa key phải thất bại.
+- [x] **P002-G4-S01 — `POST /upload-batches/prepare`.** Nhận manifest gồm folder và danh sách `{clientUploadId, name, size, type}`; không nhận byte PDF.
+- [x] **P002-G4-S02 — Validation manifest.** Mặc định tối đa 500 file/batch, size từng file không vượt giới hạn cấu hình, tổng byte có giới hạn hợp lý, MIME/extension PDF và tên folder được chuẩn hóa.
+- [x] **P002-G4-S03 — Presigned PUT.** URL hết hạn mặc định 30 phút, khóa đúng object key và `Content-Type: application/pdf`; response không bao gồm credentials.
+- [x] **P002-G4-S04 — Response phân trang/chunk nếu cần.** 500 presigned URL phải nằm dưới Express response limit và không gây timeout; nếu quá lớn, cấp URL theo cửa sổ.
+- [x] **P002-G4-S05 — `POST /upload-batches/:batchId/confirm`.** Nhận danh sách item đã PUT; backend gọi HEAD và kiểm tra object tồn tại, size khớp, ETag hợp lệ trước khi atomically chuyển `uploading -> pending`.
+- [x] **P002-G4-S06 — Confirm idempotent.** Gọi lại sau mất mạng trả cùng trạng thái, không tăng count hai lần và không tạo job trùng.
+- [x] **P002-G4-S07 — Reconciler.** Nếu browser PUT thành công nhưng request confirm bị mất, backend định kỳ HEAD job `uploading` và tự promote object hợp lệ.
+- [x] **P002-G4-S08 — API trạng thái batch.** Trả `totalFiles`, `uploadedFiles`, `confirmedFiles`, `failedFiles`, `totalBytes`, `confirmedBytes`, `canCloseClient`.
+- [x] **P002-G4-S09 — Capacity API mới.** Phân biệt `r2UploadAvailable` và `renderWorkerDiskAvailable`; không chặn R2 upload chỉ vì Render đang dịch file khác.
+- [x] **P002-G4-S10 — Giới hạn tài nguyên không đăng nhập.** Giữ rate limit/batch-size/file-size để tránh request lỗi; không thêm login, password hoặc upload secret.
+- [x] **P002-G4-S11 — Test presigned URL.** Kiểm tra đúng method/key/expiry/content type; URL hết hạn hoặc sửa key phải thất bại.
 
 **Cổng G4:** mock batch 200 file tạo đúng 200 job/object key; chỉ object HEAD hợp lệ mới chuyển pending; không có PDF đi qua Render upload middleware.
 
@@ -499,6 +499,8 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G2 / regression + secret scan | Frontend test/lint/build/audit; `git diff --check`; đối chiếu credential local với file repo chỉ trả pass/fail | Tất cả đạt; không phát hiện R2/Mongo credential trong repo | Không in secret |
 | 15-07-2026 | G3 / schema + invariant | `npm test` | Backend 25/25; legacy/R2 coexist, claim gate, source deletion, key, batch và index đạt | stdout phiên local |
 | 15-07-2026 | G3 / migration dry-run | `npm run migrate:p002:dry` | 5 Job legacy được nhận diện; 0 R2 Job/UploadBatch; `modifiedCount=0`, không tạo index | stdout không chứa URI |
+| 15-07-2026 | G4 / API service mock | `npm test` | Mock prepare 200 file tạo 200 key ổn định; prepare/confirm lặp idempotent; HEAD size/ETag trước pending | stdout phiên local |
+| 15-07-2026 | G4 / presigned production smoke | `npm run smoke:r2-presign` | Sai Content-Type bị từ chối; PUT đúng + HEAD đạt; URL hết hạn bị từ chối; cleanup đạt | Không in URL ký/key |
 
 ## 10. Nhật ký thay đổi
 
@@ -508,6 +510,7 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | P002-G1-S08 | Chưa commit | Ghi nhận cấu hình R2, hoàn thiện `R2_ACCOUNT_ID` trong backend `.env` và kiểm tra không lộ giá trị | Codex | Chờ rotate credential trước G2 |
 | 15-07-2026 | P002-G2-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Thêm AWS SDK, env fail-fast, `r2Service`, streaming download, smoke, redaction và readiness; rollback `ae14db7` | Codex | Hoàn thành cục bộ, smoke thật đạt |
 | 15-07-2026 | P002-G3-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Schema Job additive, UploadBatch, source key, claim invariant, index và migration P002 dry-run/idempotent | Codex | Hoàn thành code; production migration để G10 |
+| 15-07-2026 | P002-G4-S01..S11 | Chưa commit | API prepare/confirm/status, manifest limits, scoped presign, reconciler, capacity split và mock 200 file | Codex | Hoàn thành code + smoke thật |
 
 ## 11. Nhật ký vấn đề và quyết định
 

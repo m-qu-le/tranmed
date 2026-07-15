@@ -2,17 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose'; 
 import translateRoute from './routes/translateRoute.js';
-import { validateRuntimeEnv } from './config/env.js';
-import { createR2Service } from './services/r2Service.js';
 import { redactError } from './utils/redactSecrets.js';
+import { r2Service, runtimeConfig, uploadBatchService } from './services/runtimeServices.js';
 
 // [THÊM MỚI] Bổ sung đường truyền tĩnh mạch: Import QueueManager để gọi khởi tạo sau khi có DB
 import { translationQueue } from './services/queueManager.js'; 
 
-const runtimeConfig = validateRuntimeEnv();
 const app = express();
 const PORT = runtimeConfig.port;
-const r2Service = createR2Service(runtimeConfig.r2);
 app.set('trust proxy', 1);
 
 // [CẤU HÌNH CORS ĐỘNG VÀ LOGGING]
@@ -103,6 +100,7 @@ mongoose.connect(runtimeConfig.mongodbUri, { serverSelectionTimeoutMS: 5000 })
         
         // Quét Zombie Jobs CHỈ KHI Database thực sự thông luồng
         await translationQueue.initDB(); 
+        uploadBatchService.startReconciler();
         
         // Chỉ mở Port HTTP sau khi Database và Queue đã hoàn tất setup
         app.listen(PORT, '0.0.0.0', () => {

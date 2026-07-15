@@ -32,6 +32,7 @@ export function createR2Service(config, dependencies = {}) {
     const client = dependencies.client || createR2Client(config);
     const signUrl = dependencies.getSignedUrl || getSignedUrl;
     const bucket = config.bucketName;
+    let readinessCache = null;
 
     return Object.freeze({
         async putObject({ key, body, contentType = 'application/octet-stream' }) {
@@ -89,12 +90,20 @@ export function createR2Service(config, dependencies = {}) {
                 Key: requireObjectKey(key),
                 ContentType: contentType,
             });
-            return signUrl(client, command, { expiresIn });
+            return signUrl(client, command, {
+                expiresIn,
+                signableHeaders: new Set(['content-type']),
+            });
         },
 
-        async checkReadiness() {
+        async checkReadiness({ maxAgeMs = 60_000 } = {}) {
+            if (readinessCache && Date.now() - readinessCache.checkedAt < maxAgeMs) {
+                return readinessCache.value;
+            }
             await client.send(new HeadBucketCommand({ Bucket: bucket }));
-            return { configured: true, available: true };
+            const value = { configured: true, available: true };
+            readinessCache = { checkedAt: Date.now(), value };
+            return value;
         },
     });
 }

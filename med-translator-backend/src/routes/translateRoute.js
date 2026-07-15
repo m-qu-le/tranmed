@@ -13,7 +13,10 @@ import {
     bulkDeleteJobs,
     getSystemStatus,
     forceWakeUpSystem, // [THÊM MỚI] Import hàm ép thức dậy
-    deleteFolderQueue // [THÊM DÒNG NÀY]
+    deleteFolderQueue, // [THÊM DÒNG NÀY]
+    prepareUploadBatch,
+    confirmUploadBatch,
+    getUploadBatchStatus
 } from '../controllers/translateController.js'; 
 
 const router = express.Router();
@@ -28,6 +31,9 @@ const uploadRateLimit = rateLimit({
 // Frontend có thể giữ hàng trăm file trong Local Queue, nhưng backend chỉ nhận một file/lần.
 router.post('/', uploadRateLimit, reserveUploadCapacity, upload.array('files', 1), validatePdf, enforceStorageBudget, uploadFiles);
 router.get('/capacity', getCapacity);
+router.post('/upload-batches/prepare', uploadRateLimit, prepareUploadBatch);
+router.post('/upload-batches/:batchId/confirm', uploadRateLimit, confirmUploadBatch);
+router.get('/upload-batches/:batchId', getUploadBatchStatus);
 
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);

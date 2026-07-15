@@ -1,13 +1,22 @@
 import { MAX_UPLOAD_STORAGE_MB } from '../config/env.js';
 import { getCapacityStatus, getUploadStorageUsage } from '../services/storageService.js';
 import { unlink } from 'fs/promises';
+import { r2Service } from '../services/runtimeServices.js';
 
 const budgetBytes = MAX_UPLOAD_STORAGE_MB * 1024 * 1024;
 let uploadInProgress = false;
 
 export async function getCapacity(req, res) {
     try {
-        res.status(200).json(await getCapacityStatus(uploadInProgress));
+        const [capacity, storageReadiness] = await Promise.all([
+            getCapacityStatus(uploadInProgress),
+            r2Service.checkReadiness().catch(() => ({ configured: true, available: false })),
+        ]);
+        res.status(200).json({
+            ...capacity,
+            r2UploadAvailable: storageReadiness.available,
+            renderWorkerDiskAvailable: capacity.usedBytes < capacity.budgetBytes,
+        });
     } catch (error) {
         console.error('[CAPACITY] Không thể đọc dung lượng:', error.message);
         res.status(503).json({ error: 'Không thể kiểm tra dung lượng server.' });

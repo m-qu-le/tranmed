@@ -61,6 +61,7 @@ test('R2 service scopes commands to one bucket and streams downloads to disk', a
         assert.ok(commands[4] instanceof HeadBucketCommand);
         assert.equal(commands.every(command => command.input.Bucket === 'fixture-bucket'), true);
         assert.equal(signCalls[0][2].expiresIn, 1800);
+        assert.equal(signCalls[0][2].signableHeaders.has('content-type'), true);
     } finally {
         await rm(tempDir, { recursive: true, force: true });
     }
