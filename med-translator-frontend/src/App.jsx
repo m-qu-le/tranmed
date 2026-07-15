@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
+import api, { API_BASE_URL } from './api/client.js';
 
 // Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ mặc định
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://tranmed.onrender.com';
-
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
 // -------------------------------------------------------------
@@ -22,10 +20,12 @@ const JobCard = ({ job, onDelete }) => {
     if (localResult) return localResult; // Đã tải rồi thì dùng luôn trong cache
     setIsLoadingContent(true);
     try {
-      const res = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
+      const res = await api.get(`/jobs/${encodeURIComponent(job.jobId)}/result`, {
+        timeout: 60_000,
+      });
       setLocalResult(res.data.result);
       return res.data.result;
-    } catch (err) {
+    } catch {
       alert('Lỗi tải nội dung từ Server!');
       return null;
     } finally {
@@ -40,7 +40,7 @@ const JobCard = ({ job, onDelete }) => {
       await navigator.clipboard.writeText(content);
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
-    } catch (err) {
+    } catch {
       alert('Không thể copy nội dung!');
     }
   };
@@ -58,10 +58,11 @@ const JobCard = ({ job, onDelete }) => {
         <div className="job-info">
           <span className="job-name">📄 {job.originalName || job.fileName || 'Tài liệu'}</span>
           <span className={`status-badge ${job.status}`}>
-            {job.status === 'pending' && '⏳ Đang chờ...'}
-            {job.status === 'processing' && '⚙️ Đang dịch...'}
+            {job.status === 'pending' && (job.nextRetryAt ? '🔄 Chờ thử lại...' : '⏳ Đang chờ...')}
+            {job.status === 'processing' && `⚙️ Đang dịch${job.chunkCount ? ` ${job.completedChunks || 0}/${job.chunkCount}` : '...'}`}
             {job.status === 'completed' && '✅ Hoàn thành'}
             {job.status === 'failed' && '❌ Lỗi'}
+            {job.status === 'cancelled' && '🛑 Đã hủy'}
           </span>
         </div>
 
@@ -77,13 +78,13 @@ const JobCard = ({ job, onDelete }) => {
             </>
           )}
           
-          {(job.status === 'failed' || job.status === 'completed') && (
+          {(['pending', 'processing', 'failed', 'completed', 'cancelled'].includes(job.status)) && (
             <button 
-              onClick={() => onDelete(job.jobId)} 
+              onClick={() => onDelete(job.jobId, job.status)}
               className="delete-btn" 
               style={{ backgroundColor: '#dc3545', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', marginLeft: '8px', fontSize: '0.9em' }}
             >
-              🗑️ Xóa
+              {['pending', 'processing'].includes(job.status) ? '🛑 Hủy' : '🗑️ Xóa'}
             </button>
           )}
         </div>
@@ -91,6 +92,13 @@ const JobCard = ({ job, onDelete }) => {
 
       {job.status === 'failed' && (
         <div className="job-error">Chi tiết lỗi: {job.error}</div>
+      )}
+
+      {job.status === 'pending' && job.error && (
+        <div className="job-retry">
+          {job.error}
+          {job.nextRetryAt && ` Thử lại lúc ${new Date(job.nextRetryAt).toLocaleTimeString('vi-VN')}.`}
+        </div>
       )}
 
       {job.status === 'completed' && showPreview && localResult && (
@@ -116,6 +124,9 @@ function App() {
   const [jobs, setJobs] = useState([]); 
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
   const [collapsedFolders, setCollapsedFolders] = useState({});
+  const [feederTick, setFeederTick] = useState(0);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [nextCursor, setNextCursor] = useState(null);
 
   const toggleFolder = (folderName) => { 
     setCollapsedFolders(prev => ({ ...prev, [folderName]: !prev[folderName] })); 
@@ -126,16 +137,18 @@ function App() {
     const fetchInitialData = async () => {
       try {
         // Lấy trạng thái hệ thống
-        const statusRes = await axios.get(`${API_BASE_URL}/status`);
+        const statusRes = await api.get('/status');
         setSysStatus(statusRes.data);
 
       // Lấy danh sách Jobs
-        const jobsRes = await axios.get(`${API_BASE_URL}/jobs`);
+        const jobsRes = await api.get('/jobs');
         
         // Cầu chì bảo vệ: Chặn trường hợp Render trả về trang HTML 502 thay vì JSON
-        if (Array.isArray(jobsRes.data)) {
-            const formattedJobs = jobsRes.data.map(j => ({ ...j, logs: [], result: null }));
+        const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
+        if (Array.isArray(jobItems)) {
+            const formattedJobs = jobItems.map(j => ({ ...j, logs: [], result: null }));
             setJobs(formattedJobs);
+            setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
         } else {
             throw new Error("Cloud Server trả về dữ liệu không hợp lệ.");
         }
@@ -147,12 +160,61 @@ function App() {
     fetchInitialData();
   }, []);
 
+  useEffect(() => {
+    const hasLocalWork = localQueue.some(task => ['pending', 'uploading'].includes(task.status));
+    if (!hasLocalWork) return undefined;
+
+    const interval = setInterval(() => setFeederTick(value => value + 1), 5000);
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', warnBeforeUnload);
+    };
+  }, [localQueue]);
+
   // 3. Lắng nghe SSE thời gian thực từ Backend
   useEffect(() => {
     const eventSource = new EventSource(`${API_BASE_URL}/stream`);
 
+    const resync = async () => {
+      try {
+        const [statusRes, jobsRes] = await Promise.all([
+          api.get('/status', { timeout: 30_000 }),
+          api.get('/jobs', { timeout: 30_000 }),
+        ]);
+        setSysStatus(statusRes.data);
+        const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
+        if (Array.isArray(jobItems)) {
+          setJobs(jobItems.map(job => ({ ...job, logs: [], result: null })));
+          setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
+        }
+      } catch (error) {
+        console.error('Không thể đồng bộ lại SSE:', error);
+      }
+    };
+
+    eventSource.onopen = () => {
+      setSseConnected(true);
+      void resync();
+    };
+
+    eventSource.onerror = () => {
+      setSseConnected(false);
+    };
+
     eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        console.error('SSE trả về dữ liệu không hợp lệ:', error);
+        return;
+      }
 
       // Lắng nghe sự kiện hệ thống ngủ đông / thức dậy
       if (data.type === 'systemStatus') {
@@ -160,8 +222,19 @@ function App() {
       }
       else if (data.type === 'status') {
         setJobs(prevJobs => prevJobs.map(job => 
-          job.jobId === data.jobId ? { ...job, status: data.status, error: data.error } : job
+          job.jobId === data.jobId ? { ...job, ...data } : job
         ));
+        if (data.status === 'failed' && data.errorCode === 'FILE_MISSING') {
+          setLocalQueue(previous => previous.map(task => task.currentJobId === data.jobId
+            ? {
+                ...task,
+                status: 'pending',
+                nextFileIndex: Math.max(0, task.nextFileIndex - 1),
+                currentJobId: null,
+                progressMsg: '♻️ Render đã mất file tạm; sẽ tự tải lại từ thiết bị...'
+              }
+            : task));
+        }
       } 
     };
 
@@ -176,6 +249,19 @@ function App() {
       const nextTask = localQueue.find(task => task.status === 'pending');
       if (!nextTask) return;
 
+      const currentServerJob = jobs.find(job => job.jobId === nextTask.currentJobId);
+      if (currentServerJob?.status === 'failed' && currentServerJob.errorCode === 'FILE_MISSING') {
+        setLocalQueue(previous => previous.map(task => task.id === nextTask.id
+          ? {
+              ...task,
+              nextFileIndex: Math.max(0, task.nextFileIndex - 1),
+              currentJobId: null,
+              progressMsg: '♻️ Render đã mất file tạm; sẽ tự tải lại từ thiết bị...'
+            }
+          : task));
+        return;
+      }
+
       setIsProcessingQueue(true); // Khóa luồng
 
       // Cập nhật trạng thái UI là đang chạy
@@ -183,50 +269,79 @@ function App() {
         t.id === nextTask.id ? { ...t, status: 'uploading', progressMsg: '🚀 Bắt đầu nạp dữ liệu...' } : t
       ));
 
-      const CHUNK_SIZE = 2; // Tối ưu chunk size
       const filesArray = nextTask.files;
       const totalFiles = filesArray.length;
-      let uploadedCount = 0;
 
       try {
-        for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
-          const chunk = filesArray.slice(i, i + CHUNK_SIZE);
-          const formData = new FormData();
-          
-          formData.append('folderName', nextTask.folderName);
-          chunk.forEach(file => formData.append('files', file));
-
-          const response = await axios.post(`${API_BASE_URL}`, formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-            onUploadProgress: (progressEvent) => {
-              const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-              setLocalQueue(prev => prev.map(t => 
-                t.id === nextTask.id ? { ...t, progressMsg: `Đang đẩy Lô ${Math.floor(i/CHUNK_SIZE) + 1}: ${percentCompleted}% (${uploadedCount}/${totalFiles})` } : t
-              ));
-            }
-          });
-
-          uploadedCount += chunk.length;
-          setLocalQueue(prev => prev.map(t => 
-            t.id === nextTask.id ? { ...t, progressMsg: `Đang đồng bộ DB: ${Math.min(uploadedCount, totalFiles)}/${totalFiles} files...` } : t
-          ));
-
-          const newJobs = response.data.jobs.map(j => ({ ...j, logs: [], result: null }));
-          setJobs(prevJobs => {
-            const existingIds = new Set(prevJobs.map(j => j.jobId));
-            const uniqueNewJobs = newJobs.filter(j => !existingIds.has(j.jobId));
-            return [...uniqueNewJobs, ...prevJobs]; 
-          });
+        const capacityRes = await api.get('/capacity', { timeout: 15_000 });
+        if (!capacityRes.data.canAcceptUpload) {
+          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
+            ? { ...task, status: 'pending', progressMsg: `⏸️ Server đang bận, giữ ${totalFiles - task.nextFileIndex} file trên thiết bị...` }
+            : task));
+          return;
         }
-        
-        // Hoàn tất task
+
+        if (nextTask.nextFileIndex >= totalFiles) {
+          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
+            ? { ...task, status: 'completed', files: [], progressMsg: `✅ Đã xử lý xong ${totalFiles}/${totalFiles} file` }
+            : task));
+          return;
+        }
+
+        const currentIndex = nextTask.nextFileIndex;
+        const file = filesArray[currentIndex];
+        if (file.size > capacityRes.data.maxFileSizeBytes) {
+          setLocalQueue(prev => prev.map(task => task.id === nextTask.id
+            ? {
+                ...task,
+                status: 'error',
+                progressMsg: `❌ ${file.name} vượt giới hạn ${Math.round(capacityRes.data.maxFileSizeBytes / 1024 / 1024)} MB`
+              }
+            : task));
+          return;
+        }
+        const formData = new FormData();
+        formData.append('folderName', nextTask.folderName);
+        formData.append('clientUploadId', nextTask.uploadIds[currentIndex]);
+        formData.append('files', file);
+
+        const response = await api.post('/', formData, {
+          timeout: 15 * 60_000,
+          onUploadProgress: (progressEvent) => {
+            const total = progressEvent.total || file.size || 1;
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / total);
+            setLocalQueue(prev => prev.map(task => task.id === nextTask.id
+              ? { ...task, progressMsg: `⬆️ Đang tải ${currentIndex + 1}/${totalFiles}: ${percentCompleted}%` }
+              : task));
+          }
+        });
+
+        const newJobs = response.data.jobs.map(job => ({ ...job, logs: [], result: null }));
+        setJobs(prevJobs => {
+          const existingIds = new Set(prevJobs.map(job => job.jobId));
+          return [...newJobs.filter(job => !existingIds.has(job.jobId)), ...prevJobs];
+        });
+
         setLocalQueue(prev => prev.map(t => 
-          t.id === nextTask.id ? { ...t, status: 'completed', progressMsg: '✅ Đã đẩy lên Cloud' } : t
+          t.id === nextTask.id ? {
+            ...t,
+            status: 'pending',
+            nextFileIndex: currentIndex + 1,
+            currentJobId: newJobs[0]?.jobId || null,
+            progressMsg: `☁️ Đã giao ${currentIndex + 1}/${totalFiles} file; chờ server dịch xong...`
+          } : t
         ));
 
       } catch (error) {
+        const isServerBusy = [409, 507].includes(error.response?.status);
         setLocalQueue(prev => prev.map(t => 
-          t.id === nextTask.id ? { ...t, status: 'error', progressMsg: '❌ Lỗi Timeout / Mạng' } : t
+          t.id === nextTask.id ? {
+            ...t,
+            status: isServerBusy ? 'pending' : 'error',
+            progressMsg: isServerBusy
+              ? '⏸️ Server chưa đủ dung lượng, sẽ tự thử lại...'
+              : `❌ Upload lỗi: ${error.response?.data?.error || error.message}`
+          } : t
         ));
       } finally {
         setIsProcessingQueue(false); // Mở khóa luồng cho task tiếp theo
@@ -234,7 +349,7 @@ function App() {
     };
 
     processQueue();
-  }, [localQueue, isProcessingQueue]);
+  }, [localQueue, isProcessingQueue, feederTick, jobs]);
 
   // Thêm thao tác của người dùng vào Local Queue
   const handleAddToQueue = () => {
@@ -244,6 +359,10 @@ function App() {
       id: Date.now(), // Unique ID cho mỗi task tải lên
       folderName: folderName.trim() || 'Mặc định',
       files: Array.from(selectedFiles),
+      uploadIds: Array.from(selectedFiles, () => crypto.randomUUID()),
+      totalFiles: selectedFiles.length,
+      nextFileIndex: 0,
+      currentJobId: null,
       status: 'pending', // pending, uploading, completed, error
       progressMsg: '⏳ Đang xếp hàng chờ tải lên...'
     };
@@ -258,15 +377,42 @@ function App() {
 
   // NÚT XÓA TASK KHỎI HÀNG CHỜ KHI CHƯA CHẠY
   const handleRemoveFromQueue = (taskId) => {
-    setLocalQueue(prev => prev.filter(task => task.id !== taskId));
+    setLocalQueue(prev => prev.filter(task => task.id !== taskId || task.status === 'uploading'));
   };
 
-  const handleDeleteJob = async (jobId) => {
-    const isConfirm = window.confirm('Bạn có chắc chắn muốn xóa tiến trình này không?');
+  const handleRetryLocalTask = (taskId) => {
+    setLocalQueue(prev => prev.map(task => task.id === taskId
+      ? { ...task, status: 'pending', progressMsg: '🔄 Đang thử upload lại...' }
+      : task));
+  };
+
+  const handleLoadMoreJobs = async () => {
+    if (!nextCursor) return;
+    try {
+      const response = await api.get('/jobs', {
+        params: { cursor: nextCursor, limit: 100 },
+        timeout: 30_000,
+      });
+      const items = response.data?.items || [];
+      setJobs(previous => {
+        const knownIds = new Set(previous.map(job => job.jobId));
+        return [...previous, ...items.filter(job => !knownIds.has(job.jobId))];
+      });
+      setNextCursor(response.data?.nextCursor || null);
+    } catch (error) {
+      alert(`Không thể tải thêm lịch sử: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
+  const handleDeleteJob = async (jobId, status) => {
+    const isActive = ['pending', 'processing'].includes(status);
+    const isConfirm = window.confirm(isActive
+      ? 'Bạn có chắc chắn muốn hủy tiến trình đang dịch không?'
+      : 'Bạn có chắc chắn muốn xóa tiến trình này không?');
     if (!isConfirm) return;
 
     try {
-      await axios.delete(`${API_BASE_URL}/jobs/${jobId}`);
+      await api.delete(`/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 });
       setJobs(prevJobs => prevJobs.filter(job => job.jobId !== jobId));
     } catch (error) {
       alert('Lỗi khi xóa tiến trình: ' + (error.response?.data?.error || error.message));
@@ -288,7 +434,7 @@ function App() {
 
     try {
       // Gửi 1 Request duy nhất lên API mới
-      await axios.post(`${API_BASE_URL}/bulk-delete`, { jobIds });
+      await api.post('/bulk-delete', { jobIds });
       
       // Dọn dẹp State UI nội bộ
       setJobs(prevJobs => prevJobs.filter(job => !jobIds.includes(job.jobId)));
@@ -304,7 +450,7 @@ function App() {
 
     try {
       // Dùng encodeURIComponent để an toàn với tên thư mục chứa dấu cách/kí tự đặc biệt
-      await axios.delete(`${API_BASE_URL}/folder/${encodeURIComponent(targetFolderName)}`);
+      await api.delete(`/folder/${encodeURIComponent(targetFolderName)}`);
       
       // Lọc bỏ toàn bộ job thuộc thư mục này ra khỏi State để UI cập nhật ngay lập tức
       setJobs(prevJobs => prevJobs.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
@@ -318,7 +464,7 @@ function App() {
     if (!isConfirm) return;
 
     try {
-      await axios.post(`${API_BASE_URL}/force-wakeup`);
+      await api.post('/force-wakeup');
       alert('🚀 Lệnh đánh thức đã được gửi thành công!');
       // State sysStatus sẽ tự động được cập nhật thông qua luồng SSE
     } catch (error) {
@@ -335,7 +481,10 @@ function App() {
     let cleanName = name.replace(/â|â€™/g, '');
     
     // 2. Loại bỏ các ký tự cấm của Windows
-    cleanName = cleanName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '');
+    cleanName = cleanName.replace(/[<>:"/\\|?*]/g, '');
+    cleanName = Array.from(cleanName)
+      .filter(char => char.charCodeAt(0) >= 32)
+      .join('');
     
     // 3. BỘ LỌC CỨNG: Chỉ giữ lại chữ cái (\p{L} - bao gồm tiếng Việt), số (\p{N}), khoảng trắng, gạch ngang, gạch dưới, ngoặc đơn
     cleanName = cleanName.replace(/[^\p{L}\p{N}\s\-_()]/gu, ''); 
@@ -364,14 +513,10 @@ function App() {
       const directoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       let successCount = 0;
       let failedFiles = []; // [THÊM MỚI] Mảng theo dõi đích danh các file bị từ chối I/O
+      const usedNames = new Map();
 
       for (const [index, job] of completedJobs.entries()) {
         try {
-          const resultRes = await axios.get(`${API_BASE_URL}/jobs/${job.jobId}/result`);
-          const markdownContent = resultRes.data.result;
-
-          if (!markdownContent) continue;
-
           let rawName = job.originalName || job.fileName || `TaiLieu_${index + 1}`;
           const baseName = rawName.replace(/\.[^/.]+$/, "");
           
@@ -379,12 +524,32 @@ function App() {
           const cleanName = sanitizeFileName(baseName);
           
           // Fallback: Lỡ tên file toàn ký tự rác bị lọc sạch trơn, thì dùng jobId thay thế
-          const finalFileName = `${cleanName || `Doc_${job.jobId}`}_vi.md`;
+          const safeBaseName = cleanName || `Doc_${job.jobId}`;
+          const collisionKey = safeBaseName.toLocaleLowerCase('vi-VN');
+          const duplicateNumber = (usedNames.get(collisionKey) || 0) + 1;
+          usedNames.set(collisionKey, duplicateNumber);
+          const suffix = duplicateNumber > 1 ? `_${duplicateNumber}` : '';
+          const finalFileName = `${safeBaseName}${suffix}_vi.md`;
 
           const fileHandle = await directoryHandle.getFileHandle(finalFileName, { create: true });
           const writable = await fileHandle.createWritable();
-          await writable.write(markdownContent);
-          await writable.close();
+          try {
+            const response = await fetch(
+              `${API_BASE_URL}/jobs/${encodeURIComponent(job.jobId)}/download`
+            );
+            if (!response.ok || !response.body) {
+              throw new Error(`Download thất bại với mã ${response.status}`);
+            }
+
+            const reader = response.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              await writable.write(value);
+            }
+          } finally {
+            await writable.close();
+          }
           successCount++;
         } catch (fileError) {
           console.error(`Lỗi khi tải hoặc ghi file ${job.originalName}:`, fileError);
@@ -421,6 +586,9 @@ function App() {
       <header className="header">
         <h1>🩺 StudyMed Translator</h1>
         <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
+        <span className={`connection-status ${sseConnected ? 'connected' : 'disconnected'}`}>
+          {sseConnected ? '● Đã kết nối realtime' : '● Đang kết nối lại...'}
+        </span>
       </header>
 
       <main className="main-content">
@@ -458,7 +626,9 @@ function App() {
 
         <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '20px', background: '#ffffff', padding: '32px', borderRadius: '24px', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', border: '1px solid #eaeaea', maxWidth: '850px', margin: '0 auto 40px auto' }}>
           <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <label className="sr-only" htmlFor="folderNameInput">Tên thư mục</label>
             <input 
+              id="folderNameInput"
               type="text" 
               placeholder="📁 Tên thư mục (Vd: USMLE Step 1)" 
               value={folderName}
@@ -468,6 +638,7 @@ function App() {
               onBlur={(e) => { e.target.style.borderColor = '#e0e0e0'; e.target.style.backgroundColor = '#fafafa'; }}
             />
             <div style={{ flex: 2, position: 'relative', minWidth: '300px' }}>
+              <label className="sr-only" htmlFor="fileInput">Chọn các file PDF y khoa</label>
               <input 
                 id="fileInput"
                 type="file" 
@@ -501,13 +672,22 @@ function App() {
                 {localQueue.map(task => (
                   <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13.5px', background: '#fff', padding: '12px 16px', border: '1px solid #eaeaea', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <strong>📁 {task.folderName} <span style={{fontWeight: 'normal', color: '#6c757d', fontSize: '0.9em'}}>({task.files.length} files)</span></strong>
+                      <strong>📁 {task.folderName} <span style={{fontWeight: 'normal', color: '#6c757d', fontSize: '0.9em'}}>({task.totalFiles} files)</span></strong>
                       <span style={{ fontSize: '12.5px', color: task.status === 'error' ? '#dc3545' : task.status === 'completed' ? '#28a745' : '#007bff', fontWeight: '500' }}>
                         {task.progressMsg}
                       </span>
                     </div>
-                    {task.status === 'pending' && (
+                    {task.status === 'pending' && task.nextFileIndex === 0 && (
                       <button onClick={() => handleRemoveFromQueue(task.id)} style={{ background: '#ffebee', border: 'none', color: '#dc3545', cursor: 'pointer', fontWeight: 'bold', padding: '6px 12px', borderRadius: '6px', transition: 'background 0.2s' }} onMouseEnter={(e) => e.target.style.background = '#ffcdd2'} onMouseLeave={(e) => e.target.style.background = '#ffebee'}>✕ Xóa</button>
+                    )}
+                    {task.status === 'error' && (
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => handleRetryLocalTask(task.id)}>Thử lại</button>
+                        <button onClick={() => handleRemoveFromQueue(task.id)}>Xóa</button>
+                      </div>
+                    )}
+                    {task.status === 'completed' && (
+                      <button onClick={() => handleRemoveFromQueue(task.id)}>Ẩn</button>
                     )}
                   </li>
                 ))}
@@ -525,6 +705,12 @@ function App() {
                   <h3 
                     className="queue-title" 
                     onClick={() => toggleFolder(folderName)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') toggleFolder(folderName);
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={!isCollapsed}
                     style={{ color: '#007bff', margin: 0, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span style={{ fontSize: '0.7em', display: 'inline-block', transition: 'transform 0.2s ease', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
@@ -569,6 +755,11 @@ function App() {
             <div className="empty-state">
               <div className="empty-wash">Chưa có tài liệu nào trong hệ thống.</div>
             </div>
+          )}
+          {nextCursor && (
+            <button className="load-more-btn" onClick={handleLoadMoreJobs}>
+              Tải thêm lịch sử
+            </button>
           )}
         </div>
       </main>
