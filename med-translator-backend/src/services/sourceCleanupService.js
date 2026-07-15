@@ -1,4 +1,6 @@
 import { redactSensitiveText } from '../utils/redactSecrets.js';
+import { appEvents } from './appEvents.js';
+import { operationalMetrics } from './operationalMetrics.js';
 
 const BASE_RETRY_MS = 60_000;
 
@@ -47,6 +49,8 @@ export class SourceCleanupService {
                     },
                 }
             );
+            operationalMetrics.increment('r2.delete.succeeded');
+            appEvents.emit('sourceCleanup', { jobId: job.jobId, status: 'deleted', reason, deletedAt });
             return { cleaned: true, deletedAt, reason };
         } catch (error) {
             const attempt = (job.sourceCleanupAttempts || 0) + 1;
@@ -63,6 +67,8 @@ export class SourceCleanupService {
                     $inc: { sourceCleanupAttempts: 1 },
                 }
             );
+            operationalMetrics.increment('r2.delete.errors');
+            appEvents.emit('sourceCleanup', { jobId: job.jobId, status: 'retry', reason, nextRetryAt });
             return { cleaned: false, retryScheduled: true, nextRetryAt };
         }
     }

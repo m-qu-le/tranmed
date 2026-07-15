@@ -6,6 +6,44 @@ import { uploadBatchToCloud } from './cloudUploader.js';
 
 const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
 
+const serverBatchToTask = batch => ({
+  id: `server-${batch.batchId}`,
+  batchId: batch.batchId,
+  clientBatchId: batch.clientBatchId,
+  folderName: batch.folderName,
+  entries: [],
+  totalFiles: batch.totalFiles,
+  totalBytes: batch.totalBytes,
+  uploadedBytes: batch.confirmedBytes,
+  confirmedFiles: batch.confirmedFiles,
+  percent: batch.totalBytes > 0 ? Math.round(batch.confirmedBytes * 100 / batch.totalBytes) : 0,
+  canCloseClient: batch.canCloseClient,
+  status: batch.canCloseClient ? 'safe' : 'error',
+  progressMsg: batch.canCloseClient
+    ? '✅ Batch đã an toàn trên Cloud; trạng thái được phục hồi từ MongoDB.'
+    : '⚠️ Batch chưa upload đủ. Hãy chọn lại đúng các file còn thiếu để tiếp tục.',
+});
+
+const mergeServerBatches = (previous, batches) => {
+  const byBatchId = new Map(previous.filter(task => task.batchId).map(task => [task.batchId, task]));
+  for (const batch of batches) {
+    const restored = serverBatchToTask(batch);
+    const existing = byBatchId.get(batch.batchId);
+    byBatchId.set(batch.batchId, existing ? {
+      ...restored,
+      ...existing,
+      confirmedFiles: batch.confirmedFiles,
+      uploadedBytes: batch.confirmedBytes,
+      percent: batch.totalBytes > 0 ? Math.round(batch.confirmedBytes * 100 / batch.totalBytes) : existing.percent,
+      canCloseClient: batch.canCloseClient,
+      status: batch.canCloseClient ? 'safe' : existing.status,
+      progressMsg: batch.canCloseClient ? restored.progressMsg : existing.progressMsg,
+    } : restored);
+  }
+  const withoutBatchId = previous.filter(task => !task.batchId);
+  return [...withoutBatchId, ...byBatchId.values()];
+};
+
 // Ưu tiên đọc từ biến môi trường của Vercel/Vite, nếu không có sẽ tự động dùng máy chủ mặc định
 // -------------------------------------------------------------
 // COMPONENT CON: JOB CARD (Quản lý hiển thị cho từng file)
@@ -158,27 +196,7 @@ function App() {
         try {
           const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
           const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
-          const restoredTasks = batches.map(batch => ({
-            id: `server-${batch.batchId}`,
-            batchId: batch.batchId,
-            clientBatchId: batch.clientBatchId,
-            folderName: batch.folderName,
-            entries: [],
-            totalFiles: batch.totalFiles,
-            totalBytes: batch.totalBytes,
-            uploadedBytes: batch.confirmedBytes,
-            confirmedFiles: batch.confirmedFiles,
-            percent: batch.totalBytes > 0 ? Math.round(batch.confirmedBytes * 100 / batch.totalBytes) : 0,
-            canCloseClient: batch.canCloseClient,
-            status: batch.canCloseClient ? 'safe' : 'error',
-            progressMsg: batch.canCloseClient
-              ? '✅ Batch đã an toàn trên Cloud; trạng thái được phục hồi từ MongoDB.'
-              : '⚠️ Batch chưa upload đủ. Hãy chọn lại đúng các file còn thiếu để tiếp tục.',
-          }));
-          setLocalQueue(previous => {
-            const knownBatchIds = new Set(previous.map(task => task.batchId).filter(Boolean));
-            return [...previous, ...restoredTasks.filter(task => !knownBatchIds.has(task.batchId))];
-          });
+          setLocalQueue(previous => mergeServerBatches(previous, batches));
         } catch (batchError) {
           console.error('Không thể phục hồi upload batch:', batchError);
         }
@@ -210,9 +228,10 @@ function App() {
 
     const resync = async () => {
       try {
-        const [statusRes, jobsRes] = await Promise.all([
+        const [statusRes, jobsRes, batchesRes] = await Promise.all([
           api.get('/status', { timeout: 30_000 }),
           api.get('/jobs', { timeout: 30_000 }),
+          api.get('/upload-batches', { params: { limit: 20 }, timeout: 30_000 }),
         ]);
         setSysStatus(statusRes.data);
         const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
@@ -220,6 +239,8 @@ function App() {
           setJobs(jobItems.map(job => ({ ...job, logs: [], result: null })));
           setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
         }
+        const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
+        setLocalQueue(previous => mergeServerBatches(previous, batches));
       } catch (error) {
         console.error('Không thể đồng bộ lại SSE:', error);
       }
@@ -245,13 +266,37 @@ function App() {
 
       // Lắng nghe sự kiện hệ thống ngủ đông / thức dậy
       if (data.type === 'systemStatus') {
-        setSysStatus(data.data);
+        setSysStatus(previous => ({ ...previous, ...data.data }));
       }
       else if (data.type === 'status') {
         setJobs(prevJobs => prevJobs.map(job => 
           job.jobId === data.jobId ? { ...job, ...data } : job
         ));
-      } 
+      }
+      else if (data.type === 'batchStatus') {
+        setLocalQueue(previous => previous.map(task => {
+          if (task.batchId !== data.data?.batchId) return task;
+          const confirmedBytes = data.data.confirmedBytes ?? task.uploadedBytes;
+          const totalBytes = data.data.totalBytes ?? task.totalBytes;
+          const canCloseClient = Boolean(data.data.canCloseClient);
+          return {
+            ...task,
+            ...data.data,
+            uploadedBytes: confirmedBytes,
+            percent: totalBytes > 0 ? Math.round(confirmedBytes * 100 / totalBytes) : task.percent,
+            canCloseClient,
+            status: canCloseClient ? 'safe' : task.status,
+            progressMsg: canCloseClient
+              ? '✅ Đã xác nhận an toàn trên Cloud — có thể tắt máy.'
+              : `Cloud đã xác nhận ${data.data.confirmedFiles || 0}/${data.data.totalFiles || task.totalFiles} file.`,
+          };
+        }));
+      }
+      else if (data.type === 'sourceCleanup') {
+        setJobs(previous => previous.map(job => job.jobId === data.data?.jobId
+          ? { ...job, sourceCleanupStatus: data.data.status }
+          : job));
+      }
     };
 
     return () => eventSource.close();
@@ -581,6 +626,19 @@ function App() {
     return acc;
   }, {});
 
+  const dashboard = {
+    uploadingBatches: localQueue.filter(task => !task.canCloseClient).length,
+    uploadedBytes: localQueue.reduce((total, task) => total + (task.uploadedBytes || 0), 0),
+    totalBytes: localQueue.reduce((total, task) => total + (task.totalBytes || 0), 0),
+    confirmedFiles: localQueue.reduce((total, task) => total + (task.confirmedFiles || 0), 0),
+    totalFiles: localQueue.reduce((total, task) => total + (task.totalFiles || 0), 0),
+    safeFiles: localQueue.reduce((total, task) => total + (task.canCloseClient ? (task.confirmedFiles || 0) : 0), 0),
+    pendingFiles: jobs.filter(job => job.status === 'pending').length,
+    processingFiles: jobs.filter(job => job.status === 'processing').length,
+    completedFiles: jobs.filter(job => job.status === 'completed').length,
+    failedFiles: jobs.filter(job => job.status === 'failed').length,
+  };
+
   return (
     <div className="app-container">
       <header className="header">
@@ -589,9 +647,32 @@ function App() {
         <span className={`connection-status ${sseConnected ? 'connected' : 'disconnected'}`}>
           {sseConnected ? '● Đã kết nối realtime' : '● Đang kết nối lại...'}
         </span>
+        <span className={`storage-status ${sysStatus.storage?.available === true ? 'available' : sysStatus.storage?.available === false ? 'unavailable' : 'checking'}`} role="status">
+          {sysStatus.storage?.available === true
+            ? '☁ Cloud Storage sẵn sàng'
+            : sysStatus.storage?.available === false ? '☁ Cloud Storage chưa sẵn sàng' : '☁ Đang kiểm tra Cloud Storage'}
+          {sysStatus.storage?.cleanupBacklog > 0 && ` · ${sysStatus.storage.cleanupBacklog} file chờ dọn`}
+        </span>
       </header>
 
       <main className="main-content">
+        <section className="batch-dashboard" aria-label="Tổng quan tiến độ">
+          <article>
+            <strong>{dashboard.uploadingBatches}</strong>
+            <span>Batch đang upload lên R2</span>
+            <small>{formatMegabytes(dashboard.uploadedBytes)} / {formatMegabytes(dashboard.totalBytes)}</small>
+          </article>
+          <article>
+            <strong>{dashboard.safeFiles}</strong>
+            <span>File đã an toàn trên Cloud</span>
+            <small>Đã xác nhận {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
+          </article>
+          <article>
+            <strong>{dashboard.pendingFiles + dashboard.processingFiles}</strong>
+            <span>File Render đang dịch</span>
+            <small>Chờ {dashboard.pendingFiles} · xử lý {dashboard.processingFiles} · xong {dashboard.completedFiles} · lỗi {dashboard.failedFiles}</small>
+          </article>
+        </section>
         
         {/* BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
         {sysStatus.isHibernating && sysStatus.stats && (

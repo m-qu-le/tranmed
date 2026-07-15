@@ -12,6 +12,7 @@ import {
     deleteJob,
     bulkDeleteJobs,
     getSystemStatus,
+    getOperationalMetrics,
     forceWakeUpSystem, // [THÊM MỚI] Import hàm ép thức dậy
     deleteFolderQueue, // [THÊM DÒNG NÀY]
     prepareUploadBatch,
@@ -42,6 +43,7 @@ router.get('/upload-batches/:batchId', getUploadBatchStatus);
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
 router.get('/status', getSystemStatus); // Route lấy trạng thái hệ thống
+router.get('/metrics', getOperationalMetrics);
 router.get('/jobs/:jobId/result', getJobResult);
 router.get('/jobs/:jobId/download', downloadJobResult);
 

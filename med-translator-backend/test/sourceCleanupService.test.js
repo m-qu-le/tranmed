@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import test from 'node:test';
 import { SourceCleanupService } from '../src/services/sourceCleanupService.js';
+import { appEvents } from '../src/services/appEvents.js';
 
 function query(value) {
     return { sort() { return this; }, limit() { return this; }, lean: async () => value };
@@ -14,6 +16,7 @@ test('source cleanup deletes R2 first and only then marks the source deleted', a
         Job,
         r2: { async deleteObject(key) { deleted.push(key); } },
     });
+    const cleanupEvent = once(appEvents, 'sourceCleanup');
     const result = await service.cleanupSource({
         jobId: 'job-clean', storageProvider: 'r2', storageKey: 'incoming/batch/job.pdf',
         sourceState: 'ready', sourceCleanupAttempts: 0,
@@ -25,6 +28,10 @@ test('source cleanup deletes R2 first and only then marks the source deleted', a
     assert.equal(updates[1].update.$set.sourceState, 'deleted');
     assert.equal(updates[1].update.$set.sourceCleanupState, 'succeeded');
     assert.ok(updates[1].update.$set.sourceDeletedAt instanceof Date);
+    assert.deepEqual((await cleanupEvent)[0], {
+        jobId: 'job-clean', status: 'deleted', reason: 'completed',
+        deletedAt: updates[1].update.$set.sourceDeletedAt,
+    });
 });
 
 test('failed R2 deletion persists a redacted retry instead of claiming deletion', async () => {

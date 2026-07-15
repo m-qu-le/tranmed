@@ -23,7 +23,11 @@ describe('App Cloud Uploader', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.get.mockImplementation((url) => {
-      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/status')) return Promise.resolve({ data: {
+        isHibernating: false,
+        stats: null,
+        storage: { configured: true, available: true, cleanupBacklog: 0 },
+      } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
       return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
@@ -35,6 +39,8 @@ describe('App Cloud Uploader', () => {
     render(<App />)
     expect(screen.getByRole('heading', { name: /StudyMed Translator/i })).toBeInTheDocument()
     expect(await screen.findByText(/Chưa có tài liệu nào/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Cloud Storage sẵn sàng/i)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Tổng quan tiến độ' })).toBeInTheDocument()
   })
 
   it('sends a 200-file manifest to the cloud uploader and shows close-safe only after backend confirmation', async () => {
@@ -73,7 +79,7 @@ describe('App Cloud Uploader', () => {
 
     await waitFor(() => expect(uploadBatchToCloud).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/Đã lưu an toàn trên Cloud — có thể tắt máy/i)).toBeInTheDocument()
-    expect(screen.getByText(/xác nhận 200\/200/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/xác nhận 200\/200/i)).toHaveLength(2)
   })
 
   it('restores a close-safe batch from MongoDB without local File objects', async () => {
@@ -157,5 +163,45 @@ describe('App Cloud Uploader', () => {
     await waitFor(() => expect(uploadBatchToCloud).toHaveBeenCalledTimes(2))
     const retryIds = uploadBatchToCloud.mock.calls[1][0].entries.map(entry => entry.clientUploadId)
     expect(retryIds).toEqual(firstIds)
+  })
+
+  it('applies realtime batch confirmation and resyncs batches after SSE reconnect', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: {
+        isHibernating: false,
+        stats: null,
+        storage: { configured: true, available: true, cleanupBacklog: 0 },
+      } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [{
+        batchId: 'realtime-batch',
+        clientBatchId: 'realtime-client',
+        folderName: 'Thần kinh',
+        status: 'uploading',
+        totalFiles: 2,
+        totalBytes: 20,
+        confirmedFiles: 1,
+        confirmedBytes: 10,
+        canCloseClient: false,
+      }] } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+    expect(await screen.findByText(/Batch chưa upload đủ/i)).toBeInTheDocument()
+
+    await act(async () => {
+      MockEventSource.instance.onmessage({ data: JSON.stringify({
+        type: 'batchStatus',
+        data: {
+          batchId: 'realtime-batch', totalFiles: 2, confirmedFiles: 2,
+          confirmedBytes: 20, canCloseClient: true, status: 'ready',
+        },
+      }) })
+    })
+    expect(await screen.findByText(/Đã xác nhận an toàn trên Cloud/i)).toBeInTheDocument()
+    expect(screen.getByText(/Đã lưu an toàn trên Cloud — có thể tắt máy/i)).toBeInTheDocument()
+
+    await act(async () => MockEventSource.instance.onopen())
+    await waitFor(() => expect(api.get.mock.calls.filter(([url]) => url.endsWith('/upload-batches')).length).toBeGreaterThanOrEqual(2))
   })
 })

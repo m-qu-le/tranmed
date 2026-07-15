@@ -88,6 +88,39 @@ body {
   font-weight: 600;
 }
 
+.storage-status {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.storage-status.available { color: #16803a; }
+.storage-status.unavailable { color: #9e0a0a; }
+.storage-status.checking { color: var(--text-olive); }
+
+.batch-dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 auto 24px;
+  max-width: 850px;
+}
+
+.batch-dashboard article {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px;
+  border: 1px solid var(--btn-light);
+  border-radius: 16px;
+  background: var(--bg-white);
+}
+
+.batch-dashboard strong { font-size: 26px; color: #174c85; }
+.batch-dashboard span { color: var(--text-olive); font-size: 13px; }
+.batch-dashboard small { color: var(--text-olive); font-size: 11px; }
+
 .connection-status.connected { color: #16803a; }
 .connection-status.disconnected { color: #9e5b00; }
 
@@ -412,6 +445,7 @@ body {
 
 /* Breakpoints cho di động */
 @media (max-width: 576px) {
+  .batch-dashboard { grid-template-columns: 1fr; }
   .upload-section {
     flex-direction: column;
   }

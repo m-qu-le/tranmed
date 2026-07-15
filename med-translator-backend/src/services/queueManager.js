@@ -421,8 +421,10 @@ export class QueueManager extends EventEmitter {
     }
 
     async processClaimedJob(job, signal) {
+        const jobStartedAt = Date.now();
         const emitLog = (msg) => {
-            console.log(`[${job.originalName}] ${msg}`);
+            const safeStorageKey = job.storageProvider === 'r2' ? job.storageKey : 'legacy-local';
+            console.log(`[batchId=${job.uploadBatchId || 'legacy'} jobId=${job.jobId} storageKey=${safeStorageKey} attempt=${job.attemptCount || 1} elapsedMs=${Date.now() - jobStartedAt}] ${msg}`);
             this.emit('jobLog', { jobId: job.jobId, msg });
         };
 

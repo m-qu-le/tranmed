@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto';
 import { createIncomingStorageKey } from './sourceKeyService.js';
 import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 import { redactError } from '../utils/redactSecrets.js';
+import { appEvents } from './appEvents.js';
+import { operationalMetrics } from './operationalMetrics.js';
 
 export class UploadBatchError extends Error {
     constructor(code, message, status = 400) {
@@ -98,6 +100,7 @@ export class UploadBatchService {
     }
 
     async prepareBatch(payload) {
+        operationalMetrics.increment('upload.prepare.requests');
         const manifest = validateUploadManifest(payload, this.config);
         const existing = await this.UploadBatch.findOne({ clientBatchId: manifest.clientBatchId }).lean();
         if (existing) return this.getPreparedResponse(existing);
@@ -144,12 +147,22 @@ export class UploadBatchService {
             throw error;
         }
 
-        return this.getPreparedResponse(batch.toObject ? batch.toObject() : batch);
+        const response = await this.getPreparedResponse(batch.toObject ? batch.toObject() : batch);
+        appEvents.emit('batchUpdated', { batchId, status: 'uploading', totalFiles: rows.length, confirmedFiles: 0, canCloseClient: false });
+        return response;
     }
 
     async confirmOne(job) {
         if (job.status !== 'uploading') return { jobId: job.jobId, status: job.status, alreadyConfirmed: true };
-        const metadata = await this.r2.headObject(job.storageKey);
+        const startedAt = Date.now();
+        let metadata;
+        try {
+            metadata = await this.r2.headObject(job.storageKey);
+            operationalMetrics.observe('r2.head.latency', Date.now() - startedAt);
+        } catch (error) {
+            operationalMetrics.increment('r2.head.errors');
+            throw error;
+        }
         if (metadata.contentLength !== job.sourceSize) {
             throw new UploadBatchError('SOURCE_SIZE_MISMATCH', `Dung lượng object không khớp cho job ${job.jobId}.`, 409);
         }
@@ -199,10 +212,13 @@ export class UploadBatchService {
                 },
             }
         );
-        return { confirmedFiles, confirmedBytes, failedFiles, skippedFiles, status, canCloseClient: ready };
+        const progress = { confirmedFiles, confirmedBytes, failedFiles, skippedFiles, status, canCloseClient: ready };
+        appEvents.emit('batchUpdated', { batchId: batch.batchId, totalFiles: batch.totalFiles, ...progress });
+        return progress;
     }
 
     async confirmBatch(batchId, requestedJobIds) {
+        operationalMetrics.increment('upload.confirm.requests');
         if (!Array.isArray(requestedJobIds) || requestedJobIds.length === 0 || requestedJobIds.length > this.config.maxFiles) {
             throw new UploadBatchError('INVALID_CONFIRM_LIST', 'Danh sách confirm không hợp lệ.');
         }
@@ -317,6 +333,8 @@ export class UploadBatchService {
             if (batch) await this.refreshBatch(batch);
         }
         const expired = await this.expireStaleUploads(limit);
+        operationalMetrics.increment('upload.reconcile.scanned', jobs.length);
+        operationalMetrics.increment('upload.reconcile.confirmed', confirmed);
         return { scanned: jobs.length, confirmed, expired };
     }
 

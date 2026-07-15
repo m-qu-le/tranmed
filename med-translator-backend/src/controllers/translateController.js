@@ -1,8 +1,12 @@
 import { translationQueue } from '../services/queueManager.js';
 import TranslationChunk from '../models/translationChunkModel.js';
 import mongoose from 'mongoose';
-import { uploadBatchService } from '../services/runtimeServices.js';
+import Job from '../models/jobModel.js';
+import UploadBatch from '../models/uploadBatchModel.js';
+import { r2Service, uploadBatchService } from '../services/runtimeServices.js';
 import { UploadBatchError } from '../services/uploadBatchService.js';
+import { appEvents } from '../services/appEvents.js';
+import { operationalMetrics } from '../services/operationalMetrics.js';
 
 function sendUploadBatchError(res, error) {
     if (error instanceof UploadBatchError) {
@@ -15,6 +19,7 @@ export const prepareUploadBatch = async (req, res) => {
     try {
         res.status(201).json(await uploadBatchService.prepareBatch(req.body));
     } catch (error) {
+        operationalMetrics.increment('upload.prepare.errors');
         try { return sendUploadBatchError(res, error); }
         catch { return res.status(500).json({ error: 'Không thể chuẩn bị upload batch.' }); }
     }
@@ -29,6 +34,7 @@ export const confirmUploadBatch = async (req, res) => {
         if (result.items.some(item => item.status === 'pending')) void translationQueue.startWorker();
         res.status(200).json(result);
     } catch (error) {
+        operationalMetrics.increment('upload.confirm.errors');
         try { return sendUploadBatchError(res, error); }
         catch { return res.status(500).json({ error: 'Không thể xác nhận upload batch.' }); }
     }
@@ -191,14 +197,26 @@ export const streamLogs = (req, res) => {
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
+    const onBatchUpdated = (batch) => {
+        res.write(`data: ${JSON.stringify({ type: 'batchStatus', data: batch })}\n\n`);
+    };
+
+    const onSourceCleanup = (cleanup) => {
+        res.write(`data: ${JSON.stringify({ type: 'sourceCleanup', data: cleanup })}\n\n`);
+    };
+
     translationQueue.on('systemStatusChanged', onSystemStatusChanged);
     translationQueue.on('jobUpdated', onJobUpdated);
     translationQueue.on('jobLog', onJobLog);
+    appEvents.on('batchUpdated', onBatchUpdated);
+    appEvents.on('sourceCleanup', onSourceCleanup);
 
     req.on('close', () => {
         translationQueue.off('systemStatusChanged', onSystemStatusChanged); // Bổ sung off event
         translationQueue.off('jobUpdated', onJobUpdated);
         translationQueue.off('jobLog', onJobLog);
+        appEvents.off('batchUpdated', onBatchUpdated);
+        appEvents.off('sourceCleanup', onSourceCleanup);
         clearInterval(heartbeat); // Ngăn rò rỉ bộ nhớ (Memory Leak)
         res.end();
     });
@@ -247,10 +265,31 @@ export const bulkDeleteJobs = async (req, res) => {
 };
 
 // API 7: Lấy trạng thái hệ thống (Kiểm tra xem có đang ngủ đông không)
-export const getSystemStatus = (req, res) => {
+export const getSystemStatus = async (req, res) => {
     try {
-        const status = translationQueue.getSystemStatus();
-        res.status(200).json(status);
+        const [readiness, cleanupBacklog, uploadBacklog] = await Promise.all([
+            r2Service.checkReadiness().catch(() => ({ configured: true, available: false })),
+            Job.countDocuments({ sourceCleanupState: { $in: ['pending', 'retry'] } }),
+            UploadBatch.countDocuments({ status: { $in: ['uploading', 'partial'] } }),
+        ]);
+        res.status(200).json({
+            ...translationQueue.getSystemStatus(),
+            storage: {
+                configured: readiness.configured,
+                available: readiness.available,
+                cleanupBacklog,
+                uploadBacklog,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+export const getOperationalMetrics = async (req, res) => {
+    try {
+        const cleanupBacklog = await Job.countDocuments({ sourceCleanupState: { $in: ['pending', 'retry'] } });
+        res.status(200).json({ ...operationalMetrics.snapshot(), gauges: { cleanupBacklog } });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

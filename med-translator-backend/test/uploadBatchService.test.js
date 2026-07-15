@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import test from 'node:test';
 import { UploadBatchService, validateUploadManifest } from '../src/services/uploadBatchService.js';
+import { appEvents } from '../src/services/appEvents.js';
 
 const config = {
     maxFiles: 500,
@@ -79,6 +81,7 @@ test('prepare creates 200 stable R2 jobs and repeated prepare reissues URLs with
         })),
     };
 
+    const batchEvent = once(appEvents, 'batchUpdated');
     const first = await service.prepareBatch(manifest);
     const second = await service.prepareBatch(manifest);
     assert.equal(first.items.length, 200);
@@ -88,6 +91,7 @@ test('prepare creates 200 stable R2 jobs and repeated prepare reissues URLs with
     assert.equal(jobs.some(job => job.storageKey.includes('Tên trùng')), false);
     assert.equal(insertCalls, 1);
     assert.equal(presignCalls, 400);
+    assert.equal((await batchEvent)[0].totalFiles, 200);
 });
 
 test('confirm verifies size and ETag once, then remains idempotent', async () => {

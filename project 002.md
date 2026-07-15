@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G7 hoàn tất cục bộ; bước tiếp theo là G8 UX/realtime/observability |
+| Trạng thái tổng | G1–G8 hoàn tất cục bộ; bước tiếp theo là G9 test tải, lỗi và hiệu năng |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -107,7 +107,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G5 | Frontend Cloud Uploader | Hoàn thành code + mock | Upload song song toàn batch; chỉ báo có thể tắt máy sau cloud confirmation |
 | G6 | Worker tải source từ R2 và phục hồi restart | Hoàn thành code + test | Restart làm worker tải lại từ R2, không còn `FILE_MISSING` do disk Render |
 | G7 | Xóa, hủy, retry và garbage collection | Hoàn thành code + reconciliation | Không có object R2 mồ côi ngoài retention window |
-| G8 | UX, realtime và quan sát vận hành | Chưa làm | UI phân biệt upload cloud/dịch; reconnect resync đúng |
+| G8 | UX, realtime và quan sát vận hành | Hoàn thành cục bộ | UI phân biệt upload cloud/dịch; reconnect resync đúng |
 | G9 | Test tải, lỗi và hiệu năng | Chưa làm | Batch 200 file mock đạt; batch production đại diện đạt |
 | G10 | Migration, deploy và theo dõi production | Chưa làm | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
 
@@ -372,15 +372,15 @@ Mục tiêu: MongoDB, R2, disk Render và TranslationChunk có semantics cleanup
 
 Mục tiêu: người dùng biết chính xác dữ liệu còn trên máy, đã lên cloud hay đang được dịch.
 
-- [ ] **P002-G8-S01 — Tách ba progress.** `Đang upload lên R2`, `Đã an toàn trên Cloud`, `Render đang dịch`; không gộp thành một trạng thái mơ hồ.
-- [ ] **P002-G8-S02 — Banner đóng máy.** Hiển thị nổi bật thời điểm batch có thể đóng tab; giải thích việc dịch tiếp tục trên Render.
-- [ ] **P002-G8-S03 — Batch dashboard.** Tổng/confirmed/pending/processing/completed/failed và byte upload.
-- [ ] **P002-G8-S04 — SSE event mới.** Batch/item upload confirmation và source cleanup; parse/reconnect/resync như P001.
-- [ ] **P002-G8-S05 — R2 system status.** Hiển thị storage configured/available bằng boolean và thông báo công khai; không trả bucket credential/presigned URL cũ.
-- [ ] **P002-G8-S06 — Log correlation.** `batchId`, `jobId`, `storageKey` dạng an toàn, attempt và latency; không log query signature.
-- [ ] **P002-G8-S07 — Metrics.** Upload prepare/confirm error, R2 HEAD/GET/DELETE error, download byte/time, cleanup backlog và object missing.
-- [ ] **P002-G8-S08 — Filename/folder.** Unicode, `#`, `%`, trùng tên và nhiều folder không ảnh hưởng object key hoặc download output.
-- [ ] **P002-G8-S09 — Accessibility/responsive.** Progress và thông báo quan trọng đọc được bằng keyboard/screen reader và trên mobile.
+- [x] **P002-G8-S01 — Tách ba progress.** `Đang upload lên R2`, `Đã an toàn trên Cloud`, `Render đang dịch`; không gộp thành một trạng thái mơ hồ.
+- [x] **P002-G8-S02 — Banner đóng máy.** Hiển thị nổi bật thời điểm batch có thể đóng tab; giải thích việc dịch tiếp tục trên Render.
+- [x] **P002-G8-S03 — Batch dashboard.** Tổng/confirmed/pending/processing/completed/failed và byte upload.
+- [x] **P002-G8-S04 — SSE event mới.** Batch/item upload confirmation và source cleanup; parse/reconnect/resync như P001.
+- [x] **P002-G8-S05 — R2 system status.** Hiển thị storage configured/available bằng boolean và thông báo công khai; không trả bucket credential/presigned URL cũ.
+- [x] **P002-G8-S06 — Log correlation.** `batchId`, `jobId`, `storageKey` dạng an toàn, attempt và latency; không log query signature.
+- [x] **P002-G8-S07 — Metrics.** Upload prepare/confirm error, R2 HEAD/GET/DELETE error, download byte/time, cleanup backlog và object missing.
+- [x] **P002-G8-S08 — Filename/folder.** Unicode, `#`, `%`, trùng tên và nhiều folder không ảnh hưởng object key hoặc download output.
+- [x] **P002-G8-S09 — Accessibility/responsive.** Progress và thông báo quan trọng đọc được bằng keyboard/screen reader và trên mobile.
 
 **Cổng G8:** đóng/reopen trang sau `canCloseClient=true` vẫn thấy đúng batch; trạng thái R2/worker không lộ secret.
 
@@ -509,6 +509,8 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | 15-07-2026 | G7 / cleanup matrix | Backend Node test | DELETE-before-mark, retry redaction/persistence, restart sweeper, abandon và stale upload expiry | Backend 36/36, audit 0 |
 | 15-07-2026 | G7 / reconciliation | `npm run reconcile:r2` | 0 R2 job, 0 object, 0 missing, 0 orphan, 0 byte; read-only | Không DELETE/UPDATE |
 | 15-07-2026 | G7 / lifecycle | Dashboard G1 + S3 read attempt | Rule `incoming/` 3 ngày đã được chủ dự án xác nhận ở G1; Object Read/Write token trả AccessDenied khi đọc bucket lifecycle | Giữ least-privilege, script cảnh báo nếu không xác minh API được |
+| 15-07-2026 | G8 / realtime + resync | Backend Node test + React Testing Library | SSE phát batch/source cleanup; reconnect đọc lại status/jobs/batches từ Mongo; batch close-safe cập nhật realtime | Backend 37/37, frontend 9/9 |
+| 15-07-2026 | G8 / UX + observability | Frontend lint/build; metrics unit test; review response/log | Dashboard ba giai đoạn responsive; R2 status/backlog và metrics tổng hợp không chứa credential/presigned URL | Lint/build đạt; diff/secret scan sạch |
 
 ## 10. Nhật ký thay đổi
 
@@ -516,12 +518,13 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | --- | --- | --- | --- | --- | --- |
 | 15-07-2026 | P002-PLAN | Chưa commit | Lập kế hoạch upload bền vững qua Cloudflare R2 | Codex | Hoàn thành tài liệu; chờ G1 |
 | 15-07-2026 | P002-G1-S08 | Chưa commit | Ghi nhận cấu hình R2, hoàn thiện `R2_ACCOUNT_ID` trong backend `.env` và kiểm tra không lộ giá trị | Codex | Chờ rotate credential trước G2 |
-| 15-07-2026 | P002-G2-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Thêm AWS SDK, env fail-fast, `r2Service`, streaming download, smoke, redaction và readiness; rollback `ae14db7` | Codex | Hoàn thành cục bộ, smoke thật đạt |
-| 15-07-2026 | P002-G3-S01..S09 | Đang làm trên `feat/project-002-r2-upload` | Schema Job additive, UploadBatch, source key, claim invariant, index và migration P002 dry-run/idempotent | Codex | Hoàn thành code; production migration để G10 |
-| 15-07-2026 | P002-G4-S01..S11 | Chưa commit | API prepare/confirm/status, manifest limits, scoped presign, reconciler, capacity split và mock 200 file | Codex | Hoàn thành code + smoke thật |
-| 15-07-2026 | P002-G5-S01..S12 | Chưa commit | Cloud upload pool, byte progress, retry/refresh URL, chunk confirm, close-safe banner, resync và abandon file lỗi | Codex | Hoàn thành code + mock 200 file |
-| 15-07-2026 | P002-G6-S01..S10 | Chưa commit | Source resolver legacy/R2, atomic stream, byte/magic validation, disk admission, local cleanup và error taxonomy | Codex | Hoàn thành code + test 30 MB |
-| 15-07-2026 | P002-G7-S01..S10 | Chưa commit | Source cleanup tập trung, persistent retry sweeper, orphan expiry, batch cleanup và reconciliation report | Codex | Hoàn thành code; bucket hiện sạch |
+| 15-07-2026 | P002-G2-S01..S09 | `1309036` | Thêm AWS SDK, env fail-fast, `r2Service`, streaming download, smoke, redaction và readiness; rollback `ae14db7` | Codex | Hoàn thành cục bộ, smoke thật đạt |
+| 15-07-2026 | P002-G3-S01..S09 | `1309036` | Schema Job additive, UploadBatch, source key, claim invariant, index và migration P002 dry-run/idempotent | Codex | Hoàn thành code; production migration để G10 |
+| 15-07-2026 | P002-G4-S01..S11 | `6b8a7af` | API prepare/confirm/status, manifest limits, scoped presign, reconciler, capacity split và mock 200 file | Codex | Hoàn thành code + smoke thật |
+| 15-07-2026 | P002-G5-S01..S12 | `0a42f5d` | Cloud upload pool, byte progress, retry/refresh URL, chunk confirm, close-safe banner, resync và abandon file lỗi | Codex | Hoàn thành code + mock 200 file |
+| 15-07-2026 | P002-G6-S01..S10 | `1b74665` | Source resolver legacy/R2, atomic stream, byte/magic validation, disk admission, local cleanup và error taxonomy | Codex | Hoàn thành code + test 30 MB |
+| 15-07-2026 | P002-G7-S01..S10 | `5b6ed9f` | Source cleanup tập trung, persistent retry sweeper, orphan expiry, batch cleanup và reconciliation report | Codex | Hoàn thành code; bucket hiện sạch |
+| 15-07-2026 | P002-G8-S01..S09 | Checkpoint G8 (commit này) | Dashboard ba giai đoạn, R2 status/metrics, SSE batch/cleanup, correlation log và reconnect resync Mongo | Codex | Hoàn thành cục bộ; test/lint/build đạt |
 
 ## 11. Nhật ký vấn đề và quyết định
 

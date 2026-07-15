@@ -3,6 +3,7 @@ import path from 'path';
 import { UPLOAD_DIR } from '../config/env.js';
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
 import { assertWorkerDiskCapacity } from './storageService.js';
+import { operationalMetrics } from './operationalMetrics.js';
 
 function mapR2Error(error) {
     if (error instanceof ProcessingError) return error;
@@ -84,11 +85,20 @@ export class SourceService {
             });
         }
         try {
+            const startedAt = Date.now();
             await this.r2.downloadToFile({ key: job.storageKey, destinationPath: partPath });
+            operationalMetrics.observe('r2.download.latency', Date.now() - startedAt);
+            operationalMetrics.increment('r2.download.bytes', job.sourceSize);
             await validateDownloadedPdf(partPath, job.sourceSize);
             await fs.rename(partPath, finalPath);
             return { filePath: finalPath, temporary: true };
         } catch (error) {
+            operationalMetrics.increment('r2.download.errors');
+            const status = error?.$metadata?.httpStatusCode || error?.statusCode;
+            const name = error?.name || error?.Code || error?.code;
+            if (status === 404 || ['NotFound', 'NoSuchKey'].includes(name)) {
+                operationalMetrics.increment('r2.object.missing');
+            }
             await fs.unlink(partPath).catch(() => {});
             throw mapR2Error(error);
         }
