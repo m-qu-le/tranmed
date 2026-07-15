@@ -52,4 +52,44 @@ npm run migrate:p002
 
 P002 upload trực tiếp PDF vào R2 bằng presigned URL, MongoDB giữ trạng thái queue, còn Render chỉ stream một source về disk tạm khi xử lý. Các lệnh `benchmark:p002-source`, `benchmark:p002-upload` và `reconcile:r2` lần lượt kiểm tra streaming, throughput R2 và object mồ côi.
 
+Trước deploy P003, sao lưu ra ngoài repository và chạy migration additive:
+
+```powershell
+$env:P003_BACKUP_DIR='D:\duong-dan-backup'
+npm run backup:p003
+npm run migrate:p003:dry
+npm run migrate:p003
+```
+
+P003 không rewrite nội dung cũ. Migration chỉ đếm dữ liệu và đồng bộ index của `Job`/`TranslationChunk`; job legacy không có quality artifact vẫn preview/download như trước.
+
+## Quality pipeline P003
+
+Khi `TRANSLATION_PIPELINE_MODE=quality`, mỗi chunk 2 trang chạy tuần tự:
+
+```text
+translate → medical_audit → revise → verify
+                                  └ FAIL critical/major → repair → reverify
+                                                               └ FAIL → needs_review
+```
+
+- Tối đa 2 chunk chạy đồng thời; trong một chunk không chạy stage song song.
+- Mỗi stage persist atomically cùng `pipelineVersion`; restart tiếp tục từ stage kế tiếp.
+- Artifact hiện dùng pipeline version `p003-v1` và prompt version `p003-prompts-v1`; đổi version sẽ reset riêng chunk dở, không rewrite chunk terminal.
+- Chỉ `content` cuối được trả qua result/download API. Draft, audit và verify report không public.
+- `repairCount <= 1`; `needs_review` vẫn hoàn thành job nhưng UI cảnh báo chunk và page range.
+- Scheduler xoay 7 key theo request, giữ headroom 12 RPM/200k TPM/400 RPD mỗi key index, chuyển key ngay khi 429/invalid JSON/5xx và loại key 401/403.
+- `/api/translate/metrics` trả counter key index, không trả giá trị key hay nội dung tài liệu.
+
+Benchmark và fixture audit:
+
+```powershell
+npm run benchmark:p003:batch -- --dry-run
+npm run benchmark:p003:batch -- --concurrency 4
+npm run benchmark:p003:analyze
+npm run benchmark:p003:audit-fixtures
+```
+
+Raw artifact nằm trong `.p003-local/` ignored. Báo cáo tổng hợp ở `cline_docs/project-003-benchmark-review.md`. Rollback không cần migration ngược: đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart; job mới quay về pipeline cũ, artifact quality đã persist không bị rewrite.
+
 Sau deploy production, kiểm tra `/api/readiness`, chạy một batch close-safe qua restart có kiểm soát, rồi dùng `npm run reconcile:r2` xác nhận không còn object mồ côi.
