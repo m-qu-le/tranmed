@@ -313,8 +313,8 @@ Tên `backend/` và `frontend/` trong bảng là viết gọn; đường dẫn t
 
 | Thời gian | Mã bước | Commit/PR | Nội dung | Người thực hiện | Kết quả |
 | --- | --- | --- | --- | --- | --- |
-| 15-07-2026 | P001-PLAN | Chưa commit | Tạo kế hoạch đại tu | Codex | Hoàn thành tài liệu |
-| 15-07-2026 | P001-G0…G8 | Chưa commit | Đại tu queue, retry/cancel, chunk storage, disk guard, Local Feeder, API/SSE và test | Codex | Hoàn thành code lõi; giữ G9 production mở |
+| 15-07-2026 | P001-PLAN | `f024643` | Tạo kế hoạch đại tu | Codex | Hoàn thành tài liệu |
+| 15-07-2026 | P001-G0…G8 | `f024643` | Đại tu queue, retry/cancel, chunk storage, disk guard, Local Feeder, API/SSE và test | Codex | Hoàn thành code lõi; giữ G9 production mở |
 
 ## 9. Bằng chứng kiểm thử
 
