@@ -47,3 +47,5 @@ npm run migrate:p002
 ```
 
 P002 upload trực tiếp PDF vào R2 bằng presigned URL, MongoDB giữ trạng thái queue, còn Render chỉ stream một source về disk tạm khi xử lý. Các lệnh `benchmark:p002-source`, `benchmark:p002-upload` và `reconcile:r2` lần lượt kiểm tra streaming, throughput R2 và object mồ côi.
+
+Sau deploy production, kiểm tra `/api/readiness`, chạy một batch close-safe qua restart có kiểm soát, rồi dùng `npm run reconcile:r2` xác nhận không còn object mồ côi.
