@@ -68,7 +68,7 @@ export const QUALITY_REPORT_JSON_SCHEMA = Object.freeze({
             required: ['status', 'items'],
             properties: {
                 status: { type: 'string', enum: ['COMPLETE', 'INCOMPLETE'] },
-                items: { type: 'array', minItems: 1, maxItems: 40, items: COVERAGE_ITEM_SCHEMA },
+                items: { type: 'array', items: COVERAGE_ITEM_SCHEMA },
             },
         },
     },

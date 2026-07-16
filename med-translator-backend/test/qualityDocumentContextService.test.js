@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { QualityDocumentContextService } from '../src/services/qualityDocumentContextService.js';
-import { isQualityDocumentContext, QUALITY_DOCUMENT_CONTEXT_VERSION } from '../src/services/qualityDocumentContext.js';
+import {
+    DOCUMENT_CONTEXT_JSON_SCHEMA,
+    isQualityDocumentContext,
+    QUALITY_DOCUMENT_CONTEXT_VERSION,
+} from '../src/services/qualityDocumentContext.js';
 
 const context = {
     documentFocus: 'Thần kinh học lâm sàng',
@@ -32,6 +36,10 @@ test('document context rejects a superficial passport without enough document-sp
     assert.equal(isQualityDocumentContext({
         documentFocus: 'Y học', terminology: [], abbreviations: [], consistencyRules: [], highRiskNotes: [],
     }), false);
+});
+
+test('document context schema leaves array bounds to the business validator for Gemini compatibility', () => {
+    assert.doesNotMatch(JSON.stringify(DOCUMENT_CONTEXT_JSON_SCHEMA), /minItems|maxItems/);
 });
 
 test('document context is persisted once and reused on resume without another full-PDF call', async () => {

@@ -26,6 +26,7 @@ const majorError = {
 };
 
 test('quality report validator enforces PASS/FAIL consistency and required evidence', () => {
+    assert.doesNotMatch(JSON.stringify(QUALITY_REPORT_JSON_SCHEMA), /minItems|maxItems/);
     assert.equal(isQualityReport({ status: 'PASS', errors: [], coverage: completeCoverage }), true);
     assert.equal(isQualityReport({ status: 'FAIL', errors: [majorError], coverage: completeCoverage }), true);
     assert.equal(isQualityReport({ status: 'PASS', errors: [majorError], coverage: completeCoverage }), false);

@@ -28,10 +28,10 @@ export const DOCUMENT_CONTEXT_JSON_SCHEMA = Object.freeze({
     required: ['documentFocus', 'terminology', 'abbreviations', 'consistencyRules', 'highRiskNotes'],
     properties: {
         documentFocus: { type: 'string' },
-        terminology: { type: 'array', maxItems: 80, items: TERM_SCHEMA },
-        abbreviations: { type: 'array', maxItems: 50, items: TERM_SCHEMA },
-        consistencyRules: { type: 'array', maxItems: 40, items: RULE_SCHEMA },
-        highRiskNotes: { type: 'array', maxItems: 30, items: { type: 'string' } },
+        terminology: { type: 'array', items: TERM_SCHEMA },
+        abbreviations: { type: 'array', items: TERM_SCHEMA },
+        consistencyRules: { type: 'array', items: RULE_SCHEMA },
+        highRiskNotes: { type: 'array', items: { type: 'string' } },
     },
 });
 
