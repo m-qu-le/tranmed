@@ -78,18 +78,23 @@ translate → medical_audit → revise → verify
 - Artifact hiện dùng pipeline version `p003-v1` và prompt version `p003-prompts-v1`; đổi version sẽ reset riêng chunk dở, không rewrite chunk terminal.
 - Chỉ `content` cuối được trả qua result/download API. Draft, audit và verify report không public.
 - `repairCount <= 1`; `needs_review` vẫn hoàn thành job nhưng UI cảnh báo chunk và page range.
+- Revision/repair phải giữ tối thiểu 80% ký tự có nghĩa của bản trước. Output co rút bất thường bị xem là response lỗi để xoay key; nếu repair vẫn không hợp lệ sau rotation, pipeline giữ bản revised đầy đủ và đặt `needs_review`.
 - Scheduler xoay 7 key theo request, giữ headroom 12 RPM/200k TPM/400 RPD mỗi key index, chuyển key ngay khi 429/invalid JSON/5xx và loại key 401/403.
 - `/api/translate/metrics` trả counter key index, không trả giá trị key hay nội dung tài liệu.
 
 Benchmark và fixture audit:
 
 ```powershell
-npm run benchmark:p003:batch -- --dry-run
-npm run benchmark:p003:batch -- --concurrency 4
+npm run benchmark:p003:batch:dry
+npm run benchmark:p003:batch
 npm run benchmark:p003:analyze
 npm run benchmark:p003:audit-fixtures
+npm run benchmark:p003:readiness
+npm run benchmark:p003:full:dry
+npm run benchmark:p003:full
+npm run benchmark:p003:full:analyze
 ```
 
-Raw artifact nằm trong `.p003-local/` ignored. Báo cáo tổng hợp ở `cline_docs/project-003-benchmark-review.md`. Rollback không cần migration ngược: đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart; job mới quay về pipeline cũ, artifact quality đã persist không bị rewrite.
+Raw artifact nằm trong `.p003-local/` ignored. Full-corpus runner checkpoint sau từng chunk và mặc định skip artifact đúng version/input/coverage khi resume. Báo cáo tổng hợp ở `cline_docs/project-003-benchmark-review.md`, `cline_docs/project-003-performance-resource.md` và `cline_docs/project-003-full-corpus-report.md`. Rollback không cần migration ngược: đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart; job mới quay về pipeline cũ, artifact quality đã persist không bị rewrite.
 
 Sau deploy production, kiểm tra `/api/readiness`, chạy một batch close-safe qua restart có kiểm soát, rồi dùng `npm run reconcile:r2` xác nhận không còn object mồ côi.

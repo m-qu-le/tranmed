@@ -29,3 +29,45 @@ test('expired leases are atomically returned to pending with the old processing 
     assert.equal(capturedUpdate.$set.leaseExpiresAt, null);
     assert.equal(capturedUpdate.$set.nextRetryAt instanceof Date, true);
 });
+
+test('lease heartbeat extends only the active processing token by five minutes', async context => {
+    const originalUpdateOne = Job.updateOne;
+    const originalSetInterval = global.setInterval;
+    const originalClearInterval = global.clearInterval;
+    let heartbeatCallback;
+    let heartbeatDelay;
+    let capturedFilter;
+    let capturedUpdate;
+
+    global.setInterval = (callback, delay) => {
+        heartbeatCallback = callback;
+        heartbeatDelay = delay;
+        return 123;
+    };
+    global.clearInterval = () => {};
+    Job.updateOne = async (filter, update) => {
+        capturedFilter = filter;
+        capturedUpdate = update;
+        return { matchedCount: 1 };
+    };
+    context.after(() => {
+        Job.updateOne = originalUpdateOne;
+        global.setInterval = originalSetInterval;
+        global.clearInterval = originalClearInterval;
+    });
+
+    const before = Date.now();
+    const timer = new QueueManager().createLeaseHeartbeat('job-heartbeat', 'token-current');
+    assert.equal(timer, 123);
+    assert.equal(heartbeatDelay, 60_000);
+    heartbeatCallback();
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(capturedFilter, {
+        jobId: 'job-heartbeat',
+        status: 'processing',
+        processingToken: 'token-current',
+    });
+    const extensionMs = capturedUpdate.$set.leaseExpiresAt.getTime() - before;
+    assert.ok(extensionMs >= 300_000 && extensionMs < 301_000);
+});

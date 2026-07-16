@@ -419,6 +419,9 @@ Rollback:
 | 15-07-2026 | E010 | Production Mongo đã backup trước migration, backup giải nén/parse được; migration P003 additive/idempotent chạy với `modifiedCount=0`, index được đảm bảo và dry-run sau migration không đổi | Backup ngoài repo `Tran-backups/p003-before-migration-2026-07-15T18-30-09-916Z.ejson.gz`, SHA-256 `513a038a6f1dac6c98bab8830d97430db91f3fbe2bc4a8804a11e2879ad607c4` |
 | 16-07-2026 | D008 | Giữ production mặc định `legacy`; chưa bật quality cho đến khi chủ dự án duyệt blind review và rollout canary đạt | Quyết định an toàn tạm thời; chưa deploy/push trong phiên này |
 | 16-07-2026 | E011 | Smoke end-to-end quality một PDF 1 trang dùng Mongo/R2 thật nhưng namespace cô lập: 6 stage persisted, PASS sau 1 repair, preview/download khớp, R2 source deleted, Mongo database dropped, tổng 90.270 ms | `cline_docs/project-003-quality-smoke-report.json`; không cần chạy lại khi quota đang thấp |
+| 16-07-2026 | E012 | Case Asthma cho thấy repair cũ co từ khoảng 13,9 KB xuống 5,4 KB dù `STOP`; coverage guard 80% đã rotate output cụt, rerun giữ 13,7 KB và vẫn gắn `needs_review` cho 2 lỗi major | `cline_docs/project-003-asthma-independent-review.md`, benchmark report cập nhật và commit `8826ad0` |
+| 16-07-2026 | E013 | Phân tích không gọi Gemini: B4 trung bình 62.389 ms/chunk, ngoại suy 191 chunk trên 2 lane khoảng 99,3 phút; request tối đa 27,5 giây; PDF lớn nhất làm RSS tăng tối đa 53,87 MiB; BSON terminal ước tính 3,76 MiB/corpus | `cline_docs/project-003-performance-resource.md`; số liệu Render/Mongo thực vẫn chờ canary |
+| 16-07-2026 | E014 | Regression sau coverage guard/full-corpus harness: backend 94 test pass; frontend 12 test pass, lint/build đạt; dry-run dựng đủ 191 chunk và tách checkpoint dry-run khỏi live | Không gọi Gemini; `git diff --check` và kiểm tra cú pháp các script đạt |
 
 ## 12. Điều kiện hoàn thành PROJECT 003
 
@@ -441,9 +444,9 @@ Rollback:
 ### 13.1. Trạng thái dừng
 
 - Nhánh hiện hành: `feature/project-003-translation-quality`.
-- Các mốc đã commit trước bàn giao: `14f083e`, `00479b0`, `30ef365`, `6bd70b6`, `24ab013`, `a0fc906`; script/report/sổ bàn giao nằm trong commit mới nhất của nhánh.
+- Các mốc đã commit trước bàn giao: `14f083e`, `00479b0`, `30ef365`, `6bd70b6`, `24ab013`, `a0fc906`, `e1134fd`, `8826ad0`; gói readiness/full-corpus và sổ bàn giao nằm trong thay đổi kế tiếp của nhánh.
 - Production vẫn dùng `TRANSLATION_PIPELINE_MODE=legacy`; chưa deploy backend/frontend P003, chưa push nhánh và chưa bật quality mặc định.
-- Đã dừng mọi lệnh Node/Gemini sau smoke E011 để bảo toàn quota. Không chạy lại benchmark hoặc smoke quality chỉ để tái xác nhận bằng chứng đã có.
+- Full-corpus live 370 trang chưa được khởi chạy. Lượt tiếp nối chỉ chạy phân tích/dry-run local; không gọi Gemini mới sau rerun Asthma đã ghi ở E012.
 - Raw PDF, raw prompt/response và bản dịch benchmark vẫn ở thư mục local ignored; không commit dữ liệu sách.
 - Ba file root đang bị xóa là thay đổi có sẵn của chủ dự án và phải tiếp tục để nguyên, không restore/commit cùng P003: `Kiến trúc hệ thống ứng dụng dịch file .txt`, `Mô tả bản thân .txt`, `implementation_plan.md`.
 
@@ -452,18 +455,21 @@ Rollback:
 - `med-translator-backend/scripts/smoke-project-003-quality.js`: smoke end-to-end dùng Mongo database ngẫu nhiên ngắn hơn giới hạn Atlas, R2 prefix riêng và cleanup trong `finally`.
 - `med-translator-backend/package.json`: thêm lệnh `npm run smoke:p003-quality`.
 - `cline_docs/project-003-quality-smoke-report.json`: chỉ chứa số liệu tổng hợp, xác nhận source R2 và database cô lập đã được dọn.
-- `project 003.md`: cập nhật tiến độ, điều kiện hoàn thành, evidence E008–E011 và ghi chú bàn giao này.
+- Coverage guard production/benchmark, review độc lập Asthma và benchmark report cập nhật đã chốt ở commit `8826ad0`.
+- `cline_docs/project-003-performance-resource.*`: số liệu hiệu năng, RAM và BSON không gọi Gemini.
+- `med-translator-backend/scripts/benchmark-project-003-full-corpus.js`: runner 191 chunk có resume theo artifact; checkpoint live và dry-run tách riêng.
+- `med-translator-backend/scripts/analyze-project-003-full-corpus.js`: chỉ tạo báo cáo sau khi checkpoint live đủ và không có task failed.
+- `project 003.md`: cập nhật evidence E008–E014 và ghi chú bàn giao này.
 
 ### 13.3. Việc còn lại, theo thứ tự ưu tiên
 
-1. **Không tốn quota:** chủ dự án duyệt blind review ở `.p003-local/blind-review` và các khác biệt critical/major trong `cline_docs/project-003-benchmark-review.md`; chốt G1-S10, G1-S11 và G8-S10. Hiện có một case `78 Asthma.pdf` trang 5–6 ở `needs_review` do omission major và terminology minor.
-2. **Không gọi Gemini trước:** tổng hợp hiệu năng từ telemetry benchmark hiện có, đo RAM/disk/Mongo BSON bằng fixture/local artifact và viết báo cáo cho G8-S11/S12. Chỉ chạy toàn bộ 370 trang nếu quota đã hồi phục và thật sự cần phép đo live.
-3. Chạy lại regression backend/frontend sau các thay đổi cuối, kiểm `git diff --check`, rồi commit riêng script/report/handoff; tuyệt đối không stage ba file root bị xóa.
-4. Deploy backend additive với mode `legacy`, smoke API/schema/SSE và một job legacy; sau đó deploy frontend tương thích ngược (G9-S02/S03).
-5. Khi quota và chủ dự án cho phép: canary quality một PDF ngắn, rồi một PDF dài; theo dõi stage latency, lease heartbeat, 429, artifact và cleanup (G9-S04).
-6. Chạy batch 5 PDF đa chuyên khoa, kiểm warning/resume/key distribution/download (G9-S05). Chỉ sau khi đạt mới đổi mặc định sang `quality` (G9-S06).
-7. Thực hiện rollback drill về `legacy`, theo dõi production đủ 24 giờ, ghi RAM/disk/restart/Mongo growth và chỉ tối ưu theo số liệu (G9-S07–S09).
-8. Đóng dự án G9-S11 khi chủ dự án đã duyệt chất lượng và cả hai điều kiện còn trống ở mục 12 đều đạt.
+1. **Cần chủ dự án:** duyệt blind review ở `.p003-local/blind-review` và các khác biệt critical/major trong `cline_docs/project-003-benchmark-review.md`; chốt G1-S10, G1-S11 và G8-S10. Case `78 Asthma.pdf` trang 5–6 hiện còn omission major và terminology major; B4 có warning tốt hơn B3 nhưng chưa chứng minh bản dịch tốt hơn B3 ở case này.
+2. Chỉ chạy full-corpus live 370 trang khi quota đã hồi phục và chủ dự án xác nhận phép đo này cần thiết. Runner phải chạy nền theo `AGENTS.md`, log/checkpoint rõ ràng; không giữ Codex polling khoảng 100 phút.
+3. Deploy backend additive với mode `legacy`, smoke API/schema/SSE và một job legacy; sau đó deploy frontend tương thích ngược (G9-S02/S03). Đây là thay đổi production, cần chủ dự án cho phép trước khi thực hiện.
+4. Khi quota và chủ dự án cho phép: canary quality một PDF ngắn, rồi một PDF dài; theo dõi stage latency, lease heartbeat, 429, artifact và cleanup (G9-S04).
+5. Chạy batch 5 PDF đa chuyên khoa, kiểm warning/resume/key distribution/download (G9-S05). Chỉ sau khi đạt mới đổi mặc định sang `quality` (G9-S06).
+6. Thực hiện rollback drill về `legacy`, theo dõi production đủ 24 giờ, ghi RAM/disk/restart/Mongo growth và chỉ tối ưu theo số liệu (G9-S07–S09).
+7. Đóng dự án G9-S11 khi chủ dự án đã duyệt chất lượng và cả hai điều kiện còn trống ở mục 12 đều đạt.
 
 ### 13.4. Cổng an toàn bắt buộc
 

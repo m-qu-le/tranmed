@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-16T10:16:58.083Z",
+  "evidence": {
+    "benchmarkSamples": 20,
+    "corpusPages": 370,
+    "corpusChunks": 191,
+    "observedModelAttempts": 174,
+    "liveFullCorpusRun": false
+  },
+  "performance": {
+    "chunkEndToEndMs": {
+      "mean": 62389,
+      "p50": 59948,
+      "p95": 82652,
+      "min": 45902,
+      "max": 90577
+    },
+    "callsPerChunk": {
+      "mean": 4.4,
+      "min": 4,
+      "max": 6
+    },
+    "repairRatePercent": 20,
+    "maxSingleCallMs": 27497,
+    "geminiTimeoutMs": 180000,
+    "leaseDurationMs": 300000,
+    "leaseHeartbeatMs": 60000,
+    "fullCorpus": {
+      "chunkCount": 191,
+      "concurrency": 2,
+      "twoLaneEmpiricalMs": 5959815,
+      "twoLaneP95BoundMs": 7934592,
+      "method": "Extrapolated from the 20 observed B4 end-to-end chunk durations."
+    }
+  },
+  "resources": {
+    "corpusSourceBytes": 21662171,
+    "largestPdf": {
+      "fileName": "29. Osteoporosis Basic and Clinical Aspects.pdf",
+      "sourceBytes": 5428175,
+      "totalPages": 55,
+      "chunkCount": 28,
+      "returnedChunkBytes": 7453491,
+      "splitElapsedMs": 1028,
+      "processMemory": {
+        "beforeRssBytes": 45371392,
+        "peakRssBytes": 101855232,
+        "rssIncreaseBytes": 56483840,
+        "beforeHeapUsedBytes": 7509112,
+        "peakHeapUsedBytes": 7774384,
+        "heapIncreaseBytes": 265272
+      }
+    },
+    "mongoBson": {
+      "measurement": "BSON document payload before database compression and index overhead.",
+      "terminalBytes": {
+        "mean": 20653,
+        "p50": 18522,
+        "p95": 25619,
+        "min": 16226,
+        "max": 44977
+      },
+      "peakBytes": {
+        "mean": 53783,
+        "p50": 52674,
+        "p95": 61903,
+        "min": 43419,
+        "max": 86891
+      },
+      "needsReviewTerminalBytes": [
+        44977
+      ],
+      "estimatedTerminalCorpusBytes": 3944723,
+      "passedTransientTextRemoved": true
+    }
+  },
+  "gates": {
+    "individualRequestBelowTimeout": true,
+    "leaseHeartbeatCoveredByUnitTest": true,
+    "fullCorpusLiveStillRequired": true,
+    "renderMetricsStillRequiredAtCanary": true
+  }
+}
