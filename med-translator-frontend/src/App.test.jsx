@@ -207,6 +207,7 @@ describe('App Cloud Uploader', () => {
 
   it('shows every quality pipeline stage with persisted chunk progress', async () => {
     const stages = [
+      ['document_context', 'Đang đọc ngữ cảnh toàn tài liệu'],
       ['translate', 'Đang dịch'],
       ['medical_audit', 'Đang kiểm định'],
       ['revise', 'Đang hiệu chỉnh'],

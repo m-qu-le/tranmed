@@ -45,6 +45,7 @@ const mergeServerBatches = (previous, batches) => {
 };
 
 const QUALITY_STAGE_LABELS = Object.freeze({
+  document_context: 'Đang đọc ngữ cảnh toàn tài liệu',
   translate: 'Đang dịch',
   medical_audit: 'Đang kiểm định',
   revise: 'Đang hiệu chỉnh',

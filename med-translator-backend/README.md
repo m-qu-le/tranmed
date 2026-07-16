@@ -65,9 +65,11 @@ P003 không rewrite nội dung cũ. Migration chỉ đếm dữ liệu và đồ
 
 ## Quality pipeline P003
 
-Khi `TRANSLATION_PIPELINE_MODE=quality`, mỗi chunk 2 trang chạy tuần tự:
+Khi `TRANSLATION_PIPELINE_MODE=quality`, job tạo một context passport có cấu trúc từ toàn PDF rồi mỗi chunk 2 trang chạy tuần tự:
 
 ```text
+document_context (một lần/job, Gemini File tạm được xóa sau khi dùng)
+    ↓
 translate → medical_audit → revise → verify
                                   └ FAIL critical/major → repair → reverify
                                                                └ FAIL → needs_review
@@ -75,7 +77,9 @@ translate → medical_audit → revise → verify
 
 - Tối đa 2 chunk chạy đồng thời; trong một chunk không chạy stage song song.
 - Mỗi stage persist atomically cùng `pipelineVersion`; restart tiếp tục từ stage kế tiếp.
-- Artifact hiện dùng pipeline version `p003-v1` và prompt version `p003-prompts-v1`; đổi version sẽ reset riêng chunk dở, không rewrite chunk terminal.
+- Artifact hiện dùng pipeline version `p003-v2`, prompt version `p003-prompts-v2` và context version `p003-context-v1`; đổi version sẽ reset riêng chunk dở, không rewrite chunk terminal.
+- Context passport bị giới hạn kích thước, chỉ hỗ trợ nhất quán thuật ngữ; PDF chunk luôn là nguồn quyết định. Passport được persist một lần/job để resume không upload lại toàn PDF và không được trả qua API công khai.
+- Audit/verify phải trả checklist coverage có trích đoạn nguồn–đích. Audit thiếu coverage sẽ xoay key; verify/reverify thiếu coverage kết thúc chunk ở `needs_review`, không được PASS.
 - Chỉ `content` cuối được trả qua result/download API. Draft, audit và verify report không public.
 - `repairCount <= 1`; `needs_review` vẫn hoàn thành job nhưng UI cảnh báo chunk và page range.
 - Revision/repair phải giữ tối thiểu 80% ký tự có nghĩa của bản trước. Output co rút bất thường bị xem là response lỗi để xoay key; nếu repair vẫn không hợp lệ sau rotation, pipeline giữ bản revised đầy đủ và đặt `needs_review`.
