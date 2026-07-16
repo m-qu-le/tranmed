@@ -53,7 +53,7 @@ function readNonNegativeInteger(name, fallback, source = process.env) {
 }
 
 export function readP003Config(source = process.env) {
-    const pipelineMode = source.TRANSLATION_PIPELINE_MODE?.trim().toLowerCase() || 'legacy';
+    const pipelineMode = source.TRANSLATION_PIPELINE_MODE?.trim().toLowerCase() || 'quality';
     if (!['legacy', 'quality'].includes(pipelineMode)) {
         throw new Error('TRANSLATION_PIPELINE_MODE chỉ nhận legacy hoặc quality.');
     }

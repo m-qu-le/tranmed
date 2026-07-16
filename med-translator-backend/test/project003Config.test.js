@@ -3,9 +3,9 @@ import test from 'node:test';
 import { readP003Config } from '../src/config/env.js';
 import { getTranslationProfile } from '../src/services/translationProfiles.js';
 
-test('P003 config defaults to safe legacy rollout with two-page chunks', () => {
+test('P003 config defaults to the selected quality pipeline with two-page chunks', () => {
     assert.deepEqual(readP003Config({}), {
-        pipelineMode: 'legacy',
+        pipelineMode: 'quality',
         pagesPerChunk: 2,
         thinkingLevel: 'HIGH',
         maxRepairCycles: 1,
