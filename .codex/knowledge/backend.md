@@ -1,52 +1,46 @@
 # Backend
 
-## Thành phần
+## Thành phần chính
 
-- `src/config/env.js`: nạp `.env`, model Gemini, giới hạn upload/disk/retry/timeout và validate startup.
-- `src/server.js`: CORS, health, error mapping, kết nối MongoDB; chỉ listen sau khi `translationQueue.initDB()` thành công.
-- `src/middlewares/upload.js`: Multer disk storage ở đường dẫn tuyệt đối `uploads/`, một PDF/request, tên vật lý UUID.
-- `src/middlewares/capacity.js` + `src/services/storageService.js`: khóa một upload, budget disk, capacity API và orphan cleanup.
-- `src/services/queueManager.js`: atomic claim, lease, retry, circuit breaker, cancellation, chunk persistence, pagination và cleanup.
-- `src/services/pdfService.js` + `src/workers/pdfWorker.js`: Worker đọc file, cắt 3 trang/chunk, hỗ trợ abort và transfer buffer không clone.
-- `src/services/geminiService.js`: prompt, key rotation, timeout/abort, error taxonomy và pool tối đa 2 chunk.
-- `src/models/translationChunkModel.js`: kết quả theo `{jobId, chunkIndex}`.
-- `src/utils/processingError.js`: error code và retry policy dùng chung.
+- `src/config/env.js`: cấu hình runtime và P003; quality mặc định, 2 trang, HIGH, tối đa 2 repair.
+- `src/services/uploadBatchService.js` + `r2Service.js`: prepare/confirm/abandon, presigned PUT, idempotency và cleanup R2.
+- `src/services/sourceService.js`: stream một R2 source qua `.part`, kiểm byte rồi rename atomically.
+- `src/services/queueManager.js`: atomic claim, lease, retry, circuit breaker, cancellation và phối hợp quality pipeline.
+- `src/services/pdfService.js` + `src/workers/pdfWorker.js`: Worker cắt PDF 2 trang/chunk, giữ page range.
+- `src/services/qualityDocumentContextService.js`: context passport toàn PDF một lần/job, persist để resume.
+- `src/services/qualityPipelineState.js`: state machine `p003-v3`, strict PASS và tối đa hai repair/reverify.
+- `src/services/qualityGeminiExecutors.js`: prompt/stage executor, structured validation, key scheduler và text coverage guard.
+- `src/models/jobModel.js`, `translationChunkModel.js`, `uploadBatchModel.js`: metadata queue, artifact chất lượng và batch upload.
 
 ## API
 
-Base path `/api/translate`; health ở `/api/health`.
+Base `/api/translate`; health `/api/health`; readiness `/api/readiness`.
 
 | Method | Path | Ghi chú |
 | --- | --- | --- |
-| POST | `/` | multipart: một `files`, `folderName`, `clientUploadId`; rate limit và capacity guard |
-| GET | `/capacity` | `canAcceptUpload`, lý do, file nguồn, disk budget và max file |
-| GET | `/jobs?limit=&cursor=` | cursor pagination, tối đa 200 |
-| GET | `/jobs/:jobId/result` | JSON Markdown; hỗ trợ legacy `Job.result` |
-| GET | `/jobs/:jobId/download` | stream Markdown theo chunk |
-| GET | `/status` | circuit breaker |
-| GET | `/stream` | SSE + heartbeat 15 giây |
-| DELETE | `/jobs/:jobId` | 202 nếu job processing đang chờ hủy |
-| POST | `/bulk-delete` | tối đa 500 job ID |
-| DELETE | `/folder/:folderName` | centralized cancellation/cleanup |
-| POST | `/force-wakeup` | đánh thức circuit breaker |
+| POST | `/upload-batches/prepare` | Tạo/reuse manifest và presigned URL |
+| POST | `/upload-batches/:batchId/confirm` | HEAD R2, xác nhận size/ETag, đưa job pending |
+| POST | `/upload-batches/:batchId/abandon` | Bỏ item lỗi và dọn object |
+| GET | `/upload-batches`, `/:batchId` | Resume trạng thái cloud batch |
+| POST | `/` | Multipart legacy, một file/request; vẫn tương thích |
+| GET | `/jobs?limit=&cursor=` | Cursor pagination, tối đa 200 |
+| GET | `/jobs/:jobId/result` | JSON final Markdown + public quality summary |
+| GET | `/jobs/:jobId/download` | Stream final Markdown theo chunk |
+| GET | `/status`, `/metrics`, `/stream` | System state, telemetry công khai, SSE |
+| DELETE | `/jobs/:jobId`, `/folder/:folderName` | Centralized cancellation/cleanup |
+| POST | `/bulk-delete`, `/force-wakeup` | Xóa tối đa 500 ID; reset circuit breaker |
 
-## Schema chính
+## Schema và vòng đời
 
-`Job`: UUID `jobId`, unique sparse `clientUploadId`, tên/folder/path, `pending|processing|completed|failed|cancelled`, legacy `result`, error code, attempts, retry time, cancel flag, processing token, lease và chunk progress.
+- `Job` giữ source R2 state, upload batch, lease, mode/version, context passport, progress và warning.
+- `TranslationChunk` unique `{jobId, chunkIndex}`; giữ page range, stage, reports, final `content`, `repairCount <= 2` và usage theo stage (`repair_2/reverify_2` khi cần).
+- `UploadBatch` giữ manifest/progress để frontend resume và chỉ báo `canCloseClient` khi an toàn.
+- Completed/failed/cancelled đều đi qua source cleanup; lỗi R2 deletion được persist để sweeper retry.
 
-`TranslationChunk`: `jobId`, `chunkIndex`, `content`; unique compound index.
+## Quality semantics
 
-`System`: unique `key`, `isHibernating`, stats circuit breaker.
-
-## Vòng đời và lỗi
-
-- Claim dùng một `findOneAndUpdate` pending → processing và tăng attempt.
-- Lease 5 phút, heartbeat 1 phút. Lease hết hạn được phục hồi; job đã yêu cầu hủy được cleanup.
-- `INVALID_PDF`, auth/config và lỗi vĩnh viễn không retry. Lỗi tạm retry có exponential backoff/jitter, tối đa theo `MAX_JOB_ATTEMPTS`.
-- Chỉ `GEMINI_RATE_LIMIT` có `quotaRelated`; 10 lần quota liên tiếp kích hoạt ngủ 4 giờ.
-- `FILE_MISSING` chuyển failed nhưng giữ TranslationChunk. Local Feeder re-upload cùng `clientUploadId`, Job được reset pending và resume phần thiếu.
-- Lỗi vĩnh viễn khác/hết attempts xóa PDF và chunk; completed xóa PDF nhưng giữ Job/chunk.
-
-## Lưu ý
-
-AbortSignal dừng chờ ở client SDK/worker; theo đặc tính API, request Gemini đã tới dịch vụ có thể vẫn tính usage. Pipeline không nhận chunk mới và chờ các call đang bay settle trước khi chuyển job.
+- Pipeline/prompt: `p003-v3` / `p003-prompts-v3`; context: `p003-context-v1`.
+- Audit/verify JSON phải hợp schema; coverage thiếu không thể PASS.
+- Mọi FAIL kể cả minor kích hoạt repair nếu còn cycle.
+- Vòng hai sửa bản repaired theo reverify report mới nhất; sau vòng hai còn lỗi thành `needs_review`.
+- PASS xóa full-text transient; needs-review giữ artifact chẩn đoán. Public API không lộ report/context.

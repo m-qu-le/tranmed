@@ -1,62 +1,58 @@
 # Vận hành, cấu hình và Git
 
-## Biến môi trường
+## Biến môi trường chính
 
 Backend xem `.env.example`:
 
-- `MONGODB_URI`, `GEMINI_API_KEYS` bắt buộc khi chạy server.
-- `PORT` mặc định 8080; `FRONTEND_URL` thêm origin CORS.
+- `MONGODB_URI`, `GEMINI_API_KEYS` và nhóm `R2_*` bắt buộc khi chạy server.
 - `GEMINI_MODEL` mặc định `gemini-3.1-flash-lite`.
-- `MAX_UPLOAD_STORAGE_MB` mặc định 400; `MAX_FILE_SIZE_MB` mặc định 350 và bắt buộc nhỏ hơn disk budget.
+- `TRANSLATION_PIPELINE_MODE` mặc định `quality`; đặt `legacy` để rollback job mới.
+- `PDF_PAGES_PER_CHUNK=2`, `GEMINI_THINKING_LEVEL=HIGH`, `QUALITY_MAX_REPAIR_CYCLES=2`.
 - `MAX_JOB_ATTEMPTS` mặc định 3; `GEMINI_TIMEOUT_MS` mặc định 180000.
+- `MAX_UPLOAD_STORAGE_MB` mặc định 400; `MAX_FILE_SIZE_MB` mặc định 350.
 
-Frontend: `VITE_API_URL` phải là base đầy đủ, ví dụ `https://tranmed.onrender.com/api/translate`.
+Frontend: `VITE_API_URL` là base `/api/translate`, production hiện dùng `https://tranmed.onrender.com/api/translate`.
 
-## Lệnh local
+## Lệnh kiểm tra local
 
 ```powershell
 cd med-translator-backend
-npm install
-npm run dev
 npm test
+npm audit
 
 cd ..\med-translator-frontend
-npm install
-npm run dev
-npm test -- --run
+npm test
 npm run lint
 npm run build
+npm audit
 ```
 
-`Dichtailieu.bat` mở hai server nhưng không còn tự xóa `uploads/`; queue/orphan service chịu trách nhiệm cleanup.
+Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đóng; workload Gemini mới cần một dự án hoặc quyết định mới.
 
-## Migration P001
+## Migration và deploy
 
-Mặc định không chạy với production trước khi backup MongoDB. Ngoại lệ P001 đã được chủ dự án chấp thuận ngày 15-07-2026 vì database được xác nhận không còn job/dữ liệu cần giữ: chạy dry-run/count trước; nếu phát hiện document thì dừng và backup thay vì migration tiếp.
+- Migration P001–P003 là additive/idempotent; production P003 đã backup, dry-run, migrate và verify index.
+- Commit code P003 cuối: `f7a8b07`; đã push `main` và `feature/project-003-translation-quality`.
+- Render restart sau deploy v3 tại `2026-07-16T15:41:03.348Z`; health/readiness đạt, Mongo/R2 available, backlog 0.
+- Frontend production tương thích legacy và quality; warning chỉ công khai page range.
 
-```powershell
-npm run migrate:p001:dry
-npm run migrate:p001
-npm run verify:p001
-```
+Checklist cho thay đổi tương lai:
 
-Dry-run chỉ đếm document/collection, không update hoặc sync index. Migration thật bổ sung default additive và sync indexes; `verify:p001` kiểm tra tổng document cùng các unique index bắt buộc. Code vẫn đọc job legacy có `result`.
+1. Backend test; frontend test/lint/build; `git diff --check`.
+2. Nếu đổi schema/index production: dry-run, backup khi có dữ liệu, rồi hậu kiểm.
+3. Deploy backend trước frontend khi API contract thay đổi.
+4. Smoke chỉ ở mức tương xứng với rủi ro; không dùng dữ liệu sách trong log/commit.
 
-## Checklist bàn giao/deploy
+## Rollback
 
-1. Backend tests, frontend test/lint/build, `npm audit` cả hai và `git diff --check` phải sạch.
-2. Chạy migration dry-run và lưu số liệu không chứa credential. Với database có dữ liệu phải backup; ngoại lệ database trống của P001 chỉ tiếp tục nếu count xác nhận đúng kỳ vọng.
-3. Deploy backend trước, smoke health/capacity/jobs/SSE/upload/result/delete.
-4. Deploy frontend với đúng `VITE_API_URL`, smoke Local Feeder nhiều file.
-5. Theo dõi RAM, disk, restart, retry/orphan trong 24 giờ trước khi đóng Project 001.
-
-Production P001 đã deploy theo hai commit tách thứ tự: backend `e207ab0`, frontend `7436399`. Smoke PDF một trang đã đạt; vẫn cần smoke batch nhiều chương qua UI và theo dõi 24 giờ.
-
-Hotfix incident batch 5 file: backend `74a79ab` dừng idle polling; frontend `e9ed41a` chờ completed/retry đúng file và `437009c` gửi HTTP keepalive 5 phút. Trước retest phải hard refresh để nhận bundle mới.
+- Đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart để job mới dùng pipeline cũ.
+- Không migration ngược hoặc xóa field/artifact additive.
+- Job terminal vẫn đọc từ `content`; job quality dở giữ artifact để resume sau.
+- Live rollback drill và theo dõi 24 giờ được chủ dự án miễn khi đóng P003; không ghi chúng như bằng chứng đã thực hiện.
 
 ## Git an toàn
 
-- Không stage ba deletion tài liệu gốc đang có sẵn trong worktree nếu chưa được chủ dự án xác nhận.
-- Không dùng `git add -A`, không commit `.env`, PDF, secret hoặc `dist`.
-- Nhánh triển khai hiện tại: `refactor/project-001`.
-- Trước production cần commit/tag rollback; không dùng `git reset --hard` để xử lý worktree của người dùng.
+- Không stage các deletion/untracked root ngoài phạm vi đã có sẵn trong worktree.
+- Không dùng `git add -A`; không commit `.env`, PDF, secret, signed URL, `.p003-local/` hoặc `dist/`.
+- Nhánh P003: `feature/project-003-translation-quality`; production theo `main`.
+- Không dùng `git reset --hard` để xử lý worktree của người dùng.

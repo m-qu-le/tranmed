@@ -1,20 +1,22 @@
 # Knowledge base — StudyMed Translator
 
-Ghi chú vận hành dành cho Codex, đã đối chiếu với mã nguồn Project 001 ngày 15-07-2026. Không lưu secret, nội dung `.env`, PDF hoặc bản dịch của người dùng.
+Ghi chú vận hành dành cho Codex, đã đồng bộ sau khi đóng PROJECT 003 ngày 16-07-2026. Không lưu secret, nội dung `.env`, PDF, prompt/response thô hoặc bản dịch của người dùng.
 
 ## Thứ tự đọc
 
-1. `project-map.md` để hiểu mục tiêu, cấu trúc và luồng tổng thể.
-2. `backend.md` hoặc `frontend.md` tùy khu vực đang sửa.
-3. `operations.md` trước khi chạy migration, test hoặc deploy.
-4. `known-gaps.md` để không vô tình coi phần chưa kiểm chứng là đã hoàn tất.
-5. `../../project 001.md` là hồ sơ theo dấu chi tiết và nguồn sự thật về tiến độ đại tu.
+1. `project-map.md` — kiến trúc và bất biến hiện hành.
+2. `backend.md` hoặc `frontend.md` — khu vực mã cần sửa.
+3. `operations.md` — test, deploy, rollback và Git an toàn.
+4. `known-gaps.md` — giới hạn được chấp nhận khi đóng P003.
+5. `../../project 003.md` — nguồn sự thật về quyết định, bằng chứng và trạng thái đóng dự án.
 
-Mã nguồn có ưu tiên cao hơn ghi chú. Khi đổi API, schema, biến môi trường, queue hoặc chính sách lưu file, phải cập nhật thư mục này trong cùng thay đổi.
+Mã nguồn có ưu tiên cao hơn ghi chú. Khi đổi API, schema, biến môi trường, queue, R2 hoặc quality policy, cập nhật thư mục này trong cùng commit.
 
-## Quyết định đã chốt
+## Trạng thái đã chốt
 
-- Ứng dụng cá nhân, không thêm đăng nhập/phân quyền trong Project 001 theo quyết định của chủ dự án.
-- Render chỉ có khoảng 500 MB và filesystem không bền vững; trình duyệt giữ hàng trăm chương trong Local Feeder, backend chỉ nhận một PDF tại một thời điểm.
-- MongoDB giữ metadata và từng chunk Markdown; PDF nguồn trên Render chỉ là dữ liệu tạm.
-- Không ghi API key, URI MongoDB hay dữ liệu người dùng vào Git/log/tài liệu.
+- PROJECT 003 đã hoàn thành theo owner waiver; production mặc định `quality`.
+- Pipeline hiện hành là `p003-v3` / `p003-prompts-v3`, model `gemini-3.1-flash-lite`.
+- PDF được upload trực tiếp từ trình duyệt lên Cloudflare R2; Render chỉ tải một source tạm khi xử lý.
+- Quality dùng context passport toàn PDF, chunk 2 trang, thinking `HIGH`, structured audit/verify và tối đa hai repair/reverify.
+- Chỉ `PASS` cùng coverage `COMPLETE` mới được tính `passed`; mọi lỗi kể cả minor đều phải repair hoặc thành `needs_review`.
+- Không thêm authentication trong phạm vi đã đóng; vẫn phải giữ CORS, rate limit, validation và không lộ secret/dữ liệu người dùng.
