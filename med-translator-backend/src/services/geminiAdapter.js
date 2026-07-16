@@ -107,6 +107,19 @@ export function createPdfContents(pdfData, instruction) {
     }];
 }
 
+export function createGeminiFileContents(file, instruction) {
+    if (!file?.uri || !file?.mimeType) {
+        throw new ProcessingError(ErrorCodes.GEMINI_RESPONSE_INVALID, 'Gemini File API không trả URI PDF hợp lệ.', { retryable: true });
+    }
+    return [{
+        role: 'user',
+        parts: [
+            { fileData: { fileUri: file.uri, mimeType: file.mimeType } },
+            { text: instruction },
+        ],
+    }];
+}
+
 export async function generateGeminiContent(options) {
     const {
         apiKey,

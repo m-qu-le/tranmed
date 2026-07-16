@@ -46,6 +46,10 @@ const jobSchema = new mongoose.Schema({
     translationPipelineVersion: { type: String, default: null },
     translationMode: { type: String, enum: ['legacy', 'quality'], default: null },
     currentQualityStage: { type: String, enum: QUALITY_ACTIONS, default: null },
+    qualityContextVersion: { type: String, default: null },
+    qualityDocumentContext: { type: mongoose.Schema.Types.Mixed, default: null },
+    qualityContextUsage: { type: mongoose.Schema.Types.Mixed, default: null },
+    qualityContextGeneratedAt: { type: Date, default: null },
     passedChunks: { type: Number, default: 0, min: 0 },
     needsReviewChunks: { type: Number, default: 0, min: 0 },
     qualityWarnings: [{

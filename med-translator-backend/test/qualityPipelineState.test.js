@@ -90,7 +90,13 @@ class ThrowBeforeCommitOnceModel extends MemoryChunkModel {
     }
 }
 
-const passReport = { status: 'PASS', errors: [] };
+const completeCoverage = {
+    status: 'COMPLETE',
+    items: Array.from({ length: 4 }, (_, index) => ({
+        focus: 'meaning', sourceExcerpt: `source ${index}`, targetExcerpt: `target ${index}`, result: 'match',
+    })),
+};
+const passReport = { status: 'PASS', errors: [], coverage: completeCoverage };
 const failReport = {
     status: 'FAIL',
     errors: [{
@@ -101,6 +107,15 @@ const failReport = {
         requiredCorrection: 'correction',
         explanation: 'reason',
     }],
+    coverage: completeCoverage,
+};
+const incompleteCoverageReport = {
+    status: 'FAIL',
+    errors: [],
+    coverage: {
+        status: 'INCOMPLETE',
+        items: [completeCoverage.items[0]],
+    },
 };
 
 function result(action, report = passReport) {
@@ -299,6 +314,22 @@ test('invalid repair falls back to revised content and requires review', async (
     assert.equal(final.content, 'revise markdown');
     assert.equal(final.repairCount, 1);
     assert.equal(final.repairedContent, undefined);
+});
+
+test('incomplete final coverage is never promoted to passed or sent through a blind repair', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls, { verifyReport: incompleteCoverageReport }),
+    });
+
+    const final = await run(service);
+
+    assert.deepEqual(calls, ['translate', 'medical_audit', 'revise', 'verify']);
+    assert.equal(final.stage, 'needs_review');
+    assert.equal(final.qualityStatus, 'needs_review');
+    assert.equal(final.content, 'revise markdown');
 });
 
 test('incomplete artifact from another version resets, but terminal legacy content is untouched', async () => {

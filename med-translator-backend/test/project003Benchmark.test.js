@@ -31,6 +31,14 @@ test('P003 benchmark variants preserve the fixed B0-B3 matrix', () => {
         retryMode: 'quality',
         pipeline: 'translate_audit_revise_verify_repair',
     });
+    assert.deepEqual(BENCHMARK_VARIANTS.B5, {
+        pagesPerChunk: 2,
+        temperature: 1,
+        thinkingLevel: ThinkingLevel.HIGH,
+        validationMode: 'strict',
+        retryMode: 'quality',
+        pipeline: 'document_context_translate_audit_revise_verify_repair',
+    });
 });
 
 test('P003 benchmark CLI only accepts direct PDF names and one-based pages', () => {
@@ -47,7 +55,7 @@ test('P003 benchmark CLI only accepts direct PDF names and one-based pages', () 
         { variant: 'B2', fileName: '321 Acute Kidney Injury.pdf', startPage: 3, keyIndex: 5, dryRun: false }
     );
     assert.equal(parseBenchmarkArgs(['--variant', 'B4', '--file', 'book.pdf']).variant, 'B4');
-    assert.throws(() => parseBenchmarkArgs(['--variant', 'B5', '--file', 'book.pdf']), /variant/);
+    assert.equal(parseBenchmarkArgs(['--variant', 'B5', '--file', 'book.pdf']).variant, 'B5');
     assert.throws(() => parseBenchmarkArgs(['--variant', 'B0', '--file', '..\\book.pdf']), /samplepdf/);
     assert.throws(() => parseBenchmarkArgs(['--variant', 'B0', '--file', 'book.pdf', '--start-page', '0']), /start-page/);
 });

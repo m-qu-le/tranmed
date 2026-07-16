@@ -155,7 +155,7 @@ export class QualityPipelineService {
                 if (!executor) throw new Error(`Thiếu executor cho quality action: ${action}`);
                 await onStage({ phase: 'started', action, chunk });
                 try {
-                    result = await executor({ pdfBuffer, chunk, signal });
+                    result = await executor({ pdfBuffer, chunk, documentContext: options.documentContext || null, signal });
                 } catch (error) {
                     if (action !== 'repair' || !INVALID_CONTENT_CODES.has(error?.code)) throw error;
                     result = { invalid: true, metadata: error.geminiMetadata || null };

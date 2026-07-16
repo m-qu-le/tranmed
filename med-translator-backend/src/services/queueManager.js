@@ -5,6 +5,7 @@ import { processPdf } from './pdfService.js';
 import { processTranslation } from './geminiService.js';
 import { createQualityGeminiExecutors } from './qualityGeminiExecutors.js';
 import { QualityPipelineService } from './qualityPipelineService.js';
+import { QualityDocumentContextService } from './qualityDocumentContextService.js';
 import Job from '../models/jobModel.js';
 import System from '../models/systemModel.js';
 import TranslationChunk from '../models/translationChunkModel.js';
@@ -467,13 +468,39 @@ export class QueueManager extends EventEmitter {
         };
     }
 
-    async processQualityChunks(job, splitResult, emitLog, signal) {
+    async processQualityChunks(job, splitResult, sourcePath, emitLog, signal) {
         const { chunkBuffers, totalPages, pageRanges } = splitResult;
         const executors = createQualityGeminiExecutors({
             onSchedulerEvent: event => {
                 const status = event.status ? ` status=${event.status}` : '';
                 const retry = event.retryAfterMs ? ` retryAfterMs=${event.retryAfterMs}` : '';
                 emitLog(`🔄 [${event.stage}] keyIndex=${event.keyIndex} event=${event.type}${status}${retry}`);
+            },
+        });
+        const contextService = new QualityDocumentContextService({ JobModel: Job, executors });
+        const documentContext = await contextService.prepare({
+            job,
+            sourcePath,
+            totalPages,
+            signal,
+            assertActive: () => this.assertJobActive(job),
+            onStage: async event => {
+                await Job.updateOne(
+                    {
+                        jobId: job.jobId,
+                        status: 'processing',
+                        processingToken: job.processingToken,
+                        cancelRequested: { $ne: true },
+                    },
+                    { $set: { currentQualityStage: event.action } }
+                );
+                this.emitJobUpdate(job.jobId, 'processing', {
+                    translationMode: 'quality',
+                    translationPipelineVersion: QUALITY_PIPELINE_VERSION,
+                    currentQualityStage: event.action,
+                    qualityStagePhase: event.phase,
+                });
+                emitLog(`📚 Context tài liệu phase=${event.phase}.`);
             },
         });
         const pipeline = new QualityPipelineService({ ChunkModel: TranslationChunk, executors });
@@ -488,6 +515,7 @@ export class QueueManager extends EventEmitter {
                 pageEnd: range.pageEnd,
                 totalPages,
                 pdfBuffer: chunkBuffers[chunkIndex],
+                documentContext,
                 signal,
                 assertActive: () => this.assertJobActive(job),
                 onStage: async event => {
@@ -602,7 +630,7 @@ export class QueueManager extends EventEmitter {
 
         let qualityProgress = null;
         if (translationMode === 'quality') {
-            qualityProgress = await this.processQualityChunks(job, splitResult, emitLog, signal);
+            qualityProgress = await this.processQualityChunks(job, splitResult, sourcePath, emitLog, signal);
         } else {
             await processTranslation(chunkBuffers, emitLog, {
                 signal,

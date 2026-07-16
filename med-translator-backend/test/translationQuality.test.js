@@ -6,6 +6,16 @@ import {
     QUALITY_REPORT_JSON_SCHEMA,
 } from '../src/services/translationQuality.js';
 
+const completeCoverage = {
+    status: 'COMPLETE',
+    items: Array.from({ length: 4 }, (_, index) => ({
+        focus: 'meaning',
+        sourceExcerpt: `source ${index}`,
+        targetExcerpt: `target ${index}`,
+        result: 'match',
+    })),
+};
+
 const majorError = {
     category: 'negation_modality',
     severity: 'major',
@@ -16,12 +26,13 @@ const majorError = {
 };
 
 test('quality report validator enforces PASS/FAIL consistency and required evidence', () => {
-    assert.equal(isQualityReport({ status: 'PASS', errors: [] }), true);
-    assert.equal(isQualityReport({ status: 'FAIL', errors: [majorError] }), true);
-    assert.equal(isQualityReport({ status: 'PASS', errors: [majorError] }), false);
-    assert.equal(isQualityReport({ status: 'FAIL', errors: [] }), false);
-    assert.equal(isQualityReport({ status: 'FAIL', errors: [{ ...majorError, sourceExcerpt: '' }] }), false);
-    assert.deepEqual(QUALITY_REPORT_JSON_SCHEMA.required, ['status', 'errors']);
+    assert.equal(isQualityReport({ status: 'PASS', errors: [], coverage: completeCoverage }), true);
+    assert.equal(isQualityReport({ status: 'FAIL', errors: [majorError], coverage: completeCoverage }), true);
+    assert.equal(isQualityReport({ status: 'PASS', errors: [majorError], coverage: completeCoverage }), false);
+    assert.equal(isQualityReport({ status: 'FAIL', errors: [], coverage: completeCoverage }), false);
+    assert.equal(isQualityReport({ status: 'FAIL', errors: [{ ...majorError, sourceExcerpt: '' }], coverage: completeCoverage }), false);
+    assert.equal(isQualityReport({ status: 'PASS', errors: [], coverage: { ...completeCoverage, status: 'INCOMPLETE' } }), false);
+    assert.deepEqual(QUALITY_REPORT_JSON_SCHEMA.required, ['status', 'errors', 'coverage']);
 });
 
 test('only critical and major errors trigger the bounded repair loop', () => {

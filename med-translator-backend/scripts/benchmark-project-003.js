@@ -2,30 +2,34 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../src/config/env.js';
-import { createPdfContents, generateGeminiContent } from '../src/services/geminiAdapter.js';
+import { createGeminiFileContents, createPdfContents, generateGeminiContent } from '../src/services/geminiAdapter.js';
 import {
     LEGACY_TRANSLATION_SYSTEM_INSTRUCTION,
     TRANSLATE_USER_INSTRUCTION,
 } from '../src/services/geminiPrompts.js';
 import {
     buildAuditInstruction,
+    buildDocumentContextInstruction,
     buildRepairInstruction,
     buildRevisionInstruction,
+    buildTranslateInstruction,
     buildVerifyInstruction,
+    DOCUMENT_CONTEXT_SYSTEM_INSTRUCTION,
     MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
     MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
     MEDICAL_REVISION_SYSTEM_INSTRUCTION,
     MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
-    QUALITY_TRANSLATE_USER_INSTRUCTION,
     QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
 } from '../src/services/qualityPrompts.js';
 import {
     hasBlockingQualityErrors,
+    isQualityCoverageComplete,
     isQualityReport,
     QUALITY_REPORT_JSON_SCHEMA,
 } from '../src/services/translationQuality.js';
+import { isQualityDocumentContext } from '../src/services/qualityDocumentContext.js';
 import { extractPdfPageRange } from '../src/utils/pdfSplitter.js';
 import { redactSensitiveText } from '../src/utils/redactSecrets.js';
 import { normalizeQualityMarkdown } from '../src/services/qualityMarkdown.js';
@@ -76,6 +80,14 @@ export const BENCHMARK_VARIANTS = Object.freeze({
         validationMode: 'strict',
         retryMode: 'quality',
         pipeline: 'translate_audit_revise_verify_repair',
+    }),
+    B5: Object.freeze({
+        pagesPerChunk: 2,
+        temperature: 1,
+        thinkingLevel: ThinkingLevel.HIGH,
+        validationMode: 'strict',
+        retryMode: 'quality',
+        pipeline: 'document_context_translate_audit_revise_verify_repair',
     }),
 });
 
@@ -150,6 +162,7 @@ async function callWithBenchmarkRotation(request, keys, firstKeyIndex) {
                     apiKey: keys[keyIndex],
                     keyIndex,
                 });
+                request.validateResult?.(result);
                 if (request.responseType !== 'json') {
                     result = { ...result, text: normalizeQualityMarkdown(result.text) };
                     if (request.referenceText) {
@@ -202,7 +215,7 @@ function createQualityStageConfig(systemInstruction, responseType = 'text') {
     const config = {
         systemInstruction,
         temperature: 1,
-        maxOutputTokens: responseType === 'json' ? 8192 : 32768,
+        maxOutputTokens: responseType === 'json' ? 16384 : 32768,
         thinkingConfig: {
             thinkingLevel: ThinkingLevel.HIGH,
             includeThoughts: false,
@@ -216,7 +229,58 @@ function createQualityStageConfig(systemInstruction, responseType = 'text') {
     return config;
 }
 
-async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
+async function waitForBenchmarkFile(client, initialFile) {
+    let file = initialFile;
+    for (let attempt = 0; file?.state === 'PROCESSING' && attempt < 60; attempt += 1) {
+        await delay(1000);
+        file = await client.files.get({ name: file.name });
+    }
+    if (file?.state === 'FAILED' || !file?.uri || file?.state === 'PROCESSING') {
+        throw new Error('Gemini File API chưa sẵn sàng PDF context.');
+    }
+    return file;
+}
+
+async function buildBenchmarkDocumentContext(sourcePath, totalPages, keys, firstKeyIndex) {
+    const attempts = [];
+    let lastError;
+    for (let keysTried = 0; keysTried < keys.length; keysTried += 1) {
+        const keyIndex = (firstKeyIndex + keysTried) % keys.length;
+        let client = null;
+        let file = null;
+        try {
+            await waitForBenchmarkHeadroom(keyIndex);
+            client = new GoogleGenAI({ apiKey: keys[keyIndex] });
+            file = await client.files.upload({ file: sourcePath, config: { mimeType: 'application/pdf' } });
+            const readyFile = await waitForBenchmarkFile(client, file);
+            const result = await generateGeminiContent({
+                apiKey: keys[keyIndex],
+                keyIndex,
+                model: GEMINI_MODEL,
+                contents: createGeminiFileContents(readyFile, buildDocumentContextInstruction()),
+                config: {
+                    ...createQualityStageConfig(DOCUMENT_CONTEXT_SYSTEM_INSTRUCTION, 'json'),
+                },
+                stage: 'document_context',
+                validationMode: 'strict',
+                responseType: 'json',
+                structuredValidator: isQualityDocumentContext,
+                clientFactory: () => client,
+            });
+            attempts.push({ keyIndex, outcome: 'success', finishReason: result.metadata.finishReason });
+            return { context: result.json, metadata: result.metadata, attempts };
+        } catch (error) {
+            lastError = error;
+            attempts.push({ keyIndex, outcome: 'error', ...publicError(error) });
+        } finally {
+            if (file?.name) await client?.files.delete({ name: file.name }).catch(() => {});
+        }
+    }
+    lastError.benchmarkAttempts = attempts;
+    throw lastError;
+}
+
+async function runQualityPipeline(pageRange, keys, firstKeyIndex, documentContext = null) {
     const stages = {};
     const attempts = [];
     let nextKeyIndex = firstKeyIndex;
@@ -227,6 +291,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
         systemInstruction,
         responseType = 'text',
         referenceText = null,
+        requireCoverage = false,
     }) => {
         const result = await callWithBenchmarkRotation({
             model: GEMINI_MODEL,
@@ -238,6 +303,13 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
             structuredValidator: responseType === 'json' ? isQualityReport : undefined,
             retryMode: 'quality',
             referenceText,
+            validateResult: requireCoverage ? result => {
+                if (!isQualityCoverageComplete(result.json, referenceText)) {
+                    const error = new Error(`Gemini stage ${stage} không cung cấp coverage checklist đủ sâu.`);
+                    error.code = 'GEMINI_SCHEMA_INVALID';
+                    throw error;
+                }
+            } : undefined,
         }, keys, nextKeyIndex);
         attempts.push(...result.attempts.map(attempt => ({ stage, ...attempt })));
         nextKeyIndex = (result.metadata.keyIndex + 1) % keys.length;
@@ -251,24 +323,26 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
 
     const translated = await executeStage({
         stage: 'translate',
-        instruction: QUALITY_TRANSLATE_USER_INSTRUCTION,
+        instruction: buildTranslateInstruction(documentContext),
         systemInstruction: QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
     });
     const audit = await executeStage({
         stage: 'medical_audit',
-        instruction: buildAuditInstruction(translated.text),
+        instruction: buildAuditInstruction(translated.text, { documentContext }),
         systemInstruction: MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
         responseType: 'json',
+        referenceText: translated.text,
+        requireCoverage: true,
     });
     const revised = await executeStage({
         stage: 'revise',
-        instruction: buildRevisionInstruction(translated.text, audit.json),
+        instruction: buildRevisionInstruction(translated.text, audit.json, { documentContext }),
         systemInstruction: MEDICAL_REVISION_SYSTEM_INSTRUCTION,
         referenceText: translated.text,
     });
     const verified = await executeStage({
         stage: 'verify',
-        instruction: buildVerifyInstruction(revised.text),
+        instruction: buildVerifyInstruction(revised.text, { documentContext }),
         systemInstruction: MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
         responseType: 'json',
     });
@@ -280,7 +354,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
     if (hasBlockingQualityErrors(verified.json)) {
         const repaired = await executeStage({
             stage: 'repair',
-            instruction: buildRepairInstruction(revised.text, verified.json),
+            instruction: buildRepairInstruction(revised.text, verified.json, { documentContext }),
             systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
             referenceText: revised.text,
         });
@@ -289,7 +363,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
         finalMetadata = repaired.metadata;
         const reverified = await executeStage({
             stage: 'reverify',
-            instruction: buildVerifyInstruction(repaired.text),
+            instruction: buildVerifyInstruction(repaired.text, { documentContext }),
             systemInstruction: MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
             responseType: 'json',
         });
@@ -303,7 +377,9 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
         stages,
         finalReport,
         repairCount,
-        qualityStatus: hasBlockingQualityErrors(finalReport) ? 'needs_review' : 'passed',
+        qualityStatus: hasBlockingQualityErrors(finalReport) || !isQualityCoverageComplete(finalReport, finalText)
+            ? 'needs_review'
+            : 'passed',
     };
 }
 
@@ -373,8 +449,9 @@ export async function runBenchmark(options) {
             systemInstructionSha256: createHash('sha256')
                 .update(options.variant === 'B0' ? LEGACY_TRANSLATION_SYSTEM_INSTRUCTION : QUALITY_TRANSLATION_SYSTEM_INSTRUCTION)
                 .digest('hex'),
-            pipelineInstructionSha256: options.variant === 'B4'
+            pipelineInstructionSha256: ['B4', 'B5'].includes(options.variant)
                 ? createHash('sha256').update([
+                    ...(options.variant === 'B5' ? [DOCUMENT_CONTEXT_SYSTEM_INSTRUCTION] : []),
                     MEDICAL_AUDIT_SYSTEM_INSTRUCTION,
                     MEDICAL_REVISION_SYSTEM_INSTRUCTION,
                     MEDICAL_VERIFY_SYSTEM_INSTRUCTION,
@@ -388,8 +465,14 @@ export async function runBenchmark(options) {
 
     const keys = getGeminiApiKeys();
     if (keys.length === 0) throw new Error('Không có GEMINI_API_KEYS để chạy benchmark.');
-    const result = options.variant === 'B4'
-        ? await runQualityPipeline({ ...pageRange, buffer: benchmarkInput }, keys, options.keyIndex % keys.length)
+    let context = null;
+    let contextResult = null;
+    if (options.variant === 'B5') {
+        contextResult = await buildBenchmarkDocumentContext(sourcePath, pageRange.totalPages, keys, options.keyIndex % keys.length);
+        context = contextResult.context;
+    }
+    const result = ['B4', 'B5'].includes(options.variant)
+        ? await runQualityPipeline({ ...pageRange, buffer: benchmarkInput }, keys, options.keyIndex % keys.length, context)
         : await callWithBenchmarkRotation({
             model: GEMINI_MODEL,
             contents: createPdfContents(
@@ -405,7 +488,7 @@ export async function runBenchmark(options) {
         ...plan,
         completedAt: new Date().toISOString(),
         configuredKeyCount: keys.length,
-        attempts: result.attempts,
+        attempts: [...(contextResult?.attempts || []), ...result.attempts],
         response: {
             text: result.text,
             metadata: result.metadata,
@@ -414,6 +497,10 @@ export async function runBenchmark(options) {
         repairCount: result.repairCount || 0,
         finalReport: result.finalReport || null,
         stages: result.stages || null,
+        documentContext: contextResult ? {
+            sha256: createHash('sha256').update(JSON.stringify(context)).digest('hex'),
+            metadata: contextResult.metadata,
+        } : null,
     };
 
     await mkdir(localOutputDirectory, { recursive: true });

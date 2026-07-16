@@ -21,7 +21,7 @@ function valueAfter(args, name) {
 }
 
 export function parseBatchArgs(args) {
-    const variants = (valueAfter(args, '--variants') || 'B0,B1,B2,B3,B4')
+    const variants = (valueAfter(args, '--variants') || 'B5')
         .split(',')
         .map(value => value.trim().toUpperCase())
         .filter(Boolean);

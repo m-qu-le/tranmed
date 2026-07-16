@@ -4,6 +4,20 @@ import { createQualityGeminiExecutors } from '../src/services/qualityGeminiExecu
 import { QUALITY_REPORT_JSON_SCHEMA } from '../src/services/translationQuality.js';
 import { ErrorCodes } from '../src/utils/processingError.js';
 
+const completeCoverage = {
+    status: 'COMPLETE',
+    items: Array.from({ length: 4 }, (_, index) => ({
+        focus: 'meaning', sourceExcerpt: `source ${index}`, targetExcerpt: `target ${index}`, result: 'match',
+    })),
+};
+const documentContext = {
+    documentFocus: 'Bệnh học',
+    terminology: [{ sourceTerm: 'lesion', preferredVietnamese: 'tổn thương', note: 'Dùng nhất quán.' }],
+    abbreviations: [],
+    consistencyRules: [{ sourceExcerpt: 'Dose', rule: 'Giữ nguyên đơn vị.' }],
+    highRiskNotes: ['Kiểm tra liều.'],
+};
+
 test('quality executors use high thinking, bounded output and structured JSON without leaking artifacts to events', async () => {
     const requests = [];
     const events = [];
@@ -16,16 +30,16 @@ test('quality executors use high thinking, bounded output and structured JSON wi
     const generate = async request => {
         requests.push(request);
         return request.responseType === 'json'
-            ? { text: '{"status":"PASS","errors":[]}', json: { status: 'PASS', errors: [] }, metadata: { stage: request.stage } }
+            ? { text: '{"status":"PASS","errors":[],"coverage":{"status":"COMPLETE","items":[]}}', json: { status: 'PASS', errors: [], coverage: completeCoverage }, metadata: { stage: request.stage } }
             : { text: '# Markdown', metadata: { stage: request.stage } };
     };
     const executors = createQualityGeminiExecutors({ scheduler, generate, onSchedulerEvent: event => events.push(event) });
     const pdfBuffer = Buffer.alloc(100, 1);
     const chunk = {
         draftContent: 'draft',
-        auditReport: { status: 'PASS', errors: [] },
+        auditReport: { status: 'PASS', errors: [], coverage: completeCoverage },
         revisedContent: 'revised',
-        verificationReport: { status: 'FAIL', errors: [] },
+        verificationReport: { status: 'FAIL', errors: [], coverage: { ...completeCoverage, status: 'INCOMPLETE' } },
         repairedContent: 'repaired',
     };
 
@@ -47,7 +61,7 @@ test('quality executors use high thinking, bounded output and structured JSON wi
     }
     for (const request of requests.filter(request => request.responseType === 'json')) {
         assert.equal(request.config.responseMimeType, 'application/json');
-        assert.equal(request.config.maxOutputTokens, 8192);
+        assert.equal(request.config.maxOutputTokens, 16384);
         assert.deepEqual(request.config.responseJsonSchema, QUALITY_REPORT_JSON_SCHEMA);
         assert.equal(typeof request.structuredValidator, 'function');
     }
@@ -79,9 +93,31 @@ test('revision coverage failure is raised inside the scheduler so another key ca
     const executors = createQualityGeminiExecutors({ scheduler, generate });
     const result = await executors.revise({
         pdfBuffer: Buffer.alloc(100, 1),
-        chunk: { draftContent: reference, auditReport: { status: 'PASS', errors: [] } },
+        chunk: { draftContent: reference, auditReport: { status: 'PASS', errors: [], coverage: completeCoverage } },
     });
 
     assert.deepEqual(requestedKeys, [0, 1]);
     assert.equal(result.text, reference.trim());
+});
+
+test('document context uses an ephemeral Gemini File API PDF and deletes it after generation', async () => {
+    const deleted = [];
+    const scheduler = { async execute(factory) { return factory({ apiKey: 'key-0', keyIndex: 0 }); } };
+    const client = { files: { delete: async ({ name }) => deleted.push(name) } };
+    const requests = [];
+    const executors = createQualityGeminiExecutors({
+        scheduler,
+        uploadFile: async () => ({ client, file: { name: 'files/context', uri: 'gemini://context', mimeType: 'application/pdf', state: 'ACTIVE' } }),
+        generate: async request => {
+            requests.push(request);
+            return { json: documentContext, metadata: { stage: request.stage, finishReason: 'STOP' } };
+        },
+    });
+
+    const result = await executors.document_context({ sourcePath: 'source.pdf', totalPages: 20 });
+
+    assert.deepEqual(result.json, documentContext);
+    assert.equal(requests[0].stage, 'document_context');
+    assert.equal(requests[0].contents[0].parts[0].fileData.fileUri, 'gemini://context');
+    assert.deepEqual(deleted, ['files/context']);
 });

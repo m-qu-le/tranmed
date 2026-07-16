@@ -1,7 +1,7 @@
-import { hasBlockingQualityErrors } from './translationQuality.js';
+import { hasBlockingQualityErrors, isQualityCoverageComplete } from './translationQuality.js';
 
-export const QUALITY_PIPELINE_VERSION = 'p003-v1';
-export const QUALITY_PROMPT_VERSION = 'p003-prompts-v1';
+export const QUALITY_PIPELINE_VERSION = 'p003-v2';
+export const QUALITY_PROMPT_VERSION = 'p003-prompts-v2';
 
 export const QUALITY_STAGES = Object.freeze([
     'pending',
@@ -17,6 +17,7 @@ export const QUALITY_STAGES = Object.freeze([
 
 export const QUALITY_STATUSES = Object.freeze(['pending', 'passed', 'needs_review']);
 export const QUALITY_ACTIONS = Object.freeze([
+    'document_context',
     'translate',
     'medical_audit',
     'revise',
@@ -63,6 +64,12 @@ export function transitionForAction(action, result, chunk) {
             return { nextStage: 'revised', set: { ...baseSet, revisedContent: result.text } };
         case 'verify': {
             const set = { ...baseSet, verificationReport: result.json };
+            if (!isQualityCoverageComplete(result.json, chunk.revisedContent)) {
+                return {
+                    nextStage: 'needs_review',
+                    set: { ...set, content: chunk.revisedContent, qualityStatus: 'needs_review' },
+                };
+            }
             if (hasBlockingQualityErrors(result.json)) return { nextStage: 'verified', set };
             return {
                 nextStage: 'completed',
@@ -88,6 +95,9 @@ export function transitionForAction(action, result, chunk) {
             };
         case 'reverify': {
             const set = { ...baseSet, reverifyReport: result.json, content: chunk.repairedContent };
+            if (!isQualityCoverageComplete(result.json, chunk.repairedContent)) {
+                return { nextStage: 'needs_review', set: { ...set, qualityStatus: 'needs_review' } };
+            }
             if (hasBlockingQualityErrors(result.json)) {
                 return { nextStage: 'needs_review', set: { ...set, qualityStatus: 'needs_review' } };
             }

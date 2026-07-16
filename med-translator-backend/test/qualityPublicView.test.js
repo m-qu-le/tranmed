@@ -27,6 +27,9 @@ test('quality public view exposes progress and page ranges but no internal artif
         status: 'processing',
         translationMode: 'quality',
         translationPipelineVersion: 'p003-v1',
+        qualityContextVersion: 'p003-context-v1',
+        qualityContextGeneratedAt: new Date(),
+        qualityDocumentContext: { private: 'context' },
         currentQualityStage: 'verify',
         passedChunks: 3,
         needsReviewChunks: 1,
@@ -45,11 +48,13 @@ test('quality public view exposes progress and page ranges but no internal artif
         passedChunks: 3,
         needsReviewChunks: 1,
         warnings: [{ chunkIndex: 4, pageStart: 9, pageEnd: 10 }],
+        contextReady: true,
     });
     assert.equal(payload.currentQualityStage, 'verify');
     assert.equal(payload.qualityStagePhase, 'completed');
     assert.equal(payload.pageStart, 9);
     assert.equal('draftContent' in payload, false);
+    assert.equal('qualityDocumentContext' in payload.quality, false);
     assert.equal('audit' in payload.quality.warnings[0], false);
 });
 
@@ -65,5 +70,6 @@ test('unknown stages and malformed warnings are not published', () => {
         passedChunks: 0,
         needsReviewChunks: 0,
         warnings: [],
+        contextReady: false,
     });
 });

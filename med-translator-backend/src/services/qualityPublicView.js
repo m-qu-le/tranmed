@@ -1,4 +1,5 @@
 const PUBLIC_QUALITY_STAGES = new Set([
+    'document_context',
     'translate',
     'medical_audit',
     'revise',
@@ -44,6 +45,7 @@ export function buildPublicQualitySummary(job) {
         passedChunks: numberOrZero(job.passedChunks),
         needsReviewChunks: numberOrZero(job.needsReviewChunks),
         warnings,
+        contextReady: Boolean(job?.qualityContextVersion && job?.qualityContextGeneratedAt),
     };
 }
 
