@@ -29,6 +29,7 @@ import {
 import { extractPdfPageRange } from '../src/utils/pdfSplitter.js';
 import { redactSensitiveText } from '../src/utils/redactSecrets.js';
 import { normalizeQualityMarkdown } from '../src/services/qualityMarkdown.js';
+import { assertQualityTextCoverage } from '../src/services/qualityTextGuard.js';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '../..');
@@ -144,11 +145,22 @@ async function callWithBenchmarkRotation(request, keys, firstKeyIndex) {
         for (let retry = 0; retry <= retriesOnKey; retry += 1) {
             try {
                 await waitForBenchmarkHeadroom(keyIndex);
-                const result = await generateGeminiContent({
+                let result = await generateGeminiContent({
                     ...request,
                     apiKey: keys[keyIndex],
                     keyIndex,
                 });
+                if (request.responseType !== 'json') {
+                    result = { ...result, text: normalizeQualityMarkdown(result.text) };
+                    if (request.referenceText) {
+                        assertQualityTextCoverage({
+                            candidate: result.text,
+                            reference: request.referenceText,
+                            stage: request.stage,
+                            metadata: result.metadata,
+                        });
+                    }
+                }
                 attempts.push({ keyIndex, retry, outcome: 'success', finishReason: result.metadata.finishReason });
                 return { ...result, attempts };
             } catch (error) {
@@ -209,7 +221,13 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
     const attempts = [];
     let nextKeyIndex = firstKeyIndex;
 
-    const executeStage = async ({ stage, instruction, systemInstruction, responseType = 'text' }) => {
+    const executeStage = async ({
+        stage,
+        instruction,
+        systemInstruction,
+        responseType = 'text',
+        referenceText = null,
+    }) => {
         const result = await callWithBenchmarkRotation({
             model: GEMINI_MODEL,
             contents: createPdfContents(pageRange.buffer, instruction),
@@ -219,8 +237,8 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
             responseType,
             structuredValidator: responseType === 'json' ? isQualityReport : undefined,
             retryMode: 'quality',
+            referenceText,
         }, keys, nextKeyIndex);
-        if (responseType === 'text') result.text = normalizeQualityMarkdown(result.text);
         attempts.push(...result.attempts.map(attempt => ({ stage, ...attempt })));
         nextKeyIndex = (result.metadata.keyIndex + 1) % keys.length;
         stages[stage] = {
@@ -246,6 +264,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
         stage: 'revise',
         instruction: buildRevisionInstruction(translated.text, audit.json),
         systemInstruction: MEDICAL_REVISION_SYSTEM_INSTRUCTION,
+        referenceText: translated.text,
     });
     const verified = await executeStage({
         stage: 'verify',
@@ -263,6 +282,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex) {
             stage: 'repair',
             instruction: buildRepairInstruction(revised.text, verified.json),
             systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
+            referenceText: revised.text,
         });
         repairCount = 1;
         finalText = repaired.text;

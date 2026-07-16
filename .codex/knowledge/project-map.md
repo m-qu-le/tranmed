@@ -38,6 +38,7 @@ React lập upload batch (tối đa 200 PDF)
 - Job mới không lưu toàn bộ Markdown vào `Job.result`; field này chỉ đọc dữ liệu legacy.
 - Quality stage persist cùng `pipelineVersion`; version mismatch reset chunk dở nhưng không chạm final content.
 - `repairCount <= 1`; `needs_review` là terminal có cảnh báo, không phải lỗi làm mất download.
+- Revision/repair có coverage guard 80%; bản co rút bất thường được rotate và không được thay thế bản đầy đủ hơn.
 - Result API/SSE không public draft, audit excerpt, verify report, PDF base64, key hoặc toàn bộ prompt.
 - Chỉ lỗi toàn key/quota cuối cùng mới tăng circuit counter; một key 429 được key khác cứu không làm hệ thống ngủ.
 - Cancel kiểm AbortSignal và processing token trước/sau stage; cleanup xóa toàn bộ TranslationChunk và source.

@@ -257,6 +257,7 @@ Mục tiêu: sửa đúng lỗi đã nêu, hạn chế model viết lại phần
 - [x] **P003-G5-S07 — Bounded loop.** `repairCount <= 1` được enforce bằng code/schema/test, không chỉ bằng prompt.
 - [x] **P003-G5-S08 — Chọn bản tốt nhất.** Khi reverify fail, mặc định giữ bản repaired; nếu repair response không hợp lệ thì fallback revised.
 - [x] **P003-G5-S09 — Completion.** Job completed khi mọi chunk có `passed` hoặc `needs_review`; tổng warning được lưu và phát qua SSE.
+- [x] **P003-G5-S10 — Coverage guard.** Revision/repair phải giữ ít nhất 80% ký tự có nghĩa của bản trước; output co rút bị rotate như response invalid, và repair không phục hồi được phải fallback về revised đầy đủ với `needs_review`.
 
 ## G6 — Key rotation, quota, retry và cancellation
 

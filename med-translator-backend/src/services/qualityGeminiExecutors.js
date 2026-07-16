@@ -16,6 +16,7 @@ import {
 } from './qualityPrompts.js';
 import { isQualityReport, QUALITY_REPORT_JSON_SCHEMA } from './translationQuality.js';
 import { normalizeQualityMarkdown } from './qualityMarkdown.js';
+import { assertQualityTextCoverage } from './qualityTextGuard.js';
 
 export const qualityKeyScheduler = new GeminiKeyScheduler({ keysProvider: getGeminiApiKeys });
 
@@ -42,29 +43,48 @@ export function createQualityGeminiExecutors({
     generate = generateGeminiContent,
     onSchedulerEvent = () => {},
 } = {}) {
-    const execute = async ({ stage, pdfBuffer, instruction, systemInstruction, responseType = 'text', signal }) => {
+    const execute = async ({
+        stage,
+        pdfBuffer,
+        instruction,
+        systemInstruction,
+        responseType = 'text',
+        referenceText = null,
+        signal,
+    }) => {
         const result = await scheduler.execute(
-            ({ apiKey, keyIndex }) => generate({
-                apiKey,
-                keyIndex,
-                model: GEMINI_MODEL,
-                contents: createPdfContents(pdfBuffer, instruction),
-                config: stageConfig(systemInstruction, responseType),
-                signal,
-                stage,
-                validationMode: 'strict',
-                responseType,
-                structuredValidator: responseType === 'json' ? isQualityReport : undefined,
-            }),
+            async ({ apiKey, keyIndex }) => {
+                const generated = await generate({
+                    apiKey,
+                    keyIndex,
+                    model: GEMINI_MODEL,
+                    contents: createPdfContents(pdfBuffer, instruction),
+                    config: stageConfig(systemInstruction, responseType),
+                    signal,
+                    stage,
+                    validationMode: 'strict',
+                    responseType,
+                    structuredValidator: responseType === 'json' ? isQualityReport : undefined,
+                });
+                if (responseType === 'json') return generated;
+                const normalized = { ...generated, text: normalizeQualityMarkdown(generated.text) };
+                if (referenceText) {
+                    assertQualityTextCoverage({
+                        candidate: normalized.text,
+                        reference: referenceText,
+                        stage,
+                        metadata: normalized.metadata,
+                    });
+                }
+                return normalized;
+            },
             {
                 estimatedInputTokens: 10_000,
                 signal,
                 onEvent: event => onSchedulerEvent({ stage, ...event }),
             }
         );
-        return responseType === 'text'
-            ? { ...result, text: normalizeQualityMarkdown(result.text) }
-            : result;
+        return result;
     };
 
     return Object.freeze({
@@ -88,6 +108,7 @@ export function createQualityGeminiExecutors({
             pdfBuffer,
             instruction: buildRevisionInstruction(chunk.draftContent, chunk.auditReport),
             systemInstruction: MEDICAL_REVISION_SYSTEM_INSTRUCTION,
+            referenceText: chunk.draftContent,
             signal,
         }),
         verify: ({ pdfBuffer, chunk, signal }) => execute({
@@ -103,6 +124,7 @@ export function createQualityGeminiExecutors({
             pdfBuffer,
             instruction: buildRepairInstruction(chunk.revisedContent, chunk.verificationReport),
             systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
+            referenceText: chunk.revisedContent,
             signal,
         }),
         reverify: ({ pdfBuffer, chunk, signal }) => execute({

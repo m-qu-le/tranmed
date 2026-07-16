@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createQualityGeminiExecutors } from '../src/services/qualityGeminiExecutors.js';
 import { QUALITY_REPORT_JSON_SCHEMA } from '../src/services/translationQuality.js';
+import { ErrorCodes } from '../src/utils/processingError.js';
 
 test('quality executors use high thinking, bounded output and structured JSON without leaking artifacts to events', async () => {
     const requests = [];
@@ -52,4 +53,35 @@ test('quality executors use high thinking, bounded output and structured JSON wi
     }
     assert.equal(requests.find(request => request.stage === 'translate').config.maxOutputTokens, 32768);
     assert.doesNotMatch(JSON.stringify(events), /secret-key|draft|revised|repaired/);
+});
+
+test('revision coverage failure is raised inside the scheduler so another key can recover', async () => {
+    const reference = 'Nội dung y khoa đầy đủ cần được giữ lại. '.repeat(80);
+    const requestedKeys = [];
+    const scheduler = {
+        async execute(factory) {
+            try {
+                return await factory({ apiKey: 'key-0', keyIndex: 0 });
+            } catch (error) {
+                assert.equal(error.code, ErrorCodes.GEMINI_RESPONSE_INVALID);
+                assert.ok(error.coverageRatio < 0.8);
+                return factory({ apiKey: 'key-1', keyIndex: 1 });
+            }
+        },
+    };
+    const generate = async request => {
+        requestedKeys.push(request.keyIndex);
+        return {
+            text: request.keyIndex === 0 ? 'Một mục ngắn bị cụt.' : reference,
+            metadata: { stage: request.stage, keyIndex: request.keyIndex, finishReason: 'STOP' },
+        };
+    };
+    const executors = createQualityGeminiExecutors({ scheduler, generate });
+    const result = await executors.revise({
+        pdfBuffer: Buffer.alloc(100, 1),
+        chunk: { draftContent: reference, auditReport: { status: 'PASS', errors: [] } },
+    });
+
+    assert.deepEqual(requestedKeys, [0, 1]);
+    assert.equal(result.text, reference.trim());
 });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-15T18:25:09.941Z",
+  "generatedAt": "2026-07-16T10:30:56.435Z",
   "scope": {
     "pdfCount": 20,
     "variants": [
@@ -14,13 +14,7 @@
   },
   "automatedChecks": {
     "inputConsistencyFailures": [],
-    "lengthWarnings": [
-      {
-        "fileName": "78 Asthma.pdf",
-        "variant": "B4",
-        "ratioToMedian": 0.548
-      }
-    ],
+    "lengthWarnings": [],
     "nonStopTotal": 0,
     "emptyTotal": 0,
     "invalidStructuredTotal": 0
@@ -44,9 +38,9 @@
     "1": 25,
     "2": 26,
     "3": 25,
-    "4": 23,
+    "4": 24,
     "5": 24,
-    "6": 26
+    "6": 25
   },
   "byVariant": {
     "B0": {
@@ -252,38 +246,38 @@
       "attemptErrors": 4,
       "attempts429": 0,
       "latencyMs": {
-        "mean": 14179,
-        "p50": 12942,
-        "p95": 20615,
+        "mean": 14474,
+        "p50": 13678,
+        "p95": 20793,
         "min": 7729,
         "max": 27497
       },
       "promptTokens": {
-        "mean": 3940,
+        "mean": 3958,
         "p50": 4418,
         "p95": 5435,
         "min": 1317,
         "max": 5719
       },
       "outputTokens": {
-        "mean": 1781,
+        "mean": 1798,
         "p50": 552,
         "p95": 4000,
         "min": 8,
         "max": 4161
       },
       "thoughtTokens": {
-        "mean": 3207,
-        "p50": 2837,
+        "mean": 3245,
+        "p50": 2984,
         "p95": 6456,
         "min": 593,
         "max": 7576
       },
       "outputChars": {
-        "mean": 11970,
+        "mean": 12289,
         "p50": 11733,
         "p95": 15008,
-        "min": 4249,
+        "min": 9910,
         "max": 15375
       },
       "nonStop": 0,
@@ -332,8 +326,8 @@
       "translate": {
         "calls": 20,
         "latencyMs": {
-          "mean": 19101,
-          "p50": 17665,
+          "mean": 19550,
+          "p50": 17936,
           "p95": 25829,
           "min": 13950,
           "max": 27497
@@ -346,15 +340,15 @@
           "max": 1357
         },
         "outputTokens": {
-          "mean": 3416,
+          "mean": 3414,
           "p50": 3239,
           "p95": 4142,
           "min": 2843,
           "max": 4148
         },
         "thoughtTokens": {
-          "mean": 3626,
-          "p50": 2772,
+          "mean": 3690,
+          "p50": 2802,
           "p95": 6845,
           "min": 1758,
           "max": 7576
@@ -363,29 +357,29 @@
       "medical_audit": {
         "calls": 20,
         "latencyMs": {
-          "mean": 13483,
-          "p50": 12620,
+          "mean": 13431,
+          "p50": 12532,
           "p95": 20599,
           "min": 7729,
           "max": 20615
         },
         "promptTokens": {
-          "mean": 4656,
+          "mean": 4655,
           "p50": 4455,
           "p95": 5394,
           "min": 4095,
           "max": 5398
         },
         "outputTokens": {
-          "mean": 287,
-          "p50": 262,
+          "mean": 285,
+          "p50": 260,
           "p95": 502,
           "min": 17,
           "max": 552
         },
         "thoughtTokens": {
-          "mean": 4112,
-          "p50": 3647,
+          "mean": 4086,
+          "p50": 3619,
           "p95": 6670,
           "min": 2285,
           "max": 7330
@@ -394,30 +388,30 @@
       "revise": {
         "calls": 20,
         "latencyMs": {
-          "mean": 12598,
-          "p50": 12327,
-          "p95": 14856,
+          "mean": 12871,
+          "p50": 12470,
+          "p95": 16539,
           "min": 10040,
-          "max": 16539
+          "max": 16924
         },
         "promptTokens": {
-          "mean": 4877,
+          "mean": 4875,
           "p50": 4745,
           "p95": 5572,
           "min": 4246,
           "max": 5697
         },
         "outputTokens": {
-          "mean": 3426,
+          "mean": 3424,
           "p50": 3246,
           "p95": 4148,
           "min": 2836,
           "max": 4160
         },
         "thoughtTokens": {
-          "mean": 1397,
+          "mean": 1452,
           "p50": 1200,
-          "p95": 2369,
+          "p95": 2528,
           "min": 799,
           "max": 2603
         }
@@ -425,29 +419,29 @@
       "verify": {
         "calls": 20,
         "latencyMs": {
-          "mean": 11976,
-          "p50": 10844,
+          "mean": 12278,
+          "p50": 11020,
           "p95": 17393,
           "min": 8141,
           "max": 18673
         },
         "promptTokens": {
-          "mean": 4687,
+          "mean": 4685,
           "p50": 4481,
           "p95": 5415,
           "min": 4111,
           "max": 5435
         },
         "outputTokens": {
-          "mean": 101,
+          "mean": 104,
           "p50": 17,
           "p95": 386,
           "min": 8,
           "max": 402
         },
         "thoughtTokens": {
-          "mean": 3742,
-          "p50": 3397,
+          "mean": 3810,
+          "p50": 3528,
           "p95": 5206,
           "min": 2271,
           "max": 6153
@@ -456,61 +450,61 @@
       "repair": {
         "calls": 4,
         "latencyMs": {
-          "mean": 11281,
-          "p50": 9312,
-          "p95": 10243,
+          "mean": 13758,
+          "p50": 10243,
+          "p95": 16279,
           "min": 9290,
-          "max": 16279
+          "max": 19220
         },
         "promptTokens": {
-          "mean": 4734,
+          "mean": 4729,
           "p50": 4416,
-          "p95": 4494,
+          "p95": 4473,
           "min": 4306,
           "max": 5719
         },
         "outputTokens": {
-          "mean": 2879,
+          "mean": 3310,
           "p50": 3024,
           "p95": 3032,
-          "min": 1298,
+          "min": 3021,
           "max": 4161
         },
         "thoughtTokens": {
-          "mean": 1383,
+          "mean": 1687,
           "p50": 1126,
           "p95": 1794,
           "min": 593,
-          "max": 2019
+          "max": 3235
         }
       },
       "reverify": {
         "calls": 4,
         "latencyMs": {
-          "mean": 14873,
+          "mean": 14008,
           "p50": 13552,
-          "p95": 16932,
+          "p95": 16211,
           "min": 9338,
-          "max": 19668
+          "max": 16932
         },
         "promptTokens": {
-          "mean": 4132,
+          "mean": 4563,
           "p50": 4267,
           "p95": 4291,
-          "min": 2533,
+          "min": 4256,
           "max": 5436
         },
         "outputTokens": {
-          "mean": 160,
+          "mean": 103,
           "p50": 17,
           "p95": 147,
           "min": 17,
-          "max": 458
+          "max": 230
         },
         "thoughtTokens": {
-          "mean": 4791,
-          "p50": 4444,
-          "p95": 5466,
+          "mean": 4505,
+          "p50": 4322,
+          "p95": 4444,
           "min": 2638,
           "max": 6615
         }
@@ -524,8 +518,8 @@
         "omission": 3
       },
       "severities": {
-        "major": 13,
-        "minor": 29
+        "major": 15,
+        "minor": 27
       }
     },
     "finalFindings": {
@@ -536,8 +530,8 @@
         "omission": 3
       },
       "severities": {
-        "minor": 9,
-        "major": 1
+        "minor": 8,
+        "major": 2
       }
     },
     "cases": [
@@ -740,12 +734,12 @@
         "repairCount": 1,
         "finalErrors": [
           {
-            "category": "omission",
+            "category": "terminology",
             "severity": "major"
           },
           {
-            "category": "terminology",
-            "severity": "minor"
+            "category": "omission",
+            "severity": "major"
           }
         ]
       },
