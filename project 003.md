@@ -421,8 +421,9 @@ Rollback:
 | 16-07-2026 | E011 | Smoke end-to-end quality một PDF 1 trang dùng Mongo/R2 thật nhưng namespace cô lập: 6 stage persisted, PASS sau 1 repair, preview/download khớp, R2 source deleted, Mongo database dropped, tổng 90.270 ms | `cline_docs/project-003-quality-smoke-report.json`; không cần chạy lại khi quota đang thấp |
 | 16-07-2026 | E012 | Case Asthma cho thấy repair cũ co từ khoảng 13,9 KB xuống 5,4 KB dù `STOP`; coverage guard 80% đã rotate output cụt, rerun giữ 13,7 KB và vẫn gắn `needs_review` cho 2 lỗi major | `cline_docs/project-003-asthma-independent-review.md`, benchmark report cập nhật và commit `8826ad0` |
 | 16-07-2026 | E013 | Phân tích không gọi Gemini: B4 trung bình 62.389 ms/chunk, ngoại suy 191 chunk trên 2 lane khoảng 99,3 phút; request tối đa 27,5 giây; PDF lớn nhất làm RSS tăng tối đa 53,87 MiB; BSON terminal ước tính 3,76 MiB/corpus | `cline_docs/project-003-performance-resource.md`; số liệu Render/Mongo thực vẫn chờ canary |
-| 16-07-2026 | E014 | Regression sau coverage guard/full-corpus harness: backend 97 test pass; frontend 12 test pass, lint/build đạt; dry-run dựng đủ 191 chunk và tách checkpoint dry-run khỏi live | Không gọi Gemini; `git diff --check` và kiểm tra cú pháp các script đạt |
+| 16-07-2026 | E014 | Regression sau coverage guard/full-corpus/review harness: backend 99 test pass; frontend 12 test pass, lint/build đạt; dry-run dựng đủ 191 chunk và tách checkpoint dry-run khỏi live | Không gọi Gemini; `git diff --check` và kiểm tra cú pháp các script đạt |
 | 16-07-2026 | E015 | Full-corpus live hoàn tất đủ 20 PDF/370 trang/191 chunk: 177 PASS, 14 `needs_review`, 50 repair; 864 call thành công/905 attempt, 0 task failed, stderr rỗng; coverage revise thấp nhất 91,8%, repair 98,4%; 1 critical và 15 major được đưa vào review queue theo file/trang | `cline_docs/project-003-full-corpus-report.json/.md`; raw artifact và nội dung sách chỉ ở `.p003-local/` ignored |
+| 16-07-2026 | E016 | Tạo bộ duyệt local cho đủ 14 chunk `needs_review`: mỗi case có PDF nguồn đúng 2 trang, bản dịch cuối và phiếu chứa finding/evidence/ba lựa chọn; case critical được xếp số 01 | `.p003-local/review-bundle/00-REVIEW-INDEX.md`; 14/14 case, 42/42 file hợp lệ và toàn bộ bundle được Git ignore |
 
 ## 12. Điều kiện hoàn thành PROJECT 003
 
@@ -461,11 +462,13 @@ Rollback:
 - `med-translator-backend/scripts/benchmark-project-003-full-corpus.js`: runner 191 chunk có resume theo artifact; checkpoint live và dry-run tách riêng.
 - `med-translator-backend/scripts/analyze-project-003-full-corpus.js`: chỉ tạo báo cáo sau khi checkpoint live đủ và không có task failed.
 - `cline_docs/project-003-full-corpus-report.*`: báo cáo đủ 191 chunk và review queue critical/major không chứa excerpt.
-- `project 003.md`: cập nhật evidence E008–E015 và ghi chú bàn giao này.
+- `med-translator-backend/scripts/create-project-003-review-bundle.js`: tái tạo bundle local từ report/artifact, xác minh SHA-256 nguồn và không đưa nội dung sách vào Git.
+- `.p003-local/review-bundle/`: 14 phiếu người dùng cần điền; bắt đầu tại `00-REVIEW-INDEX.md`.
+- `project 003.md`: cập nhật evidence E008–E016 và ghi chú bàn giao này.
 
 ### 13.3. Việc còn lại, theo thứ tự ưu tiên
 
-1. **Cần chủ dự án:** duyệt blind review ở `.p003-local/blind-review` và 14 chunk critical/major trong `cline_docs/project-003-full-corpus-report.md`; chốt G1-S10, G1-S11 và G8-S10. Ưu tiên `52. Pain Management.pdf` trang 21–22 vì có finding critical.
+1. **Cần chủ dự án:** điền 14 phiếu tại `.p003-local/review-bundle/00-REVIEW-INDEX.md`, bắt đầu bằng `52. Pain Management.pdf` trang 21–22 vì có finding critical; sau đó duyệt blind review ở `.p003-local/blind-review` để chốt G1-S10, G1-S11 và G8-S10.
 2. Hoàn tất G8-S12 bằng số liệu RAM/disk/Mongo thực ở canary; báo cáo local hiện chỉ đo RSS khi split PDF và BSON payload trước compression/index overhead.
 3. Deploy backend additive với mode `legacy`, smoke API/schema/SSE và một job legacy; sau đó deploy frontend tương thích ngược (G9-S02/S03). Đây là thay đổi production, cần chủ dự án cho phép trước khi thực hiện.
 4. Khi chủ dự án cho phép: canary quality một PDF ngắn, rồi một PDF dài; theo dõi stage latency, lease heartbeat, 429, artifact và cleanup (G9-S04).
