@@ -63,9 +63,9 @@ export function readP003Config(source = process.env) {
         throw new Error('GEMINI_THINKING_LEVEL của P003 bắt buộc là HIGH.');
     }
 
-    const maxRepairCycles = readNonNegativeInteger('QUALITY_MAX_REPAIR_CYCLES', 1, source);
-    if (maxRepairCycles > 1) {
-        throw new Error('QUALITY_MAX_REPAIR_CYCLES không được vượt quá 1.');
+    const maxRepairCycles = readNonNegativeInteger('QUALITY_MAX_REPAIR_CYCLES', 2, source);
+    if (maxRepairCycles > 2) {
+        throw new Error('QUALITY_MAX_REPAIR_CYCLES không được vượt quá 2.');
     }
 
     return Object.freeze({

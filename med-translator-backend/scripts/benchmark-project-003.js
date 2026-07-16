@@ -3,7 +3,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../src/config/env.js';
+import {
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT_MS,
+    getGeminiApiKeys,
+    QUALITY_MAX_REPAIR_CYCLES,
+} from '../src/config/env.js';
 import { createGeminiFileContents, createPdfContents, generateGeminiContent } from '../src/services/geminiAdapter.js';
 import {
     LEGACY_TRANSLATION_SYSTEM_INSTRUCTION,
@@ -24,7 +29,7 @@ import {
     QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
 } from '../src/services/qualityPrompts.js';
 import {
-    hasBlockingQualityErrors,
+    hasQualityErrors,
     isQualityCoverageComplete,
     isQualityReport,
     QUALITY_REPORT_JSON_SCHEMA,
@@ -351,14 +356,16 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex, documentContex
     let finalMetadata = revised.metadata;
     let finalReport = verified.json;
     let repairCount = 0;
-    if (hasBlockingQualityErrors(verified.json)) {
+    while (repairCount < QUALITY_MAX_REPAIR_CYCLES
+        && isQualityCoverageComplete(finalReport, finalText)
+        && hasQualityErrors(finalReport)) {
         const repaired = await executeStage({
             stage: 'repair',
-            instruction: buildRepairInstruction(revised.text, verified.json, { documentContext }),
+            instruction: buildRepairInstruction(finalText, finalReport, { documentContext }),
             systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
-            referenceText: revised.text,
+            referenceText: finalText,
         });
-        repairCount = 1;
+        repairCount += 1;
         finalText = repaired.text;
         finalMetadata = repaired.metadata;
         const reverified = await executeStage({
@@ -377,7 +384,7 @@ async function runQualityPipeline(pageRange, keys, firstKeyIndex, documentContex
         stages,
         finalReport,
         repairCount,
-        qualityStatus: hasBlockingQualityErrors(finalReport) || !isQualityCoverageComplete(finalReport, finalText)
+        qualityStatus: hasQualityErrors(finalReport) || !isQualityCoverageComplete(finalReport, finalText)
             ? 'needs_review'
             : 'passed',
     };

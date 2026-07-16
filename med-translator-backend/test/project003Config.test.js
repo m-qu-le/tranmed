@@ -8,14 +8,17 @@ test('P003 config defaults to the selected quality pipeline with two-page chunks
         pipelineMode: 'quality',
         pagesPerChunk: 2,
         thinkingLevel: 'HIGH',
-        maxRepairCycles: 1,
+        maxRepairCycles: 2,
     });
 });
 
 test('P003 config rejects unsupported modes, downgraded thinking and unbounded repair', () => {
     assert.throws(() => readP003Config({ TRANSLATION_PIPELINE_MODE: 'fast' }), /legacy hoặc quality/);
     assert.throws(() => readP003Config({ GEMINI_THINKING_LEVEL: 'MEDIUM' }), /bắt buộc là HIGH/);
-    assert.throws(() => readP003Config({ QUALITY_MAX_REPAIR_CYCLES: '2' }), /không được vượt quá 1/);
+    assert.equal(readP003Config({ QUALITY_MAX_REPAIR_CYCLES: '0' }).maxRepairCycles, 0);
+    assert.equal(readP003Config({ QUALITY_MAX_REPAIR_CYCLES: '1' }).maxRepairCycles, 1);
+    assert.equal(readP003Config({ QUALITY_MAX_REPAIR_CYCLES: '2' }).maxRepairCycles, 2);
+    assert.throws(() => readP003Config({ QUALITY_MAX_REPAIR_CYCLES: '3' }), /không được vượt quá 2/);
     assert.throws(() => readP003Config({ PDF_PAGES_PER_CHUNK: '0' }), /số nguyên dương/);
     assert.throws(() => readP003Config({ PDF_PAGES_PER_CHUNK: '2pages' }), /số nguyên dương/);
 });

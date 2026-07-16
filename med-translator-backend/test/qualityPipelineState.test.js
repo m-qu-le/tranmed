@@ -109,6 +109,10 @@ const failReport = {
     }],
     coverage: completeCoverage,
 };
+const minorFailReport = {
+    ...failReport,
+    errors: [{ ...failReport.errors[0], severity: 'minor' }],
+};
 const incompleteCoverageReport = {
     status: 'FAIL',
     errors: [],
@@ -125,14 +129,23 @@ function result(action, report = passReport) {
         : { text: `${action} markdown`, metadata };
 }
 
-function createExecutors(calls, { verifyReport = passReport, reverifyReport = passReport, onExecute } = {}) {
+function createExecutors(calls, {
+    verifyReport = passReport,
+    reverifyReport = passReport,
+    reverifyReports = null,
+    onExecute,
+} = {}) {
+    let reverifyIndex = 0;
     return Object.fromEntries([
         'translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify',
     ].map(action => [action, async context => {
         calls.push(action);
         onExecute?.(action, context);
         if (action === 'verify') return result(action, verifyReport);
-        if (action === 'reverify') return result(action, reverifyReport);
+        if (action === 'reverify') return result(
+            action,
+            reverifyReports?.[reverifyIndex++] || reverifyReport
+        );
         return result(action);
     }]));
 }
@@ -255,6 +268,56 @@ test('FAIL verify followed by one successful repair/reverify completes with repa
     assert.equal(final.repairCount, 1);
 });
 
+test('minor-only FAIL is repaired instead of being promoted to passed', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls, { verifyReport: minorFailReport, reverifyReport: passReport }),
+    });
+
+    const final = await run(service);
+
+    assert.deepEqual(calls, ['translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify']);
+    assert.equal(final.stage, 'completed');
+    assert.equal(final.qualityStatus, 'passed');
+    assert.equal(final.repairCount, 1);
+    assert.equal(final.reverifyReport.status, 'PASS');
+});
+
+test('a remaining error gets a second targeted repair using the latest text and report', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    const repairInputs = [];
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls, {
+            verifyReport: failReport,
+            reverifyReports: [minorFailReport, passReport],
+            onExecute(action, context) {
+                if (action === 'repair') repairInputs.push(clone(context.chunk));
+            },
+        }),
+    });
+
+    const final = await run(service);
+
+    assert.deepEqual(calls, [
+        'translate', 'medical_audit', 'revise', 'verify',
+        'repair', 'reverify', 'repair', 'reverify',
+    ]);
+    assert.equal(repairInputs[0].repairedContent, undefined);
+    assert.equal(repairInputs[1].repairedContent, 'repair markdown');
+    assert.deepEqual(repairInputs[1].reverifyReport, minorFailReport);
+    assert.equal(final.stage, 'completed');
+    assert.equal(final.qualityStatus, 'passed');
+    assert.equal(final.repairCount, 2);
+    assert.deepEqual(Object.keys(final.usageByStage), [
+        'translate', 'medical_audit', 'revise', 'verify',
+        'repair', 'reverify', 'repair_2', 'reverify_2',
+    ]);
+});
+
 test('an expired worker token after a stage response cannot persist or start the next stage', async () => {
     const model = new MemoryChunkModel();
     const calls = [];
@@ -276,7 +339,7 @@ test('an expired worker token after a stage response cannot persist or start the
     assert.equal(model.row.draftContent, undefined);
 });
 
-test('quality pipeline performs at most one repair and keeps diagnostics after reverify failure', async () => {
+test('quality pipeline performs at most two repairs and keeps diagnostics after final reverify failure', async () => {
     const model = new MemoryChunkModel();
     const calls = [];
     const service = new QualityPipelineService({
@@ -286,10 +349,13 @@ test('quality pipeline performs at most one repair and keeps diagnostics after r
 
     const final = await run(service);
 
-    assert.deepEqual(calls, ['translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify']);
+    assert.deepEqual(calls, [
+        'translate', 'medical_audit', 'revise', 'verify',
+        'repair', 'reverify', 'repair', 'reverify',
+    ]);
     assert.equal(final.stage, 'needs_review');
     assert.equal(final.qualityStatus, 'needs_review');
-    assert.equal(final.repairCount, 1);
+    assert.equal(final.repairCount, 2);
     assert.equal(final.content, 'repair markdown');
     assert.equal(final.draftContent, 'translate markdown');
     assert.equal(final.revisedContent, 'revise markdown');

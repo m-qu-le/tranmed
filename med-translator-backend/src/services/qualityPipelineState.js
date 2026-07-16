@@ -1,7 +1,8 @@
-import { hasBlockingQualityErrors, isQualityCoverageComplete } from './translationQuality.js';
+import { QUALITY_MAX_REPAIR_CYCLES } from '../config/env.js';
+import { isQualityCoverageComplete } from './translationQuality.js';
 
-export const QUALITY_PIPELINE_VERSION = 'p003-v2';
-export const QUALITY_PROMPT_VERSION = 'p003-prompts-v2';
+export const QUALITY_PIPELINE_VERSION = 'p003-v3';
+export const QUALITY_PROMPT_VERSION = 'p003-prompts-v3';
 
 export const QUALITY_STAGES = Object.freeze([
     'pending',
@@ -32,13 +33,13 @@ export function isTerminalQualityStage(stage) {
     return TERMINAL_STAGES.has(stage);
 }
 
-export function getNextQualityAction(chunk) {
+export function getNextQualityAction(chunk, maxRepairCycles = QUALITY_MAX_REPAIR_CYCLES) {
     switch (chunk.stage || 'pending') {
         case 'pending': return 'translate';
         case 'translated': return 'medical_audit';
         case 'audited': return 'revise';
         case 'revised': return 'verify';
-        case 'verified': return chunk.repairCount >= 1 ? 'complete_needs_review' : 'repair';
+        case 'verified': return chunk.repairCount >= maxRepairCycles ? 'complete_needs_review' : 'repair';
         case 'repaired': return 'reverify';
         case 'reverified': return 'complete_needs_review';
         case 'completed':
@@ -47,8 +48,11 @@ export function getNextQualityAction(chunk) {
     }
 }
 
-export function transitionForAction(action, result, chunk) {
-    const usagePath = `usageByStage.${action}`;
+export function transitionForAction(action, result, chunk, maxRepairCycles = QUALITY_MAX_REPAIR_CYCLES) {
+    const repairCount = Number(chunk.repairCount || 0);
+    const cycle = action === 'repair' ? repairCount + 1 : repairCount;
+    const usageKey = ['repair', 'reverify'].includes(action) && cycle > 1 ? `${action}_${cycle}` : action;
+    const usagePath = `usageByStage.${usageKey}`;
     const baseSet = {
         promptVersion: QUALITY_PROMPT_VERSION,
         stageUpdatedAt: new Date(),
@@ -70,7 +74,13 @@ export function transitionForAction(action, result, chunk) {
                     set: { ...set, content: chunk.revisedContent, qualityStatus: 'needs_review' },
                 };
             }
-            if (hasBlockingQualityErrors(result.json)) return { nextStage: 'verified', set };
+            if (result.json?.status !== 'PASS') {
+                if (repairCount < maxRepairCycles) return { nextStage: 'verified', set };
+                return {
+                    nextStage: 'needs_review',
+                    set: { ...set, content: chunk.revisedContent, qualityStatus: 'needs_review' },
+                };
+            }
             return {
                 nextStage: 'completed',
                 set: { ...set, content: chunk.revisedContent, qualityStatus: 'passed' },
@@ -83,27 +93,34 @@ export function transitionForAction(action, result, chunk) {
                     nextStage: 'needs_review',
                     set: {
                         ...baseSet,
-                        content: chunk.revisedContent || chunk.draftContent,
+                        content: chunk.repairedContent || chunk.revisedContent || chunk.draftContent,
                         qualityStatus: 'needs_review',
-                        repairCount: 1,
+                        repairCount: repairCount + 1,
                     },
                 };
             }
             return {
                 nextStage: 'repaired',
-                set: { ...baseSet, repairedContent: result.text, repairCount: 1 },
+                set: { ...baseSet, repairedContent: result.text, repairCount: repairCount + 1 },
             };
         case 'reverify': {
-            const set = { ...baseSet, reverifyReport: result.json, content: chunk.repairedContent };
+            const set = { ...baseSet, reverifyReport: result.json };
             if (!isQualityCoverageComplete(result.json, chunk.repairedContent)) {
-                return { nextStage: 'needs_review', set: { ...set, qualityStatus: 'needs_review' } };
+                return {
+                    nextStage: 'needs_review',
+                    set: { ...set, content: chunk.repairedContent, qualityStatus: 'needs_review' },
+                };
             }
-            if (hasBlockingQualityErrors(result.json)) {
-                return { nextStage: 'needs_review', set: { ...set, qualityStatus: 'needs_review' } };
+            if (result.json?.status !== 'PASS') {
+                if (repairCount < maxRepairCycles) return { nextStage: 'verified', set };
+                return {
+                    nextStage: 'needs_review',
+                    set: { ...set, content: chunk.repairedContent, qualityStatus: 'needs_review' },
+                };
             }
             return {
                 nextStage: 'completed',
-                set: { ...set, qualityStatus: 'passed' },
+                set: { ...set, content: chunk.repairedContent, qualityStatus: 'passed' },
                 unset: ['draftContent', 'revisedContent', 'repairedContent'],
             };
         }

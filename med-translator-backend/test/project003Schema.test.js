@@ -48,10 +48,17 @@ test('P003 chunk schema supports nullable final content, bounded repair and ever
         await chunk.validate();
     }
 
-    const invalidRepair = new TranslationChunk({
+    const secondRepair = new TranslationChunk({
         jobId: 'repair-overflow',
         chunkIndex: 0,
         repairCount: 2,
+    });
+    await secondRepair.validate();
+
+    const invalidRepair = new TranslationChunk({
+        jobId: 'repair-overflow',
+        chunkIndex: 0,
+        repairCount: 3,
     });
     await assert.rejects(invalidRepair.validate(), /repairCount/);
 

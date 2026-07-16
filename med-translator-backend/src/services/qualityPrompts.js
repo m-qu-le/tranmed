@@ -13,9 +13,9 @@ ${SOURCE_DATA_RULE}`;
 
 export const MEDICAL_AUDIT_SYSTEM_INSTRUCTION = `Bạn là kiểm định viên bản dịch y khoa Anh–Việt. So sánh tuần tự toàn bộ nguồn PDF với bản dịch. Chỉ báo lỗi có bằng chứng, không viết lại toàn văn và không phê bình sở thích văn phong nếu không làm sai nghĩa. ${SOURCE_DATA_RULE}`;
 
-export const MEDICAL_REVISION_SYSTEM_INSTRUCTION = `Bạn là biên tập viên bản dịch y khoa Anh–Việt. Chỉ sửa những lỗi được báo cáo có bằng chứng, ưu tiên mọi lỗi critical/major, giữ nguyên phần vốn đúng và trả lại toàn bộ Markdown hoàn chỉnh. ${SOURCE_DATA_RULE}`;
+export const MEDICAL_REVISION_SYSTEM_INSTRUCTION = `Bạn là biên tập viên bản dịch y khoa Anh–Việt. Sửa mọi lỗi được báo cáo có bằng chứng, kể cả minor, giữ nguyên phần vốn đúng và trả lại toàn bộ Markdown hoàn chỉnh. ${SOURCE_DATA_RULE}`;
 
-export const MEDICAL_REPAIR_SYSTEM_INSTRUCTION = `Bạn là biên tập viên sửa lỗi cuối cho bản dịch y khoa Anh–Việt. Chỉ sửa đúng các lỗi critical/major từ báo cáo verify trên bản revised, giữ nguyên phần khác, không thêm giải thích và chỉ trả toàn bộ Markdown hoàn chỉnh. ${SOURCE_DATA_RULE}`;
+export const MEDICAL_REPAIR_SYSTEM_INSTRUCTION = `Bạn là biên tập viên sửa lỗi cuối cho bản dịch y khoa Anh–Việt. Sửa mọi lỗi có bằng chứng trong báo cáo verify, kể cả minor, giữ nguyên phần khác, không thêm giải thích và chỉ trả toàn bộ Markdown hoàn chỉnh. ${SOURCE_DATA_RULE}`;
 
 export const MEDICAL_VERIFY_SYSTEM_INSTRUCTION = `Bạn là kiểm định viên độc lập cuối cùng cho bản dịch y khoa Anh–Việt. Đối chiếu toàn bộ PDF với bản dịch, chú ý bỏ sót, phủ định, mức độ chắc chắn, quan hệ nhân quả, tác nhân–đích, giải phẫu, thuốc, liều, số liệu, bảng và hình. Chỉ trả báo cáo JSON, không viết lại bản dịch. ${SOURCE_DATA_RULE}`;
 
@@ -56,5 +56,5 @@ export function buildVerifyInstruction(translation, { documentContext = null, mi
 }
 
 export function buildRepairInstruction(translation, verificationReport, { documentContext = null } = {}) {
-    return `Sửa có mục tiêu mọi lỗi critical/major trong báo cáo xác minh. Giữ nguyên phần khác và chỉ trả toàn bộ Markdown hoàn chỉnh.${contextFence(documentContext)}${fenced('TRANSLATION', translation)}${fenced('VERIFY_JSON', JSON.stringify(verificationReport))}`;
+    return `Sửa có mục tiêu mọi lỗi trong báo cáo xác minh, kể cả minor. Giữ nguyên phần khác và chỉ trả toàn bộ Markdown hoàn chỉnh.${contextFence(documentContext)}${fenced('TRANSLATION', translation)}${fenced('VERIFY_JSON', JSON.stringify(verificationReport))}`;
 }

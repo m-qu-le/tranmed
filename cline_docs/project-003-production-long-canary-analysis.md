@@ -57,3 +57,7 @@ Ba chunk có lỗi blocking và coverage đầy đủ đi qua repair/reverify: m
 - Self-audit bằng cùng họ model vẫn không chứng minh mọi lỗi thực tế đã được tìm ra. Hai vùng `needs_review` chắc chắn cần người có chuyên môn kiểm tra; các chunk passed vẫn không nên được quảng bá là “đã kiểm chứng hoàn toàn”.
 - Policy hiện tại cố ý không repair lỗi minor, nhưng việc gắn nhãn `passed` cho báo cáo cuối `FAIL` dễ gây hiểu nhầm. Nếu tiếp tục phát triển sau đợt phân tích này, nên tách `passed_clean` khỏi `passed_with_minor_warnings`, hoặc hiển thị cảnh báo minor thay vì gộp cả hai.
 - Theo quyết định của chủ dự án, không chạy batch nhiều PDF hoặc benchmark production lớn hơn sau canary này.
+
+## Quyết định sau phân tích
+
+Policy passed-with-minor của `p003-v2` chỉ còn là bằng chứng lịch sử của canary này. Chủ dự án đã chốt `p003-v3`: mọi lỗi kể cả minor đều phải repair, tối đa hai vòng repair/reverify; chỉ báo cáo cuối PASS cùng coverage COMPLETE mới được gắn `passed`. Không chạy lại PDF dài để xác nhận thay đổi này; state machine được khóa bằng unit/regression test cục bộ.

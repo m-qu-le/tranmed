@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-    hasBlockingQualityErrors,
+    hasQualityErrors,
     isQualityReport,
     QUALITY_REPORT_JSON_SCHEMA,
 } from '../src/services/translationQuality.js';
@@ -36,8 +36,8 @@ test('quality report validator enforces PASS/FAIL consistency and required evide
     assert.deepEqual(QUALITY_REPORT_JSON_SCHEMA.required, ['status', 'errors', 'coverage']);
 });
 
-test('only critical and major errors trigger the bounded repair loop', () => {
-    assert.equal(hasBlockingQualityErrors({ status: 'PASS', errors: [] }), false);
-    assert.equal(hasBlockingQualityErrors({ status: 'FAIL', errors: [{ ...majorError, severity: 'minor' }] }), false);
-    assert.equal(hasBlockingQualityErrors({ status: 'FAIL', errors: [majorError] }), true);
+test('strict error classifier never promotes minor-only FAIL to passed', () => {
+    assert.equal(hasQualityErrors({ status: 'PASS', errors: [] }), false);
+    assert.equal(hasQualityErrors({ status: 'FAIL', errors: [{ ...majorError, severity: 'minor' }] }), true);
+    assert.equal(hasQualityErrors({ status: 'FAIL', errors: [majorError] }), true);
 });

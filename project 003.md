@@ -260,13 +260,13 @@ Mục tiêu: reviewer tìm lỗi có bằng chứng thay vì viết lại theo c
 
 Mục tiêu: sửa đúng lỗi đã nêu, hạn chế model viết lại phần vốn đúng và không tạo vòng lặp vô hạn.
 
-- [x] **P003-G5-S01 — Revision prompt.** Nhận PDF + draft + audit; áp dụng mọi lỗi critical/major hợp lệ, giữ nguyên phần khác và trả toàn bộ Markdown.
+- [x] **P003-G5-S01 — Revision prompt.** Nhận PDF + draft + audit; áp dụng mọi lỗi có bằng chứng kể cả minor, giữ nguyên phần khác và trả toàn bộ Markdown.
 - [x] **P003-G5-S02 — Empty audit.** Nếu audit PASS, S3 vẫn có thể được bỏ qua theo quyết định benchmark; mặc định ban đầu vẫn chạy S3 để pipeline đồng nhất cho tới khi có dữ liệu.
-- [x] **P003-G5-S03 — Verify gate.** Chỉ `PASS` mới đặt `qualityStatus = passed`; mọi error critical/major làm `FAIL`.
-- [x] **P003-G5-S04 — Minor-only policy.** Minor thuần văn phong không kích hoạt repair; lưu warning compact nếu cần.
+- [x] **P003-G5-S03 — Verify gate.** Chỉ `PASS` cùng coverage `COMPLETE` mới đặt `qualityStatus = passed`; bất kỳ báo cáo `FAIL` nào cũng không được tự cho qua.
+- [x] **P003-G5-S04 — Minor-only policy.** Mọi lỗi minor có bằng chứng đều kích hoạt repair như critical/major; không còn trạng thái passed-with-minor.
 - [x] **P003-G5-S05 — Repair prompt.** Chỉ sửa lỗi từ S4 trên bản revised, không quay về draft và không sáng tác thêm giải thích.
-- [x] **P003-G5-S06 — Reverify.** Kiểm tra độc lập bản repaired; PASS thì hoàn thành, FAIL thì `needs_review`.
-- [x] **P003-G5-S07 — Bounded loop.** `repairCount <= 1` được enforce bằng code/schema/test, không chỉ bằng prompt.
+- [x] **P003-G5-S06 — Reverify.** Kiểm tra độc lập toàn chunk repaired; PASS thì hoàn thành, FAIL vòng một thì repair lần hai, FAIL vòng hai thì `needs_review`.
+- [x] **P003-G5-S07 — Bounded loop.** `repairCount <= 2` được enforce bằng config/code/schema/test, không chỉ bằng prompt; không có vòng lặp vô hạn.
 - [x] **P003-G5-S08 — Chọn bản tốt nhất.** Khi reverify fail, mặc định giữ bản repaired; nếu repair response không hợp lệ thì fallback revised.
 - [x] **P003-G5-S09 — Completion.** Job completed khi mọi chunk có `passed` hoặc `needs_review`; tổng warning được lưu và phát qua SSE.
 - [x] **P003-G5-S10 — Coverage guard.** Revision/repair phải giữ ít nhất 80% ký tự có nghĩa của bản trước; output co rút bị rotate như response invalid, và repair không phục hồi được phải fallback về revised đầy đủ với `needs_review`.
@@ -348,8 +348,9 @@ Mục tiêu: triển khai cuốn chiếu, có rollback và bằng chứng produc
 | Audit | JSON hỏng | Retry stage, không chạy revision |
 | Revision | Response rỗng | Giữ draft và retry, không ghi content rỗng |
 | Verify | PASS | qualityStatus passed |
-| Verify | FAIL | Chạy đúng một repair |
-| Reverify | FAIL | needs_review, job vẫn có final content |
+| Verify | FAIL bất kỳ severity | Chạy repair lần một |
+| Reverify lần một | FAIL | Chạy repair lần hai trên bản và report mới nhất |
+| Reverify lần hai | FAIL | needs_review, job vẫn có final content |
 | Restart | Sau từng stage | Resume stage kế tiếp, không gọi trùng |
 | Key | Một key 429 | Chuyển key ngay |
 | Key | Tất cả key 429 | Backoff queue, không spin |
@@ -364,14 +365,13 @@ Mục tiêu: triển khai cuốn chiếu, có rollback và bằng chứng produc
 Các tên cuối cùng có thể điều chỉnh theo convention hiện có, nhưng semantics phải giữ:
 
 ```dotenv
-TRANSLATION_PIPELINE_MODE=legacy
+TRANSLATION_PIPELINE_MODE=quality
 PDF_PAGES_PER_CHUNK=2
 GEMINI_THINKING_LEVEL=HIGH
-QUALITY_MAX_REPAIR_CYCLES=1
+QUALITY_MAX_REPAIR_CYCLES=2
 ```
 
-- `legacy` là mặc định trong lần deploy backend đầu.
-- Production chỉ chuyển sang `quality` sau benchmark/canary.
+- `quality` là mặc định hiện tại; đặt rõ `legacy` để rollback.
 - Temperature của quality mode là 1.0 theo code; không cần env nếu không có nhu cầu vận hành thật.
 - Quota limit không hard-code theo ảnh AI Studio; chỉ dùng headroom nội bộ và telemetry vì Google có thể thay đổi quota.
 
@@ -444,6 +444,8 @@ Rollback:
 | 16-07-2026 | E020 | Canary quality ngắn đầu tiên phát hiện Gemini không chấp nhận `minItems/maxItems` trong response schema; commit `af2ee0d` bỏ keyword ở API schema nhưng giữ validator nghiệp vụ. Backend 104 test pass và canary ngắn sau fix completed 1/1 | Root cause đã sửa và deploy; source/job lỗi được dọn, backlog 0 |
 | 16-07-2026 | E021 | Canary production dài 77 trang/39 chunk completed ở attempt 2 sau một `GEMINI_SCHEMA_INVALID` được resume: audit 84 finding/747 checkpoint, verify 19 finding/766 checkpoint, 37 passed/2 needs-review, preview/download 521.538 ký tự trùng hash, source deleted và backlog 0 | `cline_docs/project-003-production-long-canary-analysis.md`; 9/37 chunk passed còn minor theo policy hiện tại, không được gọi là hoàn toàn sạch lỗi |
 | 16-07-2026 | D019 | Chủ dự án yêu cầu chỉ phân tích canary dài và bỏ thử batch nhiều PDF vì tốn quá nhiều thời gian | Đóng G9-S05 theo thay đổi phạm vi; không khởi chạy thêm runner/upload production |
+| 16-07-2026 | D020 | Chủ dự án chốt strict-pass: mọi lỗi kể cả minor phải sửa; tối đa hai repair/reverify; chỉ PASS + coverage COMPLETE mới được `passed`, còn lỗi sau vòng hai thì `needs_review` | Triển khai bằng pipeline/prompt `p003-v3`; không chạy lại PDF lớn hoặc batch nhiều PDF |
+| 16-07-2026 | E022 | Regression local `p003-v3`: backend 106/106 test pass; frontend 12/12 test pass, lint và production build đạt. Test mới khóa minor→repair, vòng hai dùng bản/report mới nhất, PASS strict và FAIL sau vòng hai→needs-review | Không gọi Gemini, không chạy PDF lớn hoặc batch nhiều PDF |
 
 ## 12. Điều kiện hoàn thành PROJECT 003
 

@@ -218,9 +218,13 @@ export function createQualityGeminiExecutors({
         repair: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'repair',
             pdfBuffer,
-            instruction: buildRepairInstruction(chunk.revisedContent, chunk.verificationReport, { documentContext }),
+            instruction: buildRepairInstruction(
+                chunk.repairedContent || chunk.revisedContent,
+                chunk.reverifyReport || chunk.verificationReport,
+                { documentContext }
+            ),
             systemInstruction: MEDICAL_REPAIR_SYSTEM_INSTRUCTION,
-            referenceText: chunk.revisedContent,
+            referenceText: chunk.repairedContent || chunk.revisedContent,
             signal,
         }),
         reverify: ({ pdfBuffer, chunk, documentContext, signal }) => execute({

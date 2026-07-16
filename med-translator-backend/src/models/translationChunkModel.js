@@ -18,7 +18,7 @@ const translationChunkSchema = new mongoose.Schema({
     verificationReport: { type: mongoose.Schema.Types.Mixed, default: null },
     repairedContent: { type: String, default: null },
     reverifyReport: { type: mongoose.Schema.Types.Mixed, default: null },
-    repairCount: { type: Number, min: 0, max: 1, default: 0 },
+    repairCount: { type: Number, min: 0, max: 2, default: 0 },
     qualityStatus: { type: String, enum: QUALITY_STATUSES, default: null },
     usageByStage: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     stageUpdatedAt: { type: Date, default: null },

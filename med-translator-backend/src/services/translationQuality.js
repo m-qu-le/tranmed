@@ -113,7 +113,6 @@ export function isQualityCoverageComplete(report, referenceText) {
         && report.coverage.items.length >= minimumQualityCoverageItems(referenceText);
 }
 
-export function hasBlockingQualityErrors(report) {
-    return report.status === 'FAIL'
-        && report.errors.some(error => error.severity === 'critical' || error.severity === 'major');
+export function hasQualityErrors(report) {
+    return report?.status !== 'PASS' || !Array.isArray(report.errors) || report.errors.length > 0;
 }

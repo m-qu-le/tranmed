@@ -41,6 +41,18 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         revisedContent: 'revised',
         verificationReport: { status: 'FAIL', errors: [], coverage: { ...completeCoverage, status: 'INCOMPLETE' } },
         repairedContent: 'repaired',
+        reverifyReport: {
+            status: 'FAIL',
+            errors: [{
+                category: 'terminology',
+                severity: 'minor',
+                sourceExcerpt: 'latest source',
+                targetExcerpt: 'latest target',
+                requiredCorrection: 'latest correction',
+                explanation: 'latest explanation',
+            }],
+            coverage: completeCoverage,
+        },
     };
 
     await executors.translate({ pdfBuffer });
@@ -66,6 +78,11 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         assert.equal(typeof request.structuredValidator, 'function');
     }
     assert.equal(requests.find(request => request.stage === 'translate').config.maxOutputTokens, 32768);
+    const secondRepairRequest = requests.find(request => request.stage === 'repair');
+    const secondRepairPayload = JSON.stringify(secondRepairRequest.contents);
+    assert.match(secondRepairPayload, /repaired/);
+    assert.match(secondRepairPayload, /latest source/);
+    assert.doesNotMatch(secondRepairPayload, /<<<TRANSLATION>>>\\nrevised/);
     assert.doesNotMatch(JSON.stringify(events), /secret-key|draft|revised|repaired/);
 });
 
