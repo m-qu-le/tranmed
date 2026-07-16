@@ -1,0 +1,436 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-16T12:13:48.543Z",
+  "scope": {
+    "pdfCount": 20,
+    "pageCount": 370,
+    "chunkCount": 191,
+    "pagesPerChunk": 2,
+    "inputSha256Verified": true
+  },
+  "quality": {
+    "passed": 177,
+    "needsReview": 14,
+    "repairs": 50,
+    "finalFindings": {
+      "categories": {
+        "formatting": 12,
+        "terminology": 67,
+        "omission": 11,
+        "table_figure": 1,
+        "mistranslation": 23,
+        "addition": 3,
+        "causal_relation": 1
+      },
+      "severities": {
+        "minor": 102,
+        "major": 15,
+        "critical": 1
+      }
+    },
+    "reviewQueue": [
+      {
+        "fileName": "27. Hormones and Disorders of Mineral Metabolism.pdf",
+        "startPage": 61,
+        "endPage": 62,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "28. Endocrine Functions of Bone.pdf",
+        "startPage": 3,
+        "endPage": 4,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "30. Rickets and Osteomalacia.pdf",
+        "startPage": 17,
+        "endPage": 18,
+        "findings": [
+          {
+            "category": "omission",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "31. Kidney Stones.pdf",
+        "startPage": 17,
+        "endPage": 18,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "52. Pain Management.pdf",
+        "startPage": 11,
+        "endPage": 12,
+        "findings": [
+          {
+            "category": "mistranslation",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "52. Pain Management.pdf",
+        "startPage": 17,
+        "endPage": 18,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "52. Pain Management.pdf",
+        "startPage": 21,
+        "endPage": 22,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "critical"
+          },
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "54. Principles of Neuroendovascular Therapy.pdf",
+        "startPage": 23,
+        "endPage": 24,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "55. Neurological Rehabilitation.pdf",
+        "startPage": 17,
+        "endPage": 18,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "55. Neurological Rehabilitation.pdf",
+        "startPage": 23,
+        "endPage": 24,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "78 Asthma.pdf",
+        "startPage": 5,
+        "endPage": 6,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          },
+          {
+            "category": "omission",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "78 Asthma.pdf",
+        "startPage": 7,
+        "endPage": 8,
+        "findings": [
+          {
+            "category": "mistranslation",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "319 Approach to the Patient with Renal Disease or Urinary Tract Disease.pdf",
+        "startPage": 3,
+        "endPage": 4,
+        "findings": [
+          {
+            "category": "formatting",
+            "severity": "major"
+          }
+        ]
+      },
+      {
+        "fileName": "322 Chronic Kidney Disease.pdf",
+        "startPage": 1,
+        "endPage": 2,
+        "findings": [
+          {
+            "category": "terminology",
+            "severity": "major"
+          }
+        ]
+      }
+    ],
+    "byFile": [
+      {
+        "fileName": "27. Hormones and Disorders of Mineral Metabolism.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "pages": 77,
+        "chunks": 39,
+        "passed": 38,
+        "needsReview": 1,
+        "repairs": 7
+      },
+      {
+        "fileName": "28. Endocrine Functions of Bone.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "pages": 7,
+        "chunks": 4,
+        "passed": 3,
+        "needsReview": 1,
+        "repairs": 2
+      },
+      {
+        "fileName": "29. Osteoporosis Basic and Clinical Aspects.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "pages": 55,
+        "chunks": 28,
+        "passed": 28,
+        "needsReview": 0,
+        "repairs": 7
+      },
+      {
+        "fileName": "30. Rickets and Osteomalacia.pdf",
+        "specialty": "Nội tiết và chuyển hóa xương",
+        "pages": 26,
+        "chunks": 13,
+        "passed": 12,
+        "needsReview": 1,
+        "repairs": 2
+      },
+      {
+        "fileName": "31. Kidney Stones.pdf",
+        "specialty": "Thận học",
+        "pages": 23,
+        "chunks": 12,
+        "passed": 11,
+        "needsReview": 1,
+        "repairs": 4
+      },
+      {
+        "fileName": "51. Management of Neurological Disease.pdf",
+        "specialty": "Thần kinh học",
+        "pages": 5,
+        "chunks": 3,
+        "passed": 3,
+        "needsReview": 0,
+        "repairs": 1
+      },
+      {
+        "fileName": "52. Pain Management.pdf",
+        "specialty": "Thần kinh học",
+        "pages": 22,
+        "chunks": 11,
+        "passed": 8,
+        "needsReview": 3,
+        "repairs": 6
+      },
+      {
+        "fileName": "53. Neurointensive Care.pdf",
+        "specialty": "Thần kinh học",
+        "pages": 17,
+        "chunks": 9,
+        "passed": 9,
+        "needsReview": 0,
+        "repairs": 1
+      },
+      {
+        "fileName": "54. Principles of Neuroendovascular Therapy.pdf",
+        "specialty": "Thần kinh học",
+        "pages": 26,
+        "chunks": 13,
+        "passed": 12,
+        "needsReview": 1,
+        "repairs": 2
+      },
+      {
+        "fileName": "55. Neurological Rehabilitation.pdf",
+        "specialty": "Thần kinh học",
+        "pages": 32,
+        "chunks": 16,
+        "passed": 14,
+        "needsReview": 2,
+        "repairs": 8
+      },
+      {
+        "fileName": "76 Hematopoietic Stem Cell Transplantation.pdf",
+        "specialty": "Huyết học và ghép tế bào gốc",
+        "pages": 5,
+        "chunks": 3,
+        "passed": 3,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      {
+        "fileName": "77 Allergy Assessment.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "pages": 3,
+        "chunks": 2,
+        "passed": 2,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      {
+        "fileName": "78 Asthma.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "pages": 11,
+        "chunks": 6,
+        "passed": 4,
+        "needsReview": 2,
+        "repairs": 3
+      },
+      {
+        "fileName": "79 Allergic Rhinitis.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "pages": 3,
+        "chunks": 2,
+        "passed": 2,
+        "needsReview": 0,
+        "repairs": 1
+      },
+      {
+        "fileName": "80 Atopic Dermatitis.pdf",
+        "specialty": "Dị ứng và miễn dịch lâm sàng",
+        "pages": 4,
+        "chunks": 2,
+        "passed": 2,
+        "needsReview": 0,
+        "repairs": 0
+      },
+      {
+        "fileName": "319 Approach to the Patient with Renal Disease or Urinary Tract Disease.pdf",
+        "specialty": "Thận học",
+        "pages": 11,
+        "chunks": 6,
+        "passed": 5,
+        "needsReview": 1,
+        "repairs": 3
+      },
+      {
+        "fileName": "320 Cell Biology and Physiology of the Kidney.pdf",
+        "specialty": "Thận học",
+        "pages": 10,
+        "chunks": 5,
+        "passed": 5,
+        "needsReview": 0,
+        "repairs": 1
+      },
+      {
+        "fileName": "321 Acute Kidney Injury.pdf",
+        "specialty": "Thận học",
+        "pages": 14,
+        "chunks": 7,
+        "passed": 7,
+        "needsReview": 0,
+        "repairs": 1
+      },
+      {
+        "fileName": "322 Chronic Kidney Disease.pdf",
+        "specialty": "Thận học",
+        "pages": 14,
+        "chunks": 7,
+        "passed": 6,
+        "needsReview": 1,
+        "repairs": 1
+      },
+      {
+        "fileName": "323 Dialysis in the Treatment of Kidney Failure.pdf",
+        "specialty": "Thận học",
+        "pages": 5,
+        "chunks": 3,
+        "passed": 3,
+        "needsReview": 0,
+        "repairs": 0
+      }
+    ]
+  },
+  "coverage": {
+    "guardMinimumRatio": 0.8,
+    "minimumRevisionRatio": 0.9178200692041523,
+    "minimumRepairRatio": 0.9841044197467046,
+    "allArtifactsPassedGuard": true
+  },
+  "requests": {
+    "configuredKeyCount": 7,
+    "successfulCalls": 864,
+    "attempts": 905,
+    "attemptErrors": 41,
+    "keyDistribution": {
+      "0": 132,
+      "1": 132,
+      "2": 132,
+      "3": 128,
+      "4": 127,
+      "5": 128,
+      "6": 126
+    },
+    "errorCodes": {
+      "UNKNOWN": 8,
+      "GEMINI_OUTPUT_TRUNCATED": 4,
+      "GEMINI_SCHEMA_INVALID": 29
+    },
+    "errorStatuses": {
+      "503": 8,
+      "NO_STATUS": 33
+    }
+  },
+  "performance": {
+    "chunkEndToEndMs": {
+      "mean": 78342,
+      "p50": 76087,
+      "p95": 109012,
+      "min": 29551,
+      "max": 132563
+    },
+    "singleCallMs": {
+      "mean": 17319,
+      "p50": 16325,
+      "p95": 27611,
+      "min": 4082,
+      "max": 42123
+    },
+    "benchmarkConcurrency": 4,
+    "productionConcurrency": 2,
+    "scheduledAtBenchmarkConcurrencyMs": 3765599,
+    "scheduledAtProductionConcurrencyMs": 7486989,
+    "runnerElapsedMs": 3142376,
+    "source": "Sum of persisted live Gemini stage latency for every corpus chunk."
+  },
+  "checkpoint": {
+    "startedAt": "2026-07-16T10:53:42.989Z",
+    "completedAt": "2026-07-16T11:46:05.365Z",
+    "completedThisResume": 148,
+    "reusedFromCheckpoints": 43
+  }
+}

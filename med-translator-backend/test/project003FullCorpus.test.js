@@ -6,6 +6,7 @@ import {
     isReusableFullCorpusArtifact,
     parseFullCorpusArgs,
 } from '../scripts/benchmark-project-003-full-corpus.js';
+import { compactReviewQueue } from '../scripts/analyze-project-003-full-corpus.js';
 
 test('full corpus task builder preserves per-file page order and key distribution', () => {
     const manifest = {
@@ -75,4 +76,28 @@ test('full corpus resume reuses only complete version-matched artifacts with saf
         ...artifact,
         stages: { ...artifact.stages, revise: { text: 'Bản bị cụt.', metadata: {} } },
     }, plan), false);
+});
+
+test('full corpus review queue exposes page/category only, never source or translation excerpts', () => {
+    const queue = compactReviewQueue([{
+        qualityStatus: 'needs_review',
+        source: { fileName: 'medical.pdf', startPage: 3, endPage: 4 },
+        finalReport: {
+            errors: [{
+                category: 'omission',
+                severity: 'critical',
+                sourceExcerpt: 'copyrighted source excerpt',
+                targetExcerpt: 'private translated excerpt',
+                explanation: 'private explanation',
+            }],
+        },
+    }]);
+
+    assert.deepEqual(queue, [{
+        fileName: 'medical.pdf',
+        startPage: 3,
+        endPage: 4,
+        findings: [{ category: 'omission', severity: 'critical' }],
+    }]);
+    assert.doesNotMatch(JSON.stringify(queue), /excerpt|explanation/i);
 });

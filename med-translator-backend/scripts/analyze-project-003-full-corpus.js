@@ -29,10 +29,10 @@ function stats(values) {
     };
 }
 
-function twoLaneMs(durations) {
-    const lanes = [0, 0];
+function laneWallMs(durations, concurrency) {
+    const lanes = Array.from({ length: concurrency }, () => 0);
     for (const duration of durations) {
-        const lane = lanes[0] <= lanes[1] ? 0 : 1;
+        const lane = lanes.indexOf(Math.min(...lanes));
         lanes[lane] += duration;
     }
     return Math.max(...lanes);
@@ -55,11 +55,28 @@ function aggregateFindings(artifacts) {
     return { categories, severities };
 }
 
+export function compactReviewQueue(artifacts) {
+    return artifacts
+        .filter(artifact => artifact.qualityStatus === 'needs_review')
+        .map(artifact => ({
+            fileName: artifact.source.fileName,
+            startPage: artifact.source.startPage,
+            endPage: artifact.source.endPage,
+            findings: (artifact.finalReport?.errors || [])
+                .filter(error => ['critical', 'major'].includes(error.severity))
+                .map(error => ({ category: error.category, severity: error.severity })),
+        }));
+}
+
 function minutes(milliseconds) {
     return Math.round((milliseconds / 60_000) * 10) / 10;
 }
 
 function markdown(report) {
+    const reviewLines = report.quality.reviewQueue.map(item => {
+        const findings = item.findings.map(finding => `${finding.severity} ${finding.category}`).join(', ');
+        return `- \`${item.fileName}\`, trang ${item.startPage}–${item.endPage}: ${findings}.`;
+    }).join('\n');
     return `# PROJECT 003 — Full-corpus quality run\n\n` +
         `Ngày tổng hợp: ${report.generatedAt.slice(0, 10)}. Báo cáo không chứa nội dung PDF hoặc bản dịch.\n\n` +
         `## Kết quả\n\n` +
@@ -69,8 +86,11 @@ function markdown(report) {
         `- Coverage thấp nhất của revise là ${(report.coverage.minimumRevisionRatio * 100).toFixed(1)}%; repair là ${(report.coverage.minimumRepairRatio * 100).toFixed(1)}%. Mọi artifact đều đạt guard 80%.\n\n` +
         `## Hiệu năng live\n\n` +
         `- End-to-end model latency trung bình ${minutes(report.performance.chunkEndToEndMs.mean)} phút/chunk, p95 ${minutes(report.performance.chunkEndToEndMs.p95)} phút.\n` +
-        `- Xếp chính các latency quan sát lên 2 lane cho toàn corpus: ${minutes(report.performance.twoLaneObservedMs)} phút model wall-time. Con số này loại I/O/checkpoint và phản ánh chính các call đã hoàn tất.\n` +
+        `- Xếp latency của đủ 191 artifact lên ${report.performance.benchmarkConcurrency} lane như runner: ${minutes(report.performance.scheduledAtBenchmarkConcurrencyMs)} phút model wall-time; theo production target 2 lane là ${minutes(report.performance.scheduledAtProductionConcurrencyMs)} phút.\n` +
+        `- Runner resume thực tế mất ${minutes(report.performance.runnerElapsedMs)} phút vì chạy mới ${report.checkpoint.completedThisResume} chunk và tái sử dụng ${report.checkpoint.reusedFromCheckpoints} checkpoint hợp lệ.\n` +
         `- Single call tối đa ${Math.round(report.performance.singleCallMs.max / 1000)} giây, dưới timeout 180 giây.\n\n` +
+        `## Hàng đợi review critical/major\n\n` +
+        `${reviewLines}\n\n` +
         `## Cổng rollout\n\n` +
         `- Chunk \`needs_review\` vẫn có final content nhưng bắt buộc hiển thị warning/page range.\n` +
         `- Cần duyệt các finding critical/major và canary production trước khi bật mặc định quality.\n`;
@@ -99,6 +119,7 @@ async function main() {
     ]);
     assert.equal(summary.total, manifest.totals.chunkCount);
     assert.equal(summary.processed, summary.total, 'Full-corpus checkpoint chưa hoàn tất.');
+    assert.equal(summary.planned, 0, 'Đây là checkpoint dry-run, không phải full-corpus live.');
     assert.equal(summary.failed, 0, 'Full-corpus còn task failed.');
     const artifacts = await loadArtifacts(manifest, summary.configuredKeyCount || 7);
     assert.equal(artifacts.length, manifest.totals.chunkCount);
@@ -167,6 +188,7 @@ async function main() {
             needsReview: artifacts.filter(row => row.qualityStatus === 'needs_review').length,
             repairs: artifacts.filter(row => row.repairCount > 0).length,
             finalFindings: aggregateFindings(artifacts),
+            reviewQueue: compactReviewQueue(artifacts),
             byFile,
         },
         coverage: {
@@ -187,8 +209,11 @@ async function main() {
         performance: {
             chunkEndToEndMs: stats(durations),
             singleCallMs: stats(singleCalls),
-            concurrency: 2,
-            twoLaneObservedMs: twoLaneMs(durations),
+            benchmarkConcurrency: summary.options.concurrency,
+            productionConcurrency: 2,
+            scheduledAtBenchmarkConcurrencyMs: laneWallMs(durations, summary.options.concurrency),
+            scheduledAtProductionConcurrencyMs: laneWallMs(durations, 2),
+            runnerElapsedMs: Date.parse(summary.completedAt) - Date.parse(summary.startedAt),
             source: 'Sum of persisted live Gemini stage latency for every corpus chunk.',
         },
         checkpoint: {
