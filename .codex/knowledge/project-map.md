@@ -9,7 +9,8 @@ StudyMed Translator nhận batch PDF y khoa, upload trực tiếp lên Cloudflar
 | `.codex/knowledge/` | Kiến trúc, vận hành và bất biến bền vững cho Codex | file này |
 | `archive/project-003/` | Báo cáo lịch sử P003 đã lọc nội dung; không phải runtime | `project-003-production-long-canary-analysis.md` |
 | `archive/project-004/` | Hồ sơ cảnh báo kiểm soát chất lượng đã đóng; không phải runtime | `project-004.md` |
-| `archive/project-001/`–`archive/project-004/` | Hồ sơ bốn dự án đã đóng | `project-00x.md` |
+| `archive/project-005/` | Hồ sơ thống kê toàn cục và worker hai lane đã đóng; không phải runtime | `project-005.md` |
+| `archive/project-001/`–`archive/project-005/` | Hồ sơ năm dự án đã đóng | `project-00x.md` |
 
 ## Luồng hiện hành
 
@@ -22,7 +23,7 @@ React tạo upload batch (tối đa 200 PDF)
   → Render stream một R2 object về file .part rồi rename atomically
   → PDF Worker cắt 2 trang/chunk và trả page range
   → quality: tạo context passport toàn PDF một lần/job
-  → worker mặc định 1 job; cấu hình 2 chỉ admission job FIFO thứ hai khi tổng source ≤ 10 MiB
+  → worker mặc định code là 1 job; production hiện cấu hình 2 và chỉ admission job FIFO thứ hai khi tổng source ≤ 10 MiB
   → trong mỗi job, tối đa 2 chunk chạy đồng thời; mỗi chunk tuần tự:
        translate → audit → revise → verify
          PASS + coverage COMPLETE → completed
@@ -70,6 +71,6 @@ React tạo upload batch (tối đa 200 PDF)
 
 ## Phần không thuộc runtime
 
-- `archive/project-001/`–`archive/project-004/` là bằng chứng/quyết định lịch sử, không được import bởi ứng dụng.
+- `archive/project-001/`–`archive/project-005/` là bằng chứng/quyết định lịch sử, không được import bởi ứng dụng.
 - `scripts/migrate-*`, `backup-*`, `reconcile-r2.js` và smoke scripts là công cụ vận hành chủ động, không chạy trong server.
 - Unit/regression test được giữ vì khóa các bất biến production. Harness benchmark P002/P003 một lần và test riêng của chúng đã được xóa.

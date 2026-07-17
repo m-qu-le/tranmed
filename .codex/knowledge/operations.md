@@ -36,7 +36,7 @@ Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đó
 - Mốc commit đóng hồ sơ P003 trước lượt dọn cuối: `5edce7a`; đã có trên `main` và `feature/project-003-translation-quality`.
 - Render restart sau deploy v3 tại `2026-07-16T15:41:03.348Z`; health/readiness đạt, Mongo/R2 available, backlog 0.
 - Frontend tương thích legacy và quality; P004 công khai header đã escape chỉ khi job quality hoàn thành còn chunk cần review.
-- P005 phải deploy code với concurrency 1 trước; chỉ giữ production = 2 sau canary hai PDF nhỏ đạt concurrency, tài nguyên, quota, output và cleanup.
+- P005 đã deploy additive và production đang giữ `TRANSLATION_WORKER_CONCURRENCY=2`. Canary hai PDF tổng hợp đạt `activeJobs=2`, completed ngay attempt đầu, output tách biệt và cleanup/backlog trở về 0; phép đo peak RAM Render được chủ dự án miễn khi đóng.
 
 Checklist cho thay đổi tương lai:
 
@@ -57,12 +57,12 @@ Checklist cho thay đổi tương lai:
 - Không stage các deletion/untracked root ngoài phạm vi đã có sẵn trong worktree.
 - Không dùng `git add -A`; không commit `.env`, PDF, secret, signed URL, `.p003-local/` hoặc `dist/`.
 - Nhánh P003: `feature/project-003-translation-quality`; production theo `main`.
-- P004/P005 đang được hoàn thiện trên cùng nhánh lịch sử này; cả hai remote ref phải fast-forward cùng commit trước khi đóng.
+- P004/P005 được hoàn thiện trên cùng nhánh lịch sử này; cả `main` và nhánh feature phải fast-forward cùng commit đóng P005.
 - Không dùng `git reset --hard` để xử lý worktree của người dùng.
 
 ## Chính sách giữ/xóa artifact
 
 - Giữ test của `src/`, migration, backup, reconcile và smoke có cleanup vì còn dùng cho regression/vận hành.
-- Giữ `archive/project-003/project-003-*` và `archive/project-004/project-004.md` làm bằng chứng nhỏ đã lọc; không tái tạo raw artifact chỉ để làm đẹp báo cáo.
-- Có thể xóa `dist/`, `uploads/` rỗng và `.p003-local/` sau khi chắc chắn không có runner; chúng đều tái tạo được hoặc chỉ là dữ liệu tạm.
+- Giữ `archive/project-003/project-003-*`, `archive/project-004/project-004.md` và `archive/project-005/project-005.md` làm bằng chứng nhỏ đã lọc; không tái tạo raw artifact chỉ để làm đẹp báo cáo.
+- Có thể xóa `dist/`, `uploads/` rỗng, `.p003-local/` và `.p005-local/` sau khi chắc chắn không có runner; chúng đều tái tạo được hoặc chỉ là dữ liệu tạm.
 - Không tự xóa `samplepdf/`, `.env`, `node_modules/` hoặc file người dùng dù chúng bị ignore. Asset/code chỉ được xóa sau khi kiểm tra không có import/tham chiếu runtime.

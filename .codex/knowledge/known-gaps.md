@@ -1,6 +1,6 @@
 # Giới hạn và rủi ro được chấp nhận
 
-Cập nhật khi đóng PROJECT 001–004 ngày 17-07-2026.
+Cập nhật khi đóng PROJECT 001–005 ngày 18-07-2026.
 
 ## Chất lượng dịch
 
@@ -16,6 +16,8 @@ Cập nhật khi đóng PROJECT 001–004 ngày 17-07-2026.
 - Không thực hiện live rollback drill sau khi bật quality mặc định.
 - Không bổ sung số đo RAM/disk Render sau canary. Có số liệu local RSS/BSON, Mongo payload canary, source cleanup và backlog 0.
 - Các mục trên được owner waiver tại D021 trong `archive/project-003/project-003.md`; không được diễn giải thành phép thử đã chạy.
+- P005 không đọc trực tiếp biểu đồ peak RAM Render theo owner waiver. Canary production chỉ chứng minh peak hai job, tổng source active 3.101 byte trong budget 10 MiB, không crash/restart quan sát được và cleanup sạch.
+- P005 không theo dõi concurrency 2 đủ 24 giờ và không chạy hai PDF lớn; source size vẫn chỉ là proxy bảo thủ cho RAM.
 
 ## Khoản nợ sản phẩm/kỹ thuật
 
@@ -23,9 +25,9 @@ Cập nhật khi đóng PROJECT 001–004 ngày 17-07-2026.
 - Preview/copy ghép nội dung trong RAM; tài liệu rất lớn nên ưu tiên streaming download.
 - Không có authentication theo quyết định chủ dự án; endpoint công khai vẫn cần CORS, rate limit và validation chặt.
 - AbortSignal không bảo đảm Gemini ngừng tính usage cho request đã nhận.
-- Budget worker P005 dùng kích thước source làm proxy bảo thủ cho RAM; không chứng minh hai PDF lớn có thể chạy song song.
+- Budget worker P005 dùng kích thước source làm proxy bảo thủ cho RAM; canary nhỏ không chứng minh hai PDF lớn có thể chạy song song.
 - Thay đổi model, human-review workflow, translation memory hoặc monitoring dài hạn phải mở dự án mới, không tự nối lại P003.
 
 ## Nguồn sự thật
 
-Mã nguồn hiện tại, `archive/project-003/project-003.md` và `archive/project-004/project-004.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3 hoặc lớp cảnh báo P004.
+Mã nguồn hiện tại, `archive/project-003/project-003.md`, `archive/project-004/project-004.md` và `archive/project-005/project-005.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3, lớp cảnh báo P004 hoặc worker pool P005.
