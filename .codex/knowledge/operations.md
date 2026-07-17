@@ -32,7 +32,7 @@ Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đó
 ## Migration và deploy
 
 - Migration P001–P003 là additive/idempotent; production P003 đã backup, dry-run, migrate và verify index.
-- Commit code P003 cuối: `f7a8b07`; đã push `main` và `feature/project-003-translation-quality`.
+- Mốc commit đóng hồ sơ P003 trước lượt dọn cuối: `5edce7a`; đã có trên `main` và `feature/project-003-translation-quality`.
 - Render restart sau deploy v3 tại `2026-07-16T15:41:03.348Z`; health/readiness đạt, Mongo/R2 available, backlog 0.
 - Frontend production tương thích legacy và quality; warning chỉ công khai page range.
 
@@ -56,3 +56,10 @@ Checklist cho thay đổi tương lai:
 - Không dùng `git add -A`; không commit `.env`, PDF, secret, signed URL, `.p003-local/` hoặc `dist/`.
 - Nhánh P003: `feature/project-003-translation-quality`; production theo `main`.
 - Không dùng `git reset --hard` để xử lý worktree của người dùng.
+
+## Chính sách giữ/xóa artifact
+
+- Giữ test của `src/`, migration, backup, reconcile và smoke có cleanup vì còn dùng cho regression/vận hành.
+- Giữ `archive/project-003/project-003-*` làm bằng chứng nhỏ đã lọc; không tái tạo raw artifact chỉ để làm đẹp báo cáo.
+- Có thể xóa `dist/`, `uploads/` rỗng và `.p003-local/` sau khi chắc chắn không có runner; chúng đều tái tạo được hoặc chỉ là dữ liệu tạm.
+- Không tự xóa `samplepdf/`, `.env`, `node_modules/` hoặc file người dùng dù chúng bị ignore. Asset/code chỉ được xóa sau khi kiểm tra không có import/tham chiếu runtime.

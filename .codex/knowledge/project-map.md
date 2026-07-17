@@ -6,9 +6,9 @@ StudyMed Translator nhận batch PDF y khoa, upload trực tiếp lên Cloudflar
 | --- | --- | --- |
 | `med-translator-backend/` | Express API, MongoDB queue, R2 source, PDF Worker, Gemini quality pipeline | `src/server.js` |
 | `med-translator-frontend/` | React/Vite, Cloud Uploader, SSE, warning và tải Markdown | `src/main.jsx` → `src/App.jsx` |
-| `.codex/knowledge/` | Kiến thức bền vững cho Codex | file này |
-| `cline_docs/` | Báo cáo P003 đã lọc nội dung | `project-003-production-long-canary-analysis.md` |
-| `project 003.md` | Hồ sơ quyết định và đóng PROJECT 003 | root |
+| `.codex/knowledge/` | Kiến trúc, vận hành và bất biến bền vững cho Codex | file này |
+| `archive/project-003/` | Báo cáo lịch sử P003 đã lọc nội dung; không phải runtime | `project-003-production-long-canary-analysis.md` |
+| `archive/project-001/`–`archive/project-003/` | Hồ sơ ba dự án đã đóng; P003 là thiết kế cuối | `project-00x.md` |
 
 ## Luồng hiện hành
 
@@ -47,10 +47,24 @@ React tạo upload batch (tối đa 200 PDF)
 - Một key 429 được key khác cứu không làm tăng circuit failure toàn cục.
 - Cancel kiểm AbortSignal và processing token trước/sau stage; cleanup dọn source và chunk đúng semantics.
 
+## Ranh giới runtime
+
+- Frontend không giữ secret R2/Gemini/MongoDB; chỉ nhận presigned URL hữu hạn từ backend.
+- MongoDB là nguồn sự thật cho batch, job, lease, stage và cleanup retry. SSE chỉ là tín hiệu; reconnect luôn resync qua HTTP.
+- R2 là nguồn PDF bền vững trong lúc chờ/xử lý. Filesystem Render chỉ là cache tạm của đúng source đang chạy và có thể mất bất kỳ lúc nào.
+- Gemini được gọi trong backend. Mỗi chunk chạy stage tuần tự; concurrency chỉ nằm giữa tối đa hai chunk và trong pool upload phía browser.
+- Kết quả public chỉ lấy `TranslationChunk.content`; report/context/artifact trung gian là private và được dọn khi có thể.
+
 ## Cấu hình P003
 
 - `TRANSLATION_PIPELINE_MODE=quality` là mặc định; `legacy` chỉ là đường rollback.
 - `PDF_PAGES_PER_CHUNK=2`, `GEMINI_THINKING_LEVEL=HIGH`, temperature quality = 1.
 - `QUALITY_MAX_REPAIR_CYCLES=2`, không cho giá trị lớn hơn 2.
 - Scheduler headroom: 12 RPM, 200k TPM, 400 RPD/key index; counter RAM chỉ để quan sát.
-- Raw PDF/benchmark/bản dịch nằm trong `samplepdf/` hoặc `.p003-local/` và không được commit.
+- `samplepdf/` là dữ liệu đầu vào local của người dùng và không được commit. `.p003-local/` là artifact benchmark đã xóa khi đóng dự án; không tái tạo nếu chưa mở công việc benchmark mới.
+
+## Phần không thuộc runtime
+
+- `archive/project-003/` và ba file `project 00x.md` là bằng chứng/quyết định lịch sử, không được import bởi ứng dụng.
+- `scripts/migrate-*`, `backup-*`, `reconcile-r2.js` và smoke scripts là công cụ vận hành chủ động, không chạy trong server.
+- Unit/regression test được giữ vì khóa các bất biến production. Harness benchmark P002/P003 một lần và test riêng của chúng đã được xóa.

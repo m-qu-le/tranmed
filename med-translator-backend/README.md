@@ -103,6 +103,6 @@ npm run benchmark:p003:full:analyze
 npm run benchmark:p003:review-bundle
 ```
 
-Raw artifact nằm trong `.p003-local/` ignored. Full-corpus runner checkpoint sau từng chunk và mặc định skip artifact đúng version/input/coverage khi resume. Lệnh `review-bundle` tạo 14 phiếu local gồm PDF đúng page range, bản dịch cuối và finding critical/major; không commit bundle. Báo cáo tổng hợp ở `cline_docs/project-003-benchmark-review.md`, `cline_docs/project-003-performance-resource.md` và `cline_docs/project-003-full-corpus-report.md`. Rollback không cần migration ngược: đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart; job mới quay về pipeline cũ, artifact quality đã persist không bị rewrite.
+Raw artifact benchmark đã được xóa khi P003 đóng. Báo cáo tổng hợp đã lọc nằm tại `archive/project-003/`; không chạy lại benchmark chỉ để tái tạo chúng. Rollback không cần migration ngược: đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart; job mới quay về pipeline cũ, artifact quality đã persist không bị rewrite.
 
 Sau deploy production, kiểm tra `/api/readiness`, chạy một batch close-safe qua restart có kiểm soát, rồi dùng `npm run reconcile:r2` xác nhận không còn object mồ côi.

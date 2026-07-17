@@ -20,4 +20,4 @@ Ngày đo: 2026-07-16. Phép đo không gọi Gemini mới; latency lấy từ 2
 
 - BSON là payload document trước compression/index overhead; Mongo storage thực phải được theo dõi ở canary/batch.
 - RSS trên máy local không thay thế Render metrics. Cần xác nhận lại bằng một PDF dài ở canary và theo dõi production 24 giờ.
-- Báo cáo này là phép ngoại suy trước full-corpus. Lượt live sau đó đã hoàn tất và được tổng hợp tại `cline_docs/project-003-full-corpus-report.md`; số liệu Render/Mongo thực vẫn chờ canary.
+- Báo cáo này là phép ngoại suy trước full-corpus. Lượt live sau đó đã hoàn tất và được tổng hợp tại `archive/project-003/project-003-full-corpus-report.md`; số liệu Render/Mongo thực vẫn chờ canary.

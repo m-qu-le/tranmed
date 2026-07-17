@@ -1,6 +1,6 @@
 # Giới hạn và rủi ro được chấp nhận
 
-Cập nhật khi đóng PROJECT 003 ngày 16-07-2026.
+Cập nhật khi đóng PROJECT 001–003 và dọn codebase ngày 16-07-2026.
 
 ## Chất lượng dịch
 
@@ -15,7 +15,7 @@ Cập nhật khi đóng PROJECT 003 ngày 16-07-2026.
 - Không có cửa sổ theo dõi production đủ 24 giờ cho v3.
 - Không thực hiện live rollback drill sau khi bật quality mặc định.
 - Không bổ sung số đo RAM/disk Render sau canary. Có số liệu local RSS/BSON, Mongo payload canary, source cleanup và backlog 0.
-- Các mục trên được owner waiver tại D021 trong `project 003.md`; không được diễn giải thành phép thử đã chạy.
+- Các mục trên được owner waiver tại D021 trong `archive/project-003/project-003.md`; không được diễn giải thành phép thử đã chạy.
 
 ## Khoản nợ sản phẩm/kỹ thuật
 
@@ -27,4 +27,4 @@ Cập nhật khi đóng PROJECT 003 ngày 16-07-2026.
 
 ## Nguồn sự thật
 
-Mã nguồn hiện tại và `project 003.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3.
+Mã nguồn hiện tại và `archive/project-003/project-003.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3.

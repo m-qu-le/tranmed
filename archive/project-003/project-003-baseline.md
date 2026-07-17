@@ -9,7 +9,7 @@ Ngày ghi nhận: 15-07-2026 (Asia/Saigon).
 - Nhánh làm việc: `feature/project-003-translation-quality`.
 - P002 vẫn còn bước theo dõi production 24 giờ và đóng dự án chưa hoàn thành; P003 chỉ kế thừa commit code ổn định và không thay đổi bằng chứng vận hành P002.
 - Trước khi tạo nhánh, worktree có ba file root đã bị xóa: `Kiến trúc hệ thống ứng dụng dịch file .txt`, `Mô tả bản thân .txt`, `implementation_plan.md`.
-- `project 003.md` và `samplepdf/` là dữ liệu untracked có sẵn. P003 không khôi phục, xóa hoặc ghi đè các thay đổi này.
+- Hồ sơ đóng `archive/project-003/project-003.md` và `samplepdf/` là dữ liệu có sẵn. P003 không khôi phục, xóa hoặc ghi đè các thay đổi này.
 - `samplepdf/` và `.p003-local/` được ignore để PDF nguồn, prompt/response thô và bản dịch benchmark không bị commit nhầm.
 
 ## Môi trường và dependency
@@ -45,4 +45,4 @@ Baseline thời gian/chunk, tỷ lệ 429, số call/chunk và response không `
 - Manifest tái tạo bằng `npm run manifest:p003` trong backend.
 - Kết quả xác minh: 20 PDF, 370 trang, 21.662.171 byte (20,66 MiB).
 - Vì mỗi PDF được cắt độc lập, tổng `ceil(pageCount / 2)` là **191 chunk**, không phải `ceil(370 / 2) = 185`.
-- SHA-256, kích thước, số trang, số chunk và chuyên khoa suy ra từ tên nằm trong `cline_docs/project-003-sample-manifest.json`; manifest không chứa nội dung PDF.
+- SHA-256, kích thước, số trang, số chunk và chuyên khoa suy ra từ tên nằm trong `archive/project-003/project-003-sample-manifest.json`; manifest không chứa nội dung PDF.

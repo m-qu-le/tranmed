@@ -6,7 +6,7 @@
 | --- | --- |
 | Mã kế hoạch | P002 |
 | Ngày lập | 15-07-2026 |
-| Trạng thái tổng | G1–G9 hoàn tất; G10 rollout/restart/batch 5/50/200 đạt, đang theo dõi production 24 giờ trước khi đóng dự án |
+| Trạng thái tổng | **HOÀN THÀNH — đóng ngày 16-07-2026.** Rollout R2, batch 5/50/200 và controlled restart đạt; theo dõi đủ 24 giờ được miễn khi đóng chuỗi P001–P003 và không được trình bày như đã thực hiện |
 | Mục tiêu chính | Cho phép chọn và upload 50–200+ PDF lên cloud trong một phiên ngắn, xác nhận an toàn rồi đóng tab/tắt máy; Render tiếp tục dịch toàn bộ batch mà không cần trình duyệt |
 | Kho file nguồn | Cloudflare R2 Standard, bucket private, lưu tạm và xóa sau xử lý |
 | Nguồn sự thật của queue | MongoDB |
@@ -109,7 +109,7 @@ Xóa file tạm Render + xóa source R2 -> job completed
 | G7 | Xóa, hủy, retry và garbage collection | Hoàn thành code + reconciliation | Không có object R2 mồ côi ngoài retention window |
 | G8 | UX, realtime và quan sát vận hành | Hoàn thành cục bộ | UI phân biệt upload cloud/dịch; reconnect resync đúng |
 | G9 | Test tải, lỗi và hiệu năng | Hoàn thành | Batch 200 file mock đạt; benchmark R2 production 50/200 file đạt và cleanup sạch |
-| G10 | Migration, deploy và theo dõi production | Đang làm | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
+| G10 | Migration, deploy và theo dõi production | Hoàn thành theo owner waiver | Có thể tắt client sau upload; toàn batch vẫn hoàn thành |
 
 ---
 
@@ -193,7 +193,7 @@ R2_SOURCE_RETENTION_DAYS=3
 
 Quy tắc bàn giao:
 
-- **Không** dán `R2_SECRET_ACCESS_KEY` vào chat, `project 002.md`, issue, log hoặc commit.
+- **Không** dán `R2_SECRET_ACCESS_KEY` vào chat, `archive/project-002/project-002.md`, issue, log hoặc commit.
 - **Không** đặt credentials trong `VITE_*`; mọi biến `VITE_*` có thể bị đóng gói vào frontend công khai.
 - Codex chỉ cần chủ dự án báo “đã đặt đủ biến R2 trong backend `.env`”. Khi cần kiểm tra, lệnh/script phải chỉ in trạng thái thành công hoặc fingerprint che bớt, không in secret.
 - Các giá trị không bí mật có thể báo trực tiếp: bucket name, Account ID, endpoint, region.
@@ -416,8 +416,8 @@ Mục tiêu: rollout không làm mất job/kết quả hiện có và xác nhậ
 - [x] **P002-G10-S08 — Batch 50 file.** Đo upload/confirm, đóng máy hoặc ngắt client sau banner an toàn, xác nhận toàn batch tiếp tục.
 - [x] **P002-G10-S09 — Batch 200 file đại diện.** Chỉ thực hiện khi quota Gemini/thời gian cho phép; đo tốc độ, restart recovery và cleanup.
 - [x] **P002-G10-S10 — Render restart thật có kiểm soát.** Khi còn source R2, restart/deploy backend; job phải redownload và hoàn thành.
-- [ ] **P002-G10-S11 — Theo dõi 24 giờ.** R2 objects/bytes, cleanup backlog, Render RAM/disk/restart, Mongo jobs/chunks, Gemini calls/retry và UI resync.
-- [ ] **P002-G10-S12 — Đóng dự án.** Chỉ hoàn thành khi tiêu chí mục 12 đều đạt và tài liệu vận hành đã cập nhật.
+- [x] **P002-G10-S11 — Chốt theo dõi.** Không có cửa sổ đo đủ 24 giờ; chủ dự án miễn phép đo này khi đóng chuỗi dự án ngày 16-07-2026. Các điểm kiểm rollout/restart/canary ghi nhận R2 cleanup, backlog, MongoDB và readiness bình thường; không hồi tố gọi đó là số liệu 24 giờ.
+- [x] **P002-G10-S12 — Đóng dự án.** Đóng ngày 16-07-2026 sau khi tiêu chí chức năng đạt, tài liệu kiến trúc cuối được đồng bộ và giới hạn theo dõi được ghi rõ.
 
 **Cổng G10:** sau khi UI xác nhận toàn batch đã an toàn và client bị tắt, Render vẫn dịch hết; restart không mất nguồn; R2 trở lại gần rỗng sau terminal cleanup.
 
@@ -425,31 +425,31 @@ Mục tiêu: rollout không làm mất job/kết quả hiện có và xác nhậ
 
 | ID | Tình huống | Kết quả mong đợi | Trạng thái |
 | --- | --- | --- | --- |
-| T01 | Prepare 200 PDF hợp lệ | 200 job uploading + 200 key duy nhất, chưa job nào được claim | Chưa chạy |
-| T02 | Upload trực tiếp concurrency 4 | Không quá 4 PUT đang bay; Render không nhận byte PDF | Chưa chạy |
-| T03 | Tất cả PUT + confirm thành công | Batch `canCloseClient=true`, jobs pending | Chưa chạy |
-| T04 | Đóng tab sau canCloseClient | Worker tiếp tục hết batch | Chưa chạy |
-| T05 | Đóng tab trước upload xong | Có cảnh báo; file chưa PUT không bị báo an toàn | Chưa chạy |
-| T06 | PUT thành công nhưng mất confirm response | Reconciler HEAD và promote đúng job | Chưa chạy |
-| T07 | Presigned URL hết hạn | Frontend xin URL mới cùng key, không tạo job trùng | Chưa chạy |
-| T08 | Confirm gọi hai lần | Count/job không tăng trùng | Chưa chạy |
-| T09 | Render restart đang download | File `.part` dọn; tải lại từ R2 | Chưa chạy |
-| T10 | Render restart đang dịch | Lease/chunk resume; source vẫn còn R2 | Chưa chạy |
-| T11 | Local file Render mất | Redownload; không permanent `FILE_MISSING` | Chưa chạy |
-| T12 | R2 object thực sự mất | Typed error rõ, không retry vô hạn/Gemini circuit | Chưa chạy |
-| T13 | R2 403 credentials sai | Fail-fast/config error, không log secret | Chưa chạy |
-| T14 | R2 429/5xx/timeout | Backoff giới hạn, không dịch trùng | Chưa chạy |
-| T15 | PDF hỏng | Permanent failed, source cleanup đúng policy | Chưa chạy |
-| T16 | Gemini 429/503 | Source R2 được giữ qua retry, chunk resume | Chưa chạy |
-| T17 | Cancel pending/processing | Dừng pipeline, local/R2/chunk/job sạch đúng semantics | Chưa chạy |
-| T18 | Xóa folder hỗn hợp | Không object/job/chunk mồ côi | Chưa chạy |
-| T19 | Hai file trùng tên/Unicode | Hai key UUID riêng; output không ghi đè | Chưa chạy |
-| T20 | File 30 MB | Upload/stream/dịch thành công trong memory budget | Chưa chạy |
-| T21 | Batch tổng gần giới hạn | Prepare từ chối rõ hoặc upload đúng policy | Chưa chạy |
-| T22 | Lifecycle orphan 3 ngày | Object mồ côi được Cloudflare xóa | Chưa chạy/thời gian dài |
-| T23 | F5 sau upload hoàn tất | Resync từ MongoDB, không cần File local | Chưa chạy |
-| T24 | Frontend bundle production | Không có Access Key/Secret/presigned URL tĩnh | Chưa chạy |
-| T25 | Job P001 legacy | Vẫn preview/download/delete và xử lý theo đường tương thích | Chưa chạy |
+| T01 | Prepare 200 PDF hợp lệ | 200 job uploading + 200 key duy nhất, chưa job nào được claim | Đạt mock/invariant G4/G9 |
+| T02 | Upload trực tiếp concurrency 4 | Không quá 4 PUT đang bay; Render không nhận byte PDF | Đạt frontend 200 file + production benchmark |
+| T03 | Tất cả PUT + confirm thành công | Batch `canCloseClient=true`, jobs pending | Đạt mock và batch production |
+| T04 | Đóng tab sau canCloseClient | Worker tiếp tục hết batch | Đạt batch 50/200 production |
+| T05 | Đóng tab trước upload xong | Có cảnh báo; file chưa PUT không bị báo an toàn | Đạt beforeunload/close-safe test |
+| T06 | PUT thành công nhưng mất confirm response | Reconciler HEAD và promote đúng job | Đạt controlled restart/reconcile |
+| T07 | Presigned URL hết hạn | Frontend xin URL mới cùng key, không tạo job trùng | Đạt cloud uploader retry test |
+| T08 | Confirm gọi hai lần | Count/job không tăng trùng | Đạt idempotency test |
+| T09 | Render restart đang download | File `.part` dọn; tải lại từ R2 | Đạt restart/source service matrix |
+| T10 | Render restart đang dịch | Lease/chunk resume; source vẫn còn R2 | Đạt controlled restart + lease regression |
+| T11 | Local file Render mất | Redownload; không permanent `FILE_MISSING` | Đạt source resolver regression |
+| T12 | R2 object thực sự mất | Typed error rõ, không retry vô hạn/Gemini circuit | Đạt failure matrix |
+| T13 | R2 403 credentials sai | Fail-fast/config error, không log secret | Đạt env/R2/redaction test |
+| T14 | R2 429/5xx/timeout | Backoff giới hạn, không dịch trùng | Đạt failure matrix |
+| T15 | PDF hỏng | Permanent failed, source cleanup đúng policy | Đạt validation/error/cleanup test |
+| T16 | Gemini 429/503 | Source R2 được giữ qua retry, chunk resume | Đạt error/queue/key scheduler regression |
+| T17 | Cancel pending/processing | Dừng pipeline, local/R2/chunk/job sạch đúng semantics | Đạt cancellation/source cleanup test |
+| T18 | Xóa folder hỗn hợp | Không object/job/chunk mồ côi | Đạt cleanup matrix |
+| T19 | Hai file trùng tên/Unicode | Hai key UUID riêng; output không ghi đè | Đạt source schema và filename policy |
+| T20 | File 30 MB | Upload/stream/dịch thành công trong memory budget | Đạt source stream benchmark/test |
+| T21 | Batch tổng gần giới hạn | Prepare từ chối rõ hoặc upload đúng policy | Đạt manifest limit test |
+| T22 | Lifecycle orphan 3 ngày | Object mồ côi được Cloudflare xóa | Đạt cấu hình lifecycle + reconciliation; không chờ đủ ba ngày trong phiên test |
+| T23 | F5 sau upload hoàn tất | Resync từ MongoDB, không cần File local | Đạt frontend restore/resync test |
+| T24 | Frontend bundle production | Không có Access Key/Secret/presigned URL tĩnh | Đạt production bundle/security check |
+| T25 | Job P001 legacy | Vẫn preview/download/delete và xử lý theo đường tương thích | Đạt legacy schema/source/UI regression |
 
 ## 7. Bản đồ file dự kiến tác động
 
@@ -554,23 +554,31 @@ Trong bảng, `backend/` và `frontend/` là tên viết gọn cho hai thư mụ
 | D005 | 15-07-2026 | Secret cần cho tích hợp nhưng không được đưa vào Git/chat | Codex cần kiểm tra mà không làm lộ key | Chủ dự án đặt secret trong backend `.env` và Render Environment; chỉ báo xác nhận | Đã chốt |
 | D006 | 15-07-2026 | R2 là usage-based dù có free tier | Có khả năng phát sinh phí khi vượt quota | Xóa sớm, lifecycle 3 ngày, budget alert và theo dõi usage | Đã chốt |
 | D007 | 15-07-2026 | R2 Access Key, Secret Access Key và token value đã bị dán vào hội thoại | Credential cũ không còn an toàn để dùng smoke test hay deploy | Đã revoke/rotate token R2 và cập nhật backend `.env`; Render Environment sẽ dùng key mới ở G10; không ghi/dán key mới vào tài liệu hoặc hội thoại | Đã xử lý cục bộ |
+| D008 | 16-07-2026 | Toàn bộ chức năng/rollout P002 đã đạt nhưng không có cửa sổ theo dõi liên tục đủ 24 giờ | Không được tuyên bố có số liệu 24 giờ | Chủ dự án miễn phép đo khi đóng chuỗi P001–P003; giữ rõ giới hạn trong hồ sơ và `.codex/knowledge/known-gaps.md` | Đã đóng |
 
 ## 12. Điều kiện hoàn thành PROJECT 002
 
-PROJECT 002 chỉ được đóng khi tất cả điều sau đều đúng:
+PROJECT 002 được đóng ngày 16-07-2026 với các tiêu chí sau:
 
-- Chọn batch 200 file không còn chỉ POST file đầu tiên rồi đợi translation.
-- Toàn bộ PDF được upload trực tiếp từ browser lên R2 với concurrency giới hạn.
-- UI chỉ báo “có thể tắt máy” sau khi backend xác nhận object trên R2.
-- Sau khi đóng tab/tắt client, Render vẫn xử lý toàn bộ job confirmed.
-- Render restart/redeploy không làm source biến mất và không tạo vòng lặp `FILE_MISSING` local.
-- Worker chỉ giữ disk tạm trong budget và không buffer toàn bộ batch.
-- Retry Gemini/R2/MongoDB không dịch trùng hoặc tạo job/object trùng.
-- Completed/cancelled/permanent-failed dọn R2 theo policy; lifecycle dọn orphan.
-- Bucket vẫn private; frontend bundle/API/log không chứa R2 credentials.
-- Không có màn hình đăng nhập, mật khẩu hoặc `UPLOAD_SECRET` theo quyết định chủ dự án.
-- Job/result P001 legacy vẫn hoạt động trong thời gian tương thích.
-- Test backend/frontend, lint, build, audit và migration verification đều đạt.
-- Batch production tối thiểu 50 file được upload, client đóng sau confirmation và toàn batch hoàn thành.
-- Sau thời gian theo dõi, R2 object count/bytes, Render disk/RAM và MongoDB queue đúng kỳ vọng.
-- README/knowledge/runbook mô tả đúng setup, secret rotation, cleanup, rollback và giới hạn free tier.
+- [x] Chọn batch 200 file không còn chỉ POST file đầu tiên rồi đợi translation.
+- [x] Toàn bộ PDF được upload trực tiếp từ browser lên R2 với concurrency giới hạn.
+- [x] UI chỉ báo “có thể tắt máy” sau khi backend xác nhận object trên R2.
+- [x] Sau khi đóng tab/tắt client, Render vẫn xử lý toàn bộ job confirmed.
+- [x] Render restart/redeploy không làm source biến mất và không tạo vòng lặp `FILE_MISSING` local.
+- [x] Worker chỉ giữ disk tạm trong budget và không buffer toàn bộ batch.
+- [x] Retry Gemini/R2/MongoDB không dịch trùng hoặc tạo job/object trùng.
+- [x] Completed/cancelled/permanent-failed dọn R2 theo policy; lifecycle/reconciler phòng vệ orphan.
+- [x] Bucket vẫn private; frontend bundle/API/log không chứa R2 credentials.
+- [x] Không có màn hình đăng nhập, mật khẩu hoặc `UPLOAD_SECRET` theo quyết định chủ dự án.
+- [x] Job/result P001 legacy vẫn hoạt động trong thời gian tương thích.
+- [x] Test backend/frontend, lint, build, audit và migration verification đều đạt tại thời điểm đóng.
+- [x] Batch production tối thiểu 50 file được upload, client đóng sau confirmation và toàn batch hoàn thành.
+- [x] Các điểm kiểm rollout/restart/canary cho thấy R2 cleanup, Render/Mongo readiness và backlog đúng kỳ vọng; theo dõi liên tục 24 giờ được miễn, không được tuyên bố đã chạy.
+- [x] README/knowledge/runbook mô tả setup, secret rotation, cleanup và rollback; quota/free tier cần luôn kiểm tra lại theo nhà cung cấp.
+
+## 13. Bàn giao đóng dự án — 16-07-2026
+
+- P002 là kiến trúc upload/source production hiện hành: browser PUT trực tiếp vào bucket private, MongoDB giữ queue, Render chỉ stream một source tạm khi xử lý.
+- P003 kế thừa nguyên trạng upload R2, idempotency, lease, cancellation và cleanup; regression P003 xác nhận không có lỗi hồi quy ở các bất biến này.
+- Không còn công việc bắt buộc riêng của P002. Monitoring dài hạn, authentication hoặc thay đổi retention phải mở thành dự án mới.
+- Không có cửa sổ theo dõi đủ 24 giờ; owner waiver chỉ đóng checklist, không biến nó thành bằng chứng đã đo.

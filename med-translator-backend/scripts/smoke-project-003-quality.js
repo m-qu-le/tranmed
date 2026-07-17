@@ -15,7 +15,7 @@ import { QUALITY_PIPELINE_VERSION } from '../src/services/qualityPipelineState.j
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '../..');
 const fixturePath = path.join(repositoryRoot, 'samplepdf', '77 Allergy Assessment.pdf');
-const reportPath = path.join(repositoryRoot, 'cline_docs', 'project-003-quality-smoke-report.json');
+const reportPath = path.join(repositoryRoot, 'archive', 'project-003', 'project-003-quality-smoke-report.json');
 const runId = randomUUID();
 const databaseName = `p003smk_${runId.replaceAll('-', '').slice(0, 20)}`;
 const storageKey = `p003-smoke/${runId}/allergy-assessment-page-1.pdf`;
