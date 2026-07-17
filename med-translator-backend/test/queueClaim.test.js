@@ -33,6 +33,18 @@ test('claimNextJob relies on one atomic pending-to-processing update', async (co
     assert.equal(results.filter(Boolean).length, 1);
 });
 
+test('candidate claim keeps the peeked ID in the atomic update filter', async (context) => {
+    const originalFindOneAndUpdate = Job.findOneAndUpdate;
+    Job.findOneAndUpdate = async (filter, update) => {
+        assert.equal(String(filter._id), 'candidate-id');
+        return { jobId: 'candidate-job', processingToken: update.$set.processingToken };
+    };
+    context.after(() => { Job.findOneAndUpdate = originalFindOneAndUpdate; });
+
+    const claimed = await new QueueManager().claimNextJob('candidate-id');
+    assert.equal(claimed.jobId, 'candidate-job');
+});
+
 test('an idle worker stops after one empty claim instead of polling in a microtask loop', async () => {
     const queue = new QueueManager();
     let claims = 0;
@@ -52,5 +64,6 @@ test('an idle worker stops after one empty claim instead of polling in a microta
 
     assert.equal(claims, 1);
     assert.equal(schedules, 1);
-    assert.equal(queue.isProcessing, false);
+    assert.equal(queue.pumpPromise, null);
+    assert.equal(queue.activeJobs.size, 0);
 });

@@ -1,10 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
 import api, { API_BASE_URL } from './api/client.js';
 import { uploadBatchToCloud } from './cloudUploader.js';
 
 const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
+const HIDDEN_UPLOAD_BATCH_IDS_KEY = 'studymed.hiddenUploadBatchIds.v1';
+
+const readHiddenUploadBatchIds = () => {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(HIDDEN_UPLOAD_BATCH_IDS_KEY) || '[]');
+    return new Set(Array.isArray(value) ? value.filter(id => typeof id === 'string' && id) : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const persistHiddenUploadBatchIds = hiddenIds => {
+  try {
+    window.localStorage.setItem(HIDDEN_UPLOAD_BATCH_IDS_KEY, JSON.stringify([...hiddenIds]));
+  } catch {
+    // localStorage có thể bị chặn; Set trong bộ nhớ vẫn giữ hành vi cho phiên hiện tại.
+  }
+};
+
+const normalizeJobStats = value => {
+  const keys = ['pending', 'processing', 'completed', 'failed'];
+  return keys.every(key => Number.isSafeInteger(value?.[key]) && value[key] >= 0)
+    ? Object.fromEntries(keys.map(key => [key, value[key]]))
+    : null;
+};
 
 const serverBatchToTask = batch => ({
   id: `server-${batch.batchId}`,
@@ -24,9 +49,10 @@ const serverBatchToTask = batch => ({
     : '⚠️ Batch chưa upload đủ. Hãy chọn lại đúng các file còn thiếu để tiếp tục.',
 });
 
-const mergeServerBatches = (previous, batches) => {
-  const byBatchId = new Map(previous.filter(task => task.batchId).map(task => [task.batchId, task]));
-  for (const batch of batches) {
+const mergeServerBatches = (previous, batches, hiddenIds = new Set()) => {
+  const visiblePrevious = previous.filter(task => !task.batchId || !hiddenIds.has(task.batchId));
+  const byBatchId = new Map(visiblePrevious.filter(task => task.batchId).map(task => [task.batchId, task]));
+  for (const batch of batches.filter(item => !hiddenIds.has(item.batchId))) {
     const restored = serverBatchToTask(batch);
     const existing = byBatchId.get(batch.batchId);
     byBatchId.set(batch.batchId, existing ? {
@@ -40,7 +66,7 @@ const mergeServerBatches = (previous, batches) => {
       progressMsg: batch.canCloseClient ? restored.progressMsg : existing.progressMsg,
     } : restored);
   }
-  const withoutBatchId = previous.filter(task => !task.batchId);
+  const withoutBatchId = visiblePrevious.filter(task => !task.batchId);
   return [...withoutBatchId, ...byBatchId.values()];
 };
 
@@ -217,10 +243,30 @@ function App() {
   const [activeUploadTaskId, setActiveUploadTaskId] = useState(null);
   
   const [jobs, setJobs] = useState([]); 
+  const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
   const [collapsedFolders, setCollapsedFolders] = useState({});
   const [sseConnected, setSseConnected] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
+  const hiddenUploadBatchIds = useRef(null);
+  const jobStatusById = useRef(new Map());
+  const statsRefreshTimer = useRef(null);
+  if (hiddenUploadBatchIds.current === null) hiddenUploadBatchIds.current = readHiddenUploadBatchIds();
+
+  const rememberJobStatuses = items => {
+    for (const job of items) jobStatusById.current.set(job.jobId, job.status);
+  };
+
+  const refreshJobStats = async () => {
+    try {
+      const response = await api.get('/jobs/stats', { timeout: 30_000 });
+      const stats = normalizeJobStats(response.data);
+      if (stats) setJobStats(stats);
+      else console.error('Thống kê job không đúng contract.');
+    } catch (error) {
+      console.error('Không thể đồng bộ thống kê job:', error);
+    }
+  };
 
   const toggleFolder = (folderName) => { 
     setCollapsedFolders(prev => ({ ...prev, [folderName]: !prev[folderName] })); 
@@ -231,16 +277,23 @@ function App() {
     const fetchInitialData = async () => {
       try {
         // Lấy trạng thái hệ thống
-        const statusRes = await api.get('/status');
+        const [statusRes, jobsRes, statsRes] = await Promise.all([
+          api.get('/status'),
+          api.get('/jobs'),
+          api.get('/jobs/stats').catch(error => {
+            console.error('Không thể tải thống kê job:', error);
+            return null;
+          }),
+        ]);
         setSysStatus(statusRes.data);
-
-      // Lấy danh sách Jobs
-        const jobsRes = await api.get('/jobs');
+        const initialStats = normalizeJobStats(statsRes?.data);
+        if (initialStats) setJobStats(initialStats);
         
         // Cầu chì bảo vệ: Chặn trường hợp Render trả về trang HTML 502 thay vì JSON
         const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
         if (Array.isArray(jobItems)) {
             const formattedJobs = jobItems.map(j => ({ ...j, logs: [], result: null }));
+            rememberJobStatuses(formattedJobs);
             setJobs(formattedJobs);
             setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
         } else {
@@ -250,7 +303,7 @@ function App() {
         try {
           const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
           const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
-          setLocalQueue(previous => mergeServerBatches(previous, batches));
+          setLocalQueue(previous => mergeServerBatches(previous, batches, hiddenUploadBatchIds.current));
         } catch (batchError) {
           console.error('Không thể phục hồi upload batch:', batchError);
         }
@@ -282,19 +335,27 @@ function App() {
 
     const resync = async () => {
       try {
-        const [statusRes, jobsRes, batchesRes] = await Promise.all([
+        const [statusRes, jobsRes, batchesRes, statsRes] = await Promise.all([
           api.get('/status', { timeout: 30_000 }),
           api.get('/jobs', { timeout: 30_000 }),
           api.get('/upload-batches', { params: { limit: 20 }, timeout: 30_000 }),
+          api.get('/jobs/stats', { timeout: 30_000 }).catch(error => {
+            console.error('Không thể đồng bộ thống kê job:', error);
+            return null;
+          }),
         ]);
         setSysStatus(statusRes.data);
         const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
         if (Array.isArray(jobItems)) {
-          setJobs(jobItems.map(job => ({ ...job, logs: [], result: null })));
+          const formattedJobs = jobItems.map(job => ({ ...job, logs: [], result: null }));
+          rememberJobStatuses(formattedJobs);
+          setJobs(formattedJobs);
           setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
         }
+        const refreshedStats = normalizeJobStats(statsRes?.data);
+        if (refreshedStats) setJobStats(refreshedStats);
         const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
-        setLocalQueue(previous => mergeServerBatches(previous, batches));
+        setLocalQueue(previous => mergeServerBatches(previous, batches, hiddenUploadBatchIds.current));
       } catch (error) {
         console.error('Không thể đồng bộ lại SSE:', error);
       }
@@ -323,6 +384,15 @@ function App() {
         setSysStatus(previous => ({ ...previous, ...data.data }));
       }
       else if (data.type === 'status') {
+        const previousStatus = jobStatusById.current.get(data.jobId);
+        jobStatusById.current.set(data.jobId, data.status);
+        if (previousStatus !== data.status) {
+          if (statsRefreshTimer.current) clearTimeout(statsRefreshTimer.current);
+          statsRefreshTimer.current = setTimeout(() => {
+            statsRefreshTimer.current = null;
+            void refreshJobStats();
+          }, 500);
+        }
         setJobs(prevJobs => prevJobs.map(job => 
           job.jobId === data.jobId ? { ...job, ...data } : job
         ));
@@ -353,7 +423,10 @@ function App() {
       }
     };
 
-    return () => eventSource.close();
+    return () => {
+      eventSource.close();
+      if (statsRefreshTimer.current) clearTimeout(statsRefreshTimer.current);
+    };
   }, []); 
 
   const updateCloudTask = (taskId, changes) => {
@@ -382,6 +455,7 @@ function App() {
             logs: [],
             result: null,
           }));
+          rememberJobStatuses(preparedJobs);
           setJobs(previous => {
             const known = new Set(previous.map(job => job.jobId));
             return [...preparedJobs.filter(job => !known.has(job.jobId)), ...previous];
@@ -405,6 +479,7 @@ function App() {
         confirmedBytes: result.confirmedBytes,
         progressMsg: '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Render sẽ tiếp tục dịch.',
       });
+      void refreshJobStats();
     } catch (error) {
       updateCloudTask(task.id, {
         status: 'error',
@@ -455,7 +530,25 @@ function App() {
   };
 
   const handleRemoveFromQueue = (taskId) => {
-    setLocalQueue(previous => previous.filter(task => task.id !== taskId || task.id === activeUploadTaskId));
+    setLocalQueue(previous => {
+      const task = previous.find(item => item.id === taskId);
+      if (!task?.canCloseClient || task.id === activeUploadTaskId) return previous;
+      if (task.batchId) {
+        hiddenUploadBatchIds.current.add(task.batchId);
+        persistHiddenUploadBatchIds(hiddenUploadBatchIds.current);
+      }
+      return previous.filter(item => item.id !== taskId);
+    });
+  };
+
+  const handleHideAllSafeBatches = () => {
+    setLocalQueue(previous => {
+      for (const task of previous) {
+        if (task.canCloseClient && task.batchId) hiddenUploadBatchIds.current.add(task.batchId);
+      }
+      persistHiddenUploadBatchIds(hiddenUploadBatchIds.current);
+      return previous.filter(task => !task.canCloseClient);
+    });
   };
 
   const handleRetryLocalTask = (taskId) => {
@@ -493,6 +586,7 @@ function App() {
         timeout: 30_000,
       });
       const items = response.data?.items || [];
+      rememberJobStatuses(items);
       setJobs(previous => {
         const knownIds = new Set(previous.map(job => job.jobId));
         return [...previous, ...items.filter(job => !knownIds.has(job.jobId))];
@@ -513,6 +607,8 @@ function App() {
     try {
       await api.delete(`/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 });
       setJobs(prevJobs => prevJobs.filter(job => job.jobId !== jobId));
+      jobStatusById.current.delete(jobId);
+      void refreshJobStats();
     } catch (error) {
       alert('Lỗi khi xóa tiến trình: ' + (error.response?.data?.error || error.message));
     }
@@ -537,6 +633,8 @@ function App() {
       
       // Dọn dẹp State UI nội bộ
       setJobs(prevJobs => prevJobs.filter(job => !jobIds.includes(job.jobId)));
+      for (const jobId of jobIds) jobStatusById.current.delete(jobId);
+      void refreshJobStats();
     } catch (error) {
       alert('Lỗi khi dọn dẹp hàng loạt: ' + (error.response?.data?.error || error.message));
     }
@@ -553,6 +651,10 @@ function App() {
       
       // Lọc bỏ toàn bộ job thuộc thư mục này ra khỏi State để UI cập nhật ngay lập tức
       setJobs(prevJobs => prevJobs.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
+      for (const job of jobs) {
+        if ((job.folderName || 'Mặc định') === targetFolderName) jobStatusById.current.delete(job.jobId);
+      }
+      void refreshJobStats();
     } catch (error) {
       alert('Lỗi khi xóa toàn bộ thư mục: ' + (error.response?.data?.error || error.message));
     }
@@ -687,10 +789,6 @@ function App() {
     confirmedFiles: localQueue.reduce((total, task) => total + (task.confirmedFiles || 0), 0),
     totalFiles: localQueue.reduce((total, task) => total + (task.totalFiles || 0), 0),
     safeFiles: localQueue.reduce((total, task) => total + (task.canCloseClient ? (task.confirmedFiles || 0) : 0), 0),
-    pendingFiles: jobs.filter(job => job.status === 'pending').length,
-    processingFiles: jobs.filter(job => job.status === 'processing').length,
-    completedFiles: jobs.filter(job => job.status === 'completed').length,
-    failedFiles: jobs.filter(job => job.status === 'failed').length,
   };
 
   return (
@@ -722,9 +820,9 @@ function App() {
             <small>Đã xác nhận {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
           </article>
           <article>
-            <strong>{dashboard.pendingFiles + dashboard.processingFiles}</strong>
-            <span>File Render đang dịch</span>
-            <small>Chờ {dashboard.pendingFiles} · xử lý {dashboard.processingFiles} · xong {dashboard.completedFiles} · lỗi {dashboard.failedFiles}</small>
+            <strong>{jobStats?.completed ?? '—'}</strong>
+            <span>File đã xong</span>
+            <small>Chờ {jobStats?.pending ?? '—'} · xử lý {jobStats?.processing ?? '—'} · lỗi {jobStats?.failed ?? '—'}</small>
           </article>
         </section>
         
@@ -806,9 +904,16 @@ function App() {
 
           {localQueue.length > 0 && (
             <div className="cloud-queue">
-              <h4>
-                ☁️ Tiến độ lưu lên Cloud ({localQueue.filter(task => !task.canCloseClient).length} batch chưa an toàn)
-              </h4>
+              <div className="cloud-queue-header">
+                <h4>
+                  ☁️ Tiến độ lưu lên Cloud ({localQueue.filter(task => !task.canCloseClient).length} batch chưa an toàn)
+                </h4>
+                {localQueue.some(task => task.canCloseClient) && (
+                  <button className="hide-batch-btn" onClick={handleHideAllSafeBatches} aria-label="Ẩn tất cả batch đã an toàn">
+                    Ẩn tất cả
+                  </button>
+                )}
+              </div>
               <ul>
                 {localQueue.map(task => (
                   <li key={task.id} className={`cloud-task ${task.status}`}>
@@ -833,7 +938,9 @@ function App() {
                       </div>
                     )}
                     {task.status === 'safe' && (
-                      <button onClick={() => handleRemoveFromQueue(task.id)}>Ẩn</button>
+                      <button className="hide-batch-btn" onClick={() => handleRemoveFromQueue(task.id)} aria-label={`Ẩn batch ${task.folderName}`}>
+                        Ẩn
+                      </button>
                     )}
                   </li>
                 ))}

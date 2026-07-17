@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateRuntimeEnv } from '../src/config/env.js';
+import { readTranslationWorkerConcurrency, validateRuntimeEnv } from '../src/config/env.js';
 
 const R2_VARIABLES = [
     'R2_ACCOUNT_ID',
@@ -28,5 +28,17 @@ test('runtime validation names every missing R2 variable without printing values
             if (value === undefined) delete process.env[name];
             else process.env[name] = value;
         }
+    }
+});
+
+test('translation worker concurrency defaults to one and accepts only one or two', () => {
+    assert.equal(readTranslationWorkerConcurrency({}), 1);
+    assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: '1' }), 1);
+    assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: ' 2 ' }), 2);
+    for (const value of ['0', '3', '1.5', 'two']) {
+        assert.throws(
+            () => readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: value }),
+            /chỉ nhận 1 hoặc 2/
+        );
     }
 });

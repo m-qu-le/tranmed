@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import api from './api/client.js'
 import { uploadBatchToCloud } from './cloudUploader.js'
@@ -22,6 +22,7 @@ describe('App Cloud Uploader', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: {
         isHibernating: false,
@@ -29,10 +30,15 @@ describe('App Cloud Uploader', () => {
         storage: { configured: true, available: true, cleanupBacklog: 0 },
       } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
       return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
     vi.stubGlobal('EventSource', MockEventSource)
     vi.stubGlobal('alert', vi.fn())
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    })
   })
 
   it('renders the translator shell and empty state', async () => {
@@ -41,6 +47,160 @@ describe('App Cloud Uploader', () => {
     expect(await screen.findByText(/Chưa có tài liệu nào/i)).toBeInTheDocument()
     expect(await screen.findByText(/Cloud Storage sẵn sàng/i)).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Tổng quan tiến độ' })).toBeInTheDocument()
+  })
+
+  it('uses global job stats and does not change the dashboard when loading more history', async () => {
+    api.get.mockImplementation((url, options) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: {
+        pending: 473, processing: 1, completed: 32, failed: 0,
+      } })
+      if (options?.params?.cursor) return Promise.resolve({ data: { items: [
+        { jobId: 'older-completed', folderName: 'Cũ', status: 'completed' },
+      ], nextCursor: null } })
+      return Promise.resolve({ data: { items: [
+        { jobId: 'new-pending', folderName: 'Mới', status: 'pending' },
+      ], nextCursor: 'next-page' } })
+    })
+
+    render(<App />)
+    const dashboard = screen.getByRole('region', { name: 'Tổng quan tiến độ' })
+    expect(await within(dashboard).findByText('32')).toBeInTheDocument()
+    expect(within(dashboard).getByText('File đã xong')).toBeInTheDocument()
+    expect(within(dashboard).getByText('Chờ 473 · xử lý 1 · lỗi 0')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tải thêm lịch sử' }))
+    await screen.findByText('📄 Tài liệu')
+    expect(within(dashboard).getByText('32')).toBeInTheDocument()
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(1)
+  })
+
+  it('debounces job stats refresh only for a real SSE status transition', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 1, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [{
+        jobId: 'transition-job', folderName: 'Realtime', status: 'processing',
+      }], nextCursor: null } })
+    })
+
+    render(<App />)
+    await screen.findByText(/Đang dịch/i)
+    await waitFor(() => expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(1))
+
+    await act(async () => {
+      MockEventSource.instance.onmessage({ data: JSON.stringify({ type: 'status', jobId: 'transition-job', status: 'processing' }) })
+      MockEventSource.instance.onmessage({ data: JSON.stringify({ type: 'status', jobId: 'transition-job', status: 'completed' }) })
+      MockEventSource.instance.onmessage({ data: JSON.stringify({ type: 'status', jobId: 'transition-job', status: 'completed' }) })
+      await new Promise(resolve => setTimeout(resolve, 550))
+    })
+
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(2)
+  })
+
+  it('shows an em dash on initial stats failure and keeps the last snapshot on a later failure', async () => {
+    let statsCalls = 0
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) {
+        statsCalls += 1
+        if (statsCalls === 1) return Promise.reject(new Error('initial stats unavailable'))
+        if (statsCalls === 2) return Promise.resolve({ data: { pending: 2, processing: 1, completed: 5, failed: 0 } })
+        return Promise.reject(new Error('refresh stats unavailable'))
+      }
+      return Promise.resolve({ data: { items: [{ jobId: 'stats-job', folderName: 'Stats', status: 'pending' }], nextCursor: null } })
+    })
+
+    render(<App />)
+    const dashboard = screen.getByRole('region', { name: 'Tổng quan tiến độ' })
+    expect(await within(dashboard).findByText('—')).toBeInTheDocument()
+
+    await act(async () => MockEventSource.instance.onopen())
+    expect(await within(dashboard).findByText('5')).toBeInTheDocument()
+    await act(async () => {
+      MockEventSource.instance.onmessage({ data: JSON.stringify({ type: 'status', jobId: 'stats-job', status: 'processing' }) })
+      await new Promise(resolve => setTimeout(resolve, 550))
+    })
+    expect(within(dashboard).getByText('5')).toBeInTheDocument()
+  })
+
+  it('hides only safe batches and remembers their batch IDs', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [
+        {
+          batchId: 'safe-batch', clientBatchId: 'safe-client', folderName: 'An toàn', status: 'ready',
+          totalFiles: 1, totalBytes: 10, confirmedFiles: 1, confirmedBytes: 10, canCloseClient: true,
+        },
+        {
+          batchId: 'unsafe-batch', clientBatchId: 'unsafe-client', folderName: 'Chưa xong', status: 'uploading',
+          totalFiles: 2, totalBytes: 20, confirmedFiles: 1, confirmedBytes: 10, canCloseClient: false,
+        },
+      ] } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    const view = render(<App />)
+    expect(await screen.findByText(/📁 An toàn/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ẩn tất cả batch đã an toàn' }))
+
+    expect(screen.queryByText(/📁 An toàn/)).not.toBeInTheDocument()
+    expect(screen.getByText(/📁 Chưa xong/)).toBeInTheDocument()
+    expect(JSON.parse(window.localStorage.getItem('studymed.hiddenUploadBatchIds.v1'))).toEqual(['safe-batch'])
+    expect(api.post).not.toHaveBeenCalled()
+    expect(api.delete).not.toHaveBeenCalled()
+
+    view.unmount()
+    render(<App />)
+    await waitFor(() => expect(api.get.mock.calls.filter(([url]) => url.endsWith('/upload-batches')).length).toBeGreaterThanOrEqual(2))
+    expect(screen.queryByText(/📁 An toàn/)).not.toBeInTheDocument()
+    expect(screen.getByText(/📁 Chưa xong/)).toBeInTheDocument()
+  })
+
+  it('does not restore a hidden batch from MongoDB', async () => {
+    window.localStorage.setItem('studymed.hiddenUploadBatchIds.v1', JSON.stringify(['hidden-batch']))
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [{
+        batchId: 'hidden-batch', clientBatchId: 'hidden-client', folderName: 'Đã ẩn', status: 'ready',
+        totalFiles: 1, totalBytes: 10, confirmedFiles: 1, confirmedBytes: 10, canCloseClient: true,
+      }] } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/upload-batches', { params: { limit: 20 } }))
+    expect(screen.queryByText(/📁 Đã ẩn/)).not.toBeInTheDocument()
+  })
+
+  it('falls back to in-memory hidden IDs when localStorage cannot be read', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [{
+        batchId: 'visible-batch', clientBatchId: 'visible-client', folderName: 'Vẫn hoạt động', status: 'ready',
+        totalFiles: 1, totalBytes: 10, confirmedFiles: 1, confirmedBytes: 10, canCloseClient: true,
+      }] } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+    expect(await screen.findByText(/📁 Vẫn hoạt động/)).toBeInTheDocument()
+    getItem.mockRestore()
+  })
+
+  it('ignores malformed hidden-batch JSON without crashing', async () => {
+    window.localStorage.setItem('studymed.hiddenUploadBatchIds.v1', '{not-json')
+
+    render(<App />)
+
+    expect(await screen.findByText(/Chưa có tài liệu nào/i)).toBeInTheDocument()
   })
 
   it('sends a 200-file manifest to the cloud uploader and shows close-safe only after backend confirmation', async () => {
@@ -265,6 +425,51 @@ describe('App Cloud Uploader', () => {
     expect(await screen.findByText('⚠️ Hoàn thành có cảnh báo')).toBeInTheDocument()
     expect(screen.getByText('Phần 4: trang 7–8')).toBeInTheDocument()
     expect(screen.queryByText(/audit|diagnostic/i)).not.toBeInTheDocument()
+  })
+
+  it('renders and copies the same quality warning Markdown returned by the result API', async () => {
+    const result = [
+      '# ⚠️ Lưu ý kiểm soát chất lượng',
+      '',
+      '> Cần đối chiếu thủ công với PDF gốc.',
+      '',
+      '## Phần 1 — trang 1',
+      '',
+      '- Kết quả: Cần xem lại sau 1 vòng sửa.',
+      '',
+      '---',
+      '',
+      '# Nội dung bản dịch',
+      '',
+      'Bản dịch.',
+    ].join('\n')
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/quality-output/result')) return Promise.resolve({ data: { result } })
+      return Promise.resolve({ data: { items: [{
+        jobId: 'quality-output',
+        originalName: 'warning.pdf',
+        folderName: 'Quality warnings',
+        status: 'completed',
+        translationMode: 'quality',
+        chunkCount: 1,
+        completedChunks: 1,
+        passedChunks: 0,
+        needsReviewChunks: 1,
+        qualityWarnings: [{ chunkIndex: 0, pageStart: 1, pageEnd: 1 }],
+      }], nextCursor: null } })
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Xem trước/i }))
+    expect(await screen.findByRole('heading', { name: '⚠️ Lưu ý kiểm soát chất lượng' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Phần 1 — trang 1' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Nội dung bản dịch' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Copy Markdown/i }))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(result))
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/quality-output/result'))).toHaveLength(1)
   })
 
   it('keeps the legacy processing display unchanged and omits quality details', async () => {

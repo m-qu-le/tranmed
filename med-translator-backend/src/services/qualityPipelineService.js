@@ -158,7 +158,7 @@ export class QualityPipelineService {
                     result = await executor({ pdfBuffer, chunk, documentContext: options.documentContext || null, signal });
                 } catch (error) {
                     if (action !== 'repair' || !INVALID_CONTENT_CODES.has(error?.code)) throw error;
-                    result = { invalid: true, metadata: error.geminiMetadata || null };
+                    result = { invalid: true, errorCode: error.code, metadata: error.geminiMetadata || null };
                 }
                 assertNotCancelled(signal);
                 await assertActive();

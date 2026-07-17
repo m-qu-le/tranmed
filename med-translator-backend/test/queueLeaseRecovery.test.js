@@ -71,3 +71,33 @@ test('lease heartbeat extends only the active processing token by five minutes',
     const extensionMs = capturedUpdate.$set.leaseExpiresAt.getTime() - before;
     assert.ok(extensionMs >= 300_000 && extensionMs < 301_000);
 });
+
+test('two active jobs keep independent lease heartbeat filters', async context => {
+    const originalUpdateOne = Job.updateOne;
+    const originalSetInterval = global.setInterval;
+    const callbacks = [];
+    const filters = [];
+    global.setInterval = callback => {
+        callbacks.push(callback);
+        return callbacks.length;
+    };
+    Job.updateOne = async filter => {
+        filters.push(filter);
+        return { matchedCount: 1 };
+    };
+    context.after(() => {
+        Job.updateOne = originalUpdateOne;
+        global.setInterval = originalSetInterval;
+    });
+
+    const queue = new QueueManager({ concurrency: 2 });
+    queue.createLeaseHeartbeat('job-a', 'token-a');
+    queue.createLeaseHeartbeat('job-b', 'token-b');
+    callbacks.forEach(callback => callback());
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(filters, [
+        { jobId: 'job-a', status: 'processing', processingToken: 'token-a' },
+        { jobId: 'job-b', status: 'processing', processingToken: 'token-b' },
+    ]);
+});

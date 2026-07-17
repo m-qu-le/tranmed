@@ -1,11 +1,11 @@
 # Giới hạn và rủi ro được chấp nhận
 
-Cập nhật khi đóng PROJECT 001–003 và dọn codebase ngày 16-07-2026.
+Cập nhật khi đóng PROJECT 001–004 ngày 17-07-2026.
 
 ## Chất lượng dịch
 
 - AI tự audit không thể chứng minh bản dịch không còn lỗi thực tế. `passed` chỉ có nghĩa báo cáo cuối không phát hiện lỗi và coverage đầy đủ.
-- `needs_review` cần người có chuyên môn kiểm tra; UI chỉ cung cấp chunk/page range, không public private report.
+- `needs_review` cần người có chuyên môn kiểm tra; P004 chỉ công khai phần report cuối đã chọn và escape trong header, không công khai raw diagnostic hay toàn bộ artifact private.
 - Canary PDF dài chạy trên `p003-v2` cho thấy 9 chunk từng được passed-with-minor. Policy đó đã bị thay bằng strict-pass `p003-v3`.
 - `p003-v3` được khóa bằng backend 106/106 test và frontend 12/12 + lint/build; theo quyết định chủ dự án không chạy lại PDF dài hoặc batch nhiều PDF.
 - Context passport giúp nhất quán xuyên chunk nhưng không phải glossary tuyệt đối; PDF chunk vẫn là nguồn quyết định.
@@ -23,8 +23,9 @@ Cập nhật khi đóng PROJECT 001–003 và dọn codebase ngày 16-07-2026.
 - Preview/copy ghép nội dung trong RAM; tài liệu rất lớn nên ưu tiên streaming download.
 - Không có authentication theo quyết định chủ dự án; endpoint công khai vẫn cần CORS, rate limit và validation chặt.
 - AbortSignal không bảo đảm Gemini ngừng tính usage cho request đã nhận.
+- Budget worker P005 dùng kích thước source làm proxy bảo thủ cho RAM; không chứng minh hai PDF lớn có thể chạy song song.
 - Thay đổi model, human-review workflow, translation memory hoặc monitoring dài hạn phải mở dự án mới, không tự nối lại P003.
 
 ## Nguồn sự thật
 
-Mã nguồn hiện tại và `archive/project-003/project-003.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3.
+Mã nguồn hiện tại, `archive/project-003/project-003.md` và `archive/project-004/project-004.md` ưu tiên hơn báo cáo lịch sử. Các report B4/v1/v2 là bằng chứng theo thời điểm, không mô tả đầy đủ semantics strict-pass v3 hoặc lớp cảnh báo P004.

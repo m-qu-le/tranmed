@@ -96,6 +96,12 @@ export function transitionForAction(action, result, chunk, maxRepairCycles = QUA
                         content: chunk.repairedContent || chunk.revisedContent || chunk.draftContent,
                         qualityStatus: 'needs_review',
                         repairCount: repairCount + 1,
+                        qualityReviewReason: {
+                            kind: 'repair_output_invalid',
+                            stage: 'repair',
+                            errorCode: result.errorCode,
+                            occurredAt: new Date(),
+                        },
                     },
                 };
             }
@@ -163,6 +169,7 @@ export function versionResetUpdate(pipelineVersion = QUALITY_PIPELINE_VERSION) {
             verificationReport: 1,
             repairedContent: 1,
             reverifyReport: 1,
+            qualityReviewReason: 1,
         },
     };
 }

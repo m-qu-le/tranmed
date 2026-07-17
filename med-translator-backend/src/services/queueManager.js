@@ -10,7 +10,11 @@ import Job from '../models/jobModel.js';
 import System from '../models/systemModel.js';
 import TranslationChunk from '../models/translationChunkModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
-import { MAX_JOB_ATTEMPTS, TRANSLATION_PIPELINE_MODE } from '../config/env.js';
+import {
+    MAX_JOB_ATTEMPTS,
+    TRANSLATION_PIPELINE_MODE,
+    TRANSLATION_WORKER_CONCURRENCY
+} from '../config/env.js';
 import { QUALITY_PIPELINE_VERSION } from './qualityPipelineState.js';
 import { cleanupOrphanUploads } from './storageService.js';
 import { runBoundedTasks } from '../utils/runBoundedTasks.js';
@@ -29,16 +33,20 @@ const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
+export const PARALLEL_SOURCE_BUDGET_BYTES = 10 * 1024 * 1024;
 
 export class QueueManager extends EventEmitter {
     constructor({
         sourceService = runtimeSourceService,
         sourceCleanupService = runtimeSourceCleanupService,
+        concurrency = TRANSLATION_WORKER_CONCURRENCY,
     } = {}) {
         super();
-        this.isProcessing = false;
-        this.currentJobId = null;
-        this.currentAbortController = null;
+        this.concurrency = concurrency;
+        this.activeJobs = new Map();
+        this.activeSourceBytes = 0;
+        this.pumpPromise = null;
+        this.pumpRequested = false;
         this.consecutiveFailures = 0;
         this.isHibernating = false;
         this.hibernationCount = 0;
@@ -126,7 +134,13 @@ export class QueueManager extends EventEmitter {
     getSystemStatus() {
         return {
             isHibernating: this.isHibernating,
-            stats: this.hibernationStats
+            stats: this.hibernationStats,
+            worker: {
+                concurrency: this.concurrency,
+                activeJobs: this.activeJobs.size,
+                activeSourceBytes: this.activeSourceBytes,
+                parallelSourceBudgetBytes: PARALLEL_SOURCE_BUDGET_BYTES,
+            }
         };
     }
 
@@ -194,6 +208,7 @@ export class QueueManager extends EventEmitter {
             if (existing) {
                 if (existing.status === 'failed' && existing.errorCode === ErrorCodes.FILE_MISSING) {
                     existing.filePath = file.path;
+                    existing.sourceSize = Number.isSafeInteger(file.size) && file.size > 0 ? file.size : null;
                     existing.status = 'pending';
                     existing.error = null;
                     existing.errorCode = null;
@@ -218,6 +233,7 @@ export class QueueManager extends EventEmitter {
                 originalName: file.originalname,
                 folderName: folderName || 'Mặc định',
                 filePath: file.path,
+                sourceSize: Number.isSafeInteger(file.size) && file.size > 0 ? file.size : null,
                 storageProvider: 'local',
                 sourceState: 'ready',
                 status: 'pending',
@@ -257,6 +273,16 @@ export class QueueManager extends EventEmitter {
         };
     }
 
+    async getJobStats() {
+        const rows = await Job.aggregate([
+            { $match: { status: { $in: ['pending', 'processing', 'completed', 'failed'] } } },
+            { $group: { _id: '$status', count: { $sum: 1 } } }
+        ]);
+        const stats = { pending: 0, processing: 0, completed: 0, failed: 0 };
+        for (const row of rows) stats[row._id] = row.count;
+        return stats;
+    }
+
     async getJobResult(jobId) {
         return Job.findOne({ jobId });
     }
@@ -287,32 +313,43 @@ export class QueueManager extends EventEmitter {
         return new Date(Date.now() + exponentialDelay + jitter);
     }
 
-    async claimNextJob() {
-        const now = new Date();
+    pendingJobFilter(now = new Date()) {
+        return {
+            status: 'pending',
+            cancelRequested: { $ne: true },
+            $and: [
+                {
+                    $or: [
+                        { nextRetryAt: null },
+                        { nextRetryAt: { $lte: now } }
+                    ]
+                },
+                {
+                    $or: [
+                        { storageProvider: { $ne: 'r2' } },
+                        {
+                            storageProvider: 'r2',
+                            sourceState: 'ready',
+                            storageKey: { $type: 'string' }
+                        }
+                    ]
+                }
+            ]
+        };
+    }
+
+    async peekNextJob() {
+        return Job.findOne(this.pendingJobFilter(), '_id sourceSize')
+            .sort({ createdAt: 1 })
+            .lean();
+    }
+
+    async claimNextJob(candidateId = null) {
+        const filter = this.pendingJobFilter();
+        if (candidateId) filter._id = candidateId;
         const processingToken = randomUUID();
         return Job.findOneAndUpdate(
-            {
-                status: 'pending',
-                cancelRequested: { $ne: true },
-                $and: [
-                    {
-                        $or: [
-                            { nextRetryAt: null },
-                            { nextRetryAt: { $lte: now } }
-                        ]
-                    },
-                    {
-                        $or: [
-                            { storageProvider: { $ne: 'r2' } },
-                            {
-                                storageProvider: 'r2',
-                                sourceState: 'ready',
-                                storageKey: { $type: 'string' }
-                            }
-                        ]
-                    }
-                ]
-            },
+            filter,
             {
                 $set: {
                     status: 'processing',
@@ -326,6 +363,26 @@ export class QueueManager extends EventEmitter {
             },
             { sort: { createdAt: 1 }, returnDocument: 'after' }
         );
+    }
+
+    async claimAdmissibleJob() {
+        if (this.activeJobs.size === 0) return this.claimNextJob();
+        if ([...this.activeJobs.values()].some(active => !active.sourceSize)) return null;
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            const candidate = await this.peekNextJob();
+            if (!candidate) return null;
+            const sourceSize = candidate.sourceSize;
+            // ponytail: 10 MiB source bytes là proxy bảo thủ; nâng cấp bằng admission theo RAM đo được nếu cần chạy song song PDF lớn.
+            if (!Number.isSafeInteger(sourceSize)
+                || sourceSize <= 0
+                || this.activeSourceBytes + sourceSize > PARALLEL_SOURCE_BUDGET_BYTES) {
+                return null;
+            }
+            const claimed = await this.claimNextJob(candidate._id);
+            if (claimed) return claimed;
+        }
+        return null;
     }
 
     async recoverExpiredLeases() {
@@ -760,24 +817,10 @@ export class QueueManager extends EventEmitter {
         });
     }
 
-    async startWorker() {
-        if (this.isProcessing || this.isHibernating) return;
-        this.isProcessing = true;
-
+    async runActiveJob(job) {
+        const active = this.activeJobs.get(job.jobId);
         let leaseHeartbeat = null;
-        let infrastructureFailed = false;
-        let processedJob = false;
         try {
-            await this.recoverExpiredLeases();
-            const job = await this.claimNextJob();
-            if (!job) {
-                await this.scheduleNextRetry();
-                return;
-            }
-            processedJob = true;
-
-            this.currentJobId = job.jobId;
-            this.currentAbortController = new AbortController();
             leaseHeartbeat = this.createLeaseHeartbeat(job.jobId, job.processingToken);
             this.emitJobUpdate(job.jobId, 'processing', {
                 attemptCount: job.attemptCount,
@@ -785,7 +828,7 @@ export class QueueManager extends EventEmitter {
             });
 
             try {
-                await this.processClaimedJob(job, this.currentAbortController.signal);
+                await this.processClaimedJob(job, active.abortController.signal);
             } catch (error) {
                 await this.handleProcessingFailure(job, error);
             }
@@ -794,20 +837,67 @@ export class QueueManager extends EventEmitter {
                 await this.triggerHibernation();
             }
         } catch (error) {
-            infrastructureFailed = true;
-            console.error('❌ [QUEUE] Worker gặp lỗi database/hạ tầng:', error.message);
+            console.error(`❌ [QUEUE] Worker ${job.jobId} gặp lỗi database/hạ tầng:`, error.message);
+            setTimeout(() => void this.startWorker(), 5000);
         } finally {
             if (leaseHeartbeat) clearInterval(leaseHeartbeat);
-            this.currentJobId = null;
-            this.currentAbortController = null;
-            this.isProcessing = false;
+            const current = this.activeJobs.get(job.jobId);
+            if (current === active) {
+                this.activeJobs.delete(job.jobId);
+                this.activeSourceBytes -= active.sourceSize || 0;
+            }
+            if (!this.isHibernating) void this.startWorker();
+        }
+    }
 
-            if (!this.isHibernating) {
-                if (infrastructureFailed) {
+    async pumpWorker() {
+        await this.recoverExpiredLeases();
+        while (!this.isHibernating && this.activeJobs.size < this.concurrency) {
+            const job = await this.claimAdmissibleJob();
+            if (!job) {
+                await this.scheduleNextRetry();
+                break;
+            }
+
+            const sourceSize = Number.isSafeInteger(job.sourceSize) && job.sourceSize > 0
+                ? job.sourceSize
+                : null;
+            const active = {
+                abortController: new AbortController(),
+                sourceSize,
+            };
+            this.activeJobs.set(job.jobId, active);
+            this.activeSourceBytes += sourceSize || 0;
+            void this.runActiveJob(job);
+        }
+    }
+
+    async startWorker() {
+        if (this.isHibernating) return;
+        if (this.pumpPromise) {
+            this.pumpRequested = true;
+            return this.pumpPromise;
+        }
+
+        this.pumpPromise = (async () => {
+            do {
+                this.pumpRequested = false;
+                try {
+                    await this.pumpWorker();
+                } catch (error) {
+                    console.error('❌ [QUEUE] Worker pump gặp lỗi database/hạ tầng:', error.message);
                     setTimeout(() => void this.startWorker(), 5000);
-                } else if (processedJob) {
-                    queueMicrotask(() => void this.startWorker());
                 }
+            } while (this.pumpRequested && !this.isHibernating);
+        })();
+
+        try {
+            await this.pumpPromise;
+        } finally {
+            this.pumpPromise = null;
+            if (this.pumpRequested && !this.isHibernating) {
+                this.pumpRequested = false;
+                queueMicrotask(() => void this.startWorker());
             }
         }
     }
@@ -909,9 +999,7 @@ export class QueueManager extends EventEmitter {
                 { jobId },
                 { $set: { cancelRequested: true } }
             );
-            if (this.currentJobId === jobId) {
-                this.currentAbortController?.abort();
-            }
+            this.activeJobs.get(jobId)?.abortController.abort();
             return { found: true, pending: true };
         }
 

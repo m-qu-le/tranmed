@@ -9,6 +9,26 @@ import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
 import { qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
 import { buildPublicJobUpdate, buildPublicQualitySummary } from '../services/qualityPublicView.js';
+import { buildQualityReviewHeader, prependQualityReviewHeader } from '../services/qualityReviewMarkdown.js';
+
+const QUALITY_REVIEW_FIELDS = [
+    'chunkIndex',
+    'content',
+    'pageStart',
+    'pageEnd',
+    'repairCount',
+    'qualityStatus',
+    'verificationReport',
+    'reverifyReport',
+    'qualityReviewReason',
+].join(' ');
+
+async function getReviewChunks(jobId, job) {
+    if (job?.status !== 'completed' || job?.translationMode !== 'quality') return [];
+    return TranslationChunk.find({ jobId, qualityStatus: 'needs_review' }, QUALITY_REVIEW_FIELDS)
+        .sort({ chunkIndex: 1 })
+        .lean();
+}
 
 function sendUploadBatchError(res, error) {
     if (error instanceof UploadBatchError) {
@@ -134,6 +154,14 @@ export const getJobsSummary = async (req, res) => {
     }
 };
 
+export const getJobStats = async (_req, res) => {
+    try {
+        res.status(200).json(await translationQueue.getJobStats());
+    } catch {
+        res.status(500).json({ error: 'Không thể đọc thống kê công việc.' });
+    }
+};
+
 // API 3: Trích xuất qua ID từ Database
 export const getJobResult = async (req, res) => {
     try {
@@ -145,13 +173,19 @@ export const getJobResult = async (req, res) => {
         
         if (job.result) {
             const quality = buildPublicQualitySummary(job);
-            return res.status(200).json(quality ? { result: job.result, quality } : { result: job.result });
+            const header = buildQualityReviewHeader({ job, reviewChunks: await getReviewChunks(jobId, job) });
+            const result = prependQualityReviewHeader(job.result, header);
+            return res.status(200).json(quality ? { result, quality } : { result });
         }
 
-        const chunks = await TranslationChunk.find({ jobId, content: { $type: 'string' } }, 'content chunkIndex')
-            .sort({ chunkIndex: 1 })
-            .lean();
-        const result = chunks.map(chunk => chunk.content).join('\n\n');
+        const [chunks, reviewChunks] = await Promise.all([
+            TranslationChunk.find({ jobId, content: { $type: 'string' } }, 'content chunkIndex')
+                .sort({ chunkIndex: 1 })
+                .lean(),
+            getReviewChunks(jobId, job),
+        ]);
+        const header = buildQualityReviewHeader({ job, reviewChunks });
+        const result = prependQualityReviewHeader(chunks.map(chunk => chunk.content).join('\n\n'), header);
         const quality = buildPublicQualitySummary(job);
         res.status(200).json(quality ? { result, quality } : { result });
     } catch (error) {
@@ -336,11 +370,13 @@ export const downloadJobResult = async (req, res) => {
         res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`${baseName}_vi.md`)}`);
 
+        const header = buildQualityReviewHeader({ job, reviewChunks: await getReviewChunks(jobId, job) });
         if (job.result) {
-            return res.end(job.result);
+            return res.end(prependQualityReviewHeader(job.result, header));
         }
 
-        let firstChunk = true;
+        let firstChunk = !header;
+        if (header) res.write(header);
         const cursor = TranslationChunk.find({ jobId, content: { $type: 'string' } }, 'content chunkIndex')
             .sort({ chunkIndex: 1 })
             .cursor();

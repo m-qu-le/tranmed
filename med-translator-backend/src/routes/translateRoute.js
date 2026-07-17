@@ -6,6 +6,7 @@ import { rateLimit } from 'express-rate-limit';
 import { 
     uploadFiles, 
     getJobsSummary, 
+    getJobStats,
     getJobResult, 
     downloadJobResult,
     streamLogs,
@@ -42,6 +43,7 @@ router.get('/upload-batches/:batchId', getUploadBatchStatus);
 
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
+router.get('/jobs/stats', getJobStats);
 router.get('/status', getSystemStatus); // Route lấy trạng thái hệ thống
 router.get('/metrics', getOperationalMetrics);
 router.get('/jobs/:jobId/result', getJobResult);

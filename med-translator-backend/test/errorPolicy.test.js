@@ -25,6 +25,7 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
 
     const queue = new QueueManager();
     queue.safeUnlink = async () => {};
+    queue.consecutiveFailures = 2;
     const job = {
         jobId: 'job-policy',
         filePath: 'fixture.pdf',

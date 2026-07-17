@@ -1,6 +1,22 @@
 import mongoose from 'mongoose';
 import { QUALITY_STAGES, QUALITY_STATUSES } from '../services/qualityPipelineState.js';
 
+const qualityReviewReasonSchema = new mongoose.Schema({
+    kind: { type: String, enum: ['repair_output_invalid'], required: true },
+    stage: { type: String, enum: ['repair'], required: true },
+    errorCode: {
+        type: String,
+        enum: [
+            'GEMINI_OUTPUT_TRUNCATED',
+            'GEMINI_BLOCKED',
+            'GEMINI_RESPONSE_INVALID',
+            'GEMINI_SCHEMA_INVALID',
+        ],
+        required: true,
+    },
+    occurredAt: { type: Date, required: true },
+}, { _id: false });
+
 const translationChunkSchema = new mongoose.Schema({
     jobId: { type: String, required: true },
     chunkIndex: { type: Number, required: true, min: 0 },
@@ -20,6 +36,7 @@ const translationChunkSchema = new mongoose.Schema({
     reverifyReport: { type: mongoose.Schema.Types.Mixed, default: null },
     repairCount: { type: Number, min: 0, max: 2, default: 0 },
     qualityStatus: { type: String, enum: QUALITY_STATUSES, default: null },
+    qualityReviewReason: { type: qualityReviewReasonSchema, default: null },
     usageByStage: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     stageUpdatedAt: { type: Date, default: null },
 }, { timestamps: true });

@@ -62,6 +62,21 @@ test('P003 chunk schema supports nullable final content, bounded repair and ever
     });
     await assert.rejects(invalidRepair.validate(), /repairCount/);
 
+    const reviewReason = new TranslationChunk({
+        jobId: 'repair-reason',
+        chunkIndex: 0,
+        qualityReviewReason: {
+            kind: 'repair_output_invalid',
+            stage: 'repair',
+            errorCode: 'GEMINI_OUTPUT_TRUNCATED',
+            occurredAt: new Date(),
+            rawMessage: 'must not persist',
+        },
+    });
+    await reviewReason.validate();
+    assert.equal(reviewReason.qualityReviewReason.errorCode, 'GEMINI_OUTPUT_TRUNCATED');
+    assert.equal(reviewReason.qualityReviewReason.rawMessage, undefined);
+
     const indexes = TranslationChunk.schema.indexes().map(([keys]) => JSON.stringify(keys));
     assert.equal(indexes.includes(JSON.stringify({ jobId: 1, chunkIndex: 1 })), true);
     assert.equal(indexes.includes(JSON.stringify({ jobId: 1, qualityStatus: 1, chunkIndex: 1 })), true);

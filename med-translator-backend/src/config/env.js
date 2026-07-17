@@ -76,11 +76,22 @@ export function readP003Config(source = process.env) {
     });
 }
 
+export function readTranslationWorkerConcurrency(source = process.env) {
+    const rawValue = source.TRANSLATION_WORKER_CONCURRENCY;
+    if (rawValue === undefined || rawValue === '') return 1;
+    const normalized = String(rawValue).trim();
+    if (!['1', '2'].includes(normalized)) {
+        throw new Error('TRANSLATION_WORKER_CONCURRENCY chỉ nhận 1 hoặc 2.');
+    }
+    return Number(normalized);
+}
+
 const p003Config = readP003Config();
 export const TRANSLATION_PIPELINE_MODE = p003Config.pipelineMode;
 export const PDF_PAGES_PER_CHUNK = p003Config.pagesPerChunk;
 export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
 export const QUALITY_MAX_REPAIR_CYCLES = p003Config.maxRepairCycles;
+export const TRANSLATION_WORKER_CONCURRENCY = readTranslationWorkerConcurrency();
 
 function readRequiredString(name, missing) {
     const value = process.env[name]?.trim();

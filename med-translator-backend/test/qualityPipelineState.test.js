@@ -380,6 +380,40 @@ test('invalid repair falls back to revised content and requires review', async (
     assert.equal(final.content, 'revise markdown');
     assert.equal(final.repairCount, 1);
     assert.equal(final.repairedContent, undefined);
+    assert.deepEqual(
+        {
+            kind: final.qualityReviewReason.kind,
+            stage: final.qualityReviewReason.stage,
+            errorCode: final.qualityReviewReason.errorCode,
+        },
+        {
+            kind: 'repair_output_invalid',
+            stage: 'repair',
+            errorCode: ErrorCodes.GEMINI_OUTPUT_TRUNCATED,
+        }
+    );
+    assert.ok(final.qualityReviewReason.occurredAt instanceof Date);
+});
+
+test('every invalid repair output persists only its safe structured error code', async () => {
+    for (const errorCode of [
+        ErrorCodes.GEMINI_BLOCKED,
+        ErrorCodes.GEMINI_OUTPUT_TRUNCATED,
+        ErrorCodes.GEMINI_RESPONSE_INVALID,
+        ErrorCodes.GEMINI_SCHEMA_INVALID,
+    ]) {
+        const model = new MemoryChunkModel();
+        const calls = [];
+        const executors = createExecutors(calls, { verifyReport: failReport });
+        executors.repair = async () => {
+            calls.push('repair');
+            throw new ProcessingError(errorCode, 'raw response must not persist', { retryable: true });
+        };
+        const service = new QualityPipelineService({ ChunkModel: model, executors });
+        const final = await run(service);
+        assert.equal(final.qualityReviewReason.errorCode, errorCode);
+        assert.doesNotMatch(JSON.stringify(final.qualityReviewReason), /raw response/);
+    }
 });
 
 test('incomplete final coverage is never promoted to passed or sent through a blind repair', async () => {

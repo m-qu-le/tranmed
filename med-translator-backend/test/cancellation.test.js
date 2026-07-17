@@ -23,14 +23,17 @@ test('cancelling a processing job marks it and aborts the active request', async
     });
 
     const queue = new QueueManager();
-    queue.currentJobId = 'active-job';
-    queue.currentAbortController = new AbortController();
+    const activeController = new AbortController();
+    const otherController = new AbortController();
+    queue.activeJobs.set('active-job', { abortController: activeController, sourceSize: 100 });
+    queue.activeJobs.set('other-job', { abortController: otherController, sourceSize: 100 });
 
     const result = await queue.cancelAndDeleteJob('active-job');
 
     assert.deepEqual(result, { found: true, pending: true });
     assert.equal(updates[0].update.$set.cancelRequested, true);
-    assert.equal(queue.currentAbortController.signal.aborted, true);
+    assert.equal(activeController.signal.aborted, true);
+    assert.equal(otherController.signal.aborted, false);
 });
 
 test('a cancellation request wins over a simultaneous retryable failure', async (context) => {

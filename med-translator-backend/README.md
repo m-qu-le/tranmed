@@ -17,11 +17,20 @@ Các giới hạn quan trọng:
 - `MAX_UPLOAD_STORAGE_MB`: ngân sách disk cho PDF tạm, mặc định 400 MB.
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
+- `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận `1` hoặc `2`, mặc định `1`. Rollback tải xử lý bằng cách đặt lại `1` và restart Render.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
 - `TRANSLATION_PIPELINE_MODE`: mặc định `quality` sau khi chủ dự án chốt B4; đặt rõ `legacy` để rollback.
 - `PDF_PAGES_PER_CHUNK`: số trang mỗi chunk, mặc định 2.
 - `GEMINI_THINKING_LEVEL`: P003 bắt buộc `HIGH` cho quality mode.
 - `QUALITY_MAX_REPAIR_CYCLES`: từ 0 đến 2; mặc định 2. Không có vòng lặp vô hạn.
+
+## Thống kê và worker pool P005
+
+- `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.
+- `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; không công khai ID hay tên file active.
+- Khi concurrency là `2`, lane thứ hai chỉ nhận đúng job FIFO kế tiếp nếu mọi job active có `sourceSize` hợp lệ và tổng không quá 10 MiB. Job lớn hoặc thiếu size chạy một mình.
+- Ngưỡng source bytes là proxy bảo thủ cho RAM, không phải phép đo bộ nhớ thực. Chỉ bật production `2` sau canary hai PDF nhỏ và giữ peak RAM dưới 80% giới hạn instance.
+- P005 không đổi schema và không cần migration. Rollback worker chỉ cần đặt `TRANSLATION_WORKER_CONCURRENCY=1` rồi restart.
 
 ## Kiểm tra và migration
 
@@ -88,6 +97,14 @@ translate → medical_audit → revise → verify
 - Revision/repair phải giữ tối thiểu 80% ký tự có nghĩa của bản trước. Output co rút bất thường bị xem là response lỗi để xoay key; nếu repair vẫn không hợp lệ sau rotation, pipeline giữ bản revised đầy đủ và đặt `needs_review`.
 - Scheduler xoay 7 key theo request, giữ headroom 12 RPM/200k TPM/400 RPD mỗi key index, chuyển key ngay khi 429/invalid JSON/5xx và loại key 401/403.
 - `/api/translate/metrics` trả counter key index, không trả giá trị key hay nội dung tài liệu.
+
+### Cảnh báo kiểm soát chất lượng P004
+
+Job quality đã hoàn thành nhưng có chunk `needs_review` sẽ nhận một khối cảnh báo ở đầu Markdown khi xem trước, copy hoặc tải file. Khối này nêu phần/trang cần đối chiếu, số vòng sửa, lỗi còn tồn tại trong báo cáo xác minh cuối, severity, coverage và trích đoạn nguồn–đích có sẵn. Đây là hỗ trợ rà soát; người đọc vẫn phải đối chiếu PDF gốc và không xem cảnh báo tự động là kết luận chuyên môn cuối cùng.
+
+Header chỉ được dựng khi trả kết quả; không ghi vào `TranslationChunk.content`, nên resume/retry và artifact dịch chuẩn không đổi. Lỗi kỹ thuật ở bước repair chỉ lưu mã nguyên nhân có cấu trúc, không lưu raw response, prompt hoặc stack trace. Job legacy và job quality đạt toàn bộ tiếp tục trả nội dung như trước. P004 là thay đổi schema additive, nullable và không cần migration bắt buộc.
+
+Khi rà soát thực tế, tìm đúng file PDF theo tên bản tải xuống, mở phần/trang ghi trong header, rồi so lần lượt `Nguồn PDF`, `Bản dịch hiện tại`, `Giải thích` và `Cần sửa`. Test P004 chỉ dùng fixture/mock thuần; không gọi PDF, Gemini, R2 hay MongoDB production.
 
 Benchmark và fixture audit:
 
