@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import System from '../src/models/systemModel.js';
-import { QueueManager, PARALLEL_SOURCE_BUDGET_BYTES } from '../src/services/queueManager.js';
+import {
+    CIRCUIT_BREAKER_WAKEUP_POLICY,
+    QueueManager,
+    PARALLEL_SOURCE_BUDGET_BYTES,
+    nextCircuitBreakerWakeup,
+} from '../src/services/queueManager.js';
 
 const MiB = 1024 * 1024;
 const deferred = () => {
@@ -9,6 +14,22 @@ const deferred = () => {
     const promise = new Promise(done => { resolve = done; });
     return { promise, resolve };
 };
+
+test('circuit breaker wakes at the next 15:00 in Vietnam instead of after four hours', () => {
+    assert.equal(CIRCUIT_BREAKER_WAKEUP_POLICY, 'daily_15_asia_ho_chi_minh');
+    assert.equal(
+        nextCircuitBreakerWakeup(new Date('2026-07-18T07:59:59.000Z')).toISOString(),
+        '2026-07-18T08:00:00.000Z'
+    );
+    assert.equal(
+        nextCircuitBreakerWakeup(new Date('2026-07-18T08:00:00.000Z')).toISOString(),
+        '2026-07-19T08:00:00.000Z'
+    );
+    assert.equal(
+        nextCircuitBreakerWakeup(new Date('2026-12-31T09:00:00.000Z')).toISOString(),
+        '2027-01-01T08:00:00.000Z'
+    );
+});
 
 test('admission allows two small FIFO jobs but blocks over-budget and unknown-size jobs', async () => {
     const queue = new QueueManager({ concurrency: 2 });

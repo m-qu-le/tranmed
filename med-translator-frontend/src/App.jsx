@@ -6,6 +6,15 @@ import { uploadBatchToCloud } from './cloudUploader.js';
 
 const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
 const HIDDEN_UPLOAD_BATCH_IDS_KEY = 'studymed.hiddenUploadBatchIds.v1';
+const vietnameseNameCollator = new Intl.Collator('vi', { numeric: true, sensitivity: 'base' });
+const formatVietnamDateTime = value => new Intl.DateTimeFormat('vi-VN', {
+  timeZone: 'Asia/Ho_Chi_Minh',
+  hour: '2-digit',
+  minute: '2-digit',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+}).format(new Date(value));
 
 const readHiddenUploadBatchIds = () => {
   try {
@@ -775,7 +784,10 @@ function App() {
     }
   };  
 
-  const groupedJobs = jobs.reduce((acc, job) => {
+  const groupedJobs = [...jobs].sort((left, right) => (
+    vietnameseNameCollator.compare(left.folderName || 'Mặc định', right.folderName || 'Mặc định')
+    || vietnameseNameCollator.compare(left.originalName || left.fileName || '', right.originalName || right.fileName || '')
+  )).reduce((acc, job) => {
     const folder = job.folderName || 'Mặc định';
     if (!acc[folder]) acc[folder] = [];
     acc[folder].push(job);
@@ -826,35 +838,32 @@ function App() {
           </article>
         </section>
         
-        {/* BANNER CẢNH BÁO NGỦ ĐÔNG HIỂN THỊ NỔI BẬT */}
+        {/* Trạng thái bảo vệ API dùng cùng chiều rộng và nhịp card với dashboard. */}
         {sysStatus.isHibernating && sysStatus.stats && (
-          <div className="hibernation-banner">
-            <h3>🛑 Hệ Thống Đang Ngủ Đông (Circuit Breaker)</h3>
-            <p>Hệ thống tạm dừng xử lý để bảo vệ API Quota.</p>
-            <ul>
-              <li><strong>Bắt đầu ngủ lúc:</strong> {new Date(sysStatus.stats.startTime).toLocaleTimeString('vi-VN')}</li>
-              {/* HIỂN THỊ ĐÚNG MÚI GIỜ VIỆT NAM */}
-              <li><strong>Dự kiến thức dậy tự động:</strong> {new Date(sysStatus.stats.wakeupTime).toLocaleTimeString('vi-VN')} ({sysStatus.stats.sleepHours} tiếng)</li>
-              <li><strong>Số lần đã đánh thức nhưng vẫn thất bại:</strong> {sysStatus.stats.hibernationCount - 1} lần</li>
-            </ul>
-
-            {/* NÚT FORCE WAKE UP */}
-            <button 
-              onClick={handleForceWakeUp}
-              style={{
-                marginTop: '15px',
-                padding: '8px 16px',
-                backgroundColor: '#ffc107',
-                color: '#000',
-                border: 'none',
-                borderRadius: '4px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-            >
-              ⚡ Ép hệ thống thức dậy ngay
+          <aside className="hibernation-banner" role="alert" aria-labelledby="hibernation-title">
+            <span className="hibernation-icon" aria-hidden="true">🛑</span>
+            <div className="hibernation-content">
+              <h3 id="hibernation-title">Hệ thống đang ngủ đông</h3>
+              <p>Circuit Breaker đang tạm dừng xử lý để bảo vệ API Quota.</p>
+              <dl className="hibernation-details">
+                <div>
+                  <dt>Bắt đầu ngủ</dt>
+                  <dd>{formatVietnamDateTime(sysStatus.stats.startTime)}</dd>
+                </div>
+                <div>
+                  <dt>Tự động thức dậy</dt>
+                  <dd>{formatVietnamDateTime(sysStatus.stats.wakeupTime)} · mốc 15:00 mỗi ngày</dd>
+                </div>
+                <div>
+                  <dt>Số lần ngủ đông</dt>
+                  <dd>{sysStatus.stats.hibernationCount || 1} lần</dd>
+                </div>
+              </dl>
+            </div>
+            <button className="wake-up-btn" onClick={handleForceWakeUp}>
+              ⚡ Đánh thức ngay
             </button>
-          </div>
+          </aside>
         )}
 
         <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '20px', background: '#ffffff', padding: '32px', borderRadius: '24px', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', border: '1px solid #eaeaea', maxWidth: '850px', margin: '0 auto 40px auto' }}>
@@ -870,7 +879,7 @@ function App() {
               onFocus={(e) => { e.target.style.borderColor = '#007bff'; e.target.style.backgroundColor = '#fff'; }}
               onBlur={(e) => { e.target.style.borderColor = '#e0e0e0'; e.target.style.backgroundColor = '#fafafa'; }}
             />
-            <div style={{ flex: 2, position: 'relative', minWidth: '300px' }}>
+            <div className="file-input-wrap" style={{ flex: 2, position: 'relative', minWidth: '300px' }}>
               <label className="sr-only" htmlFor="fileInput">Chọn các file PDF y khoa</label>
               <input 
                 id="fileInput"

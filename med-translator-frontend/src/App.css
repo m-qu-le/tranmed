@@ -125,13 +125,60 @@ body {
 .connection-status.disconnected { color: #9e5b00; }
 
 .hibernation-banner {
-  margin-bottom: 24px;
-  padding: 20px;
-  border: 1px solid #e0a800;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  max-width: 850px;
+  margin: 0 auto 24px;
+  padding: 18px 20px;
+  border: 1px solid #e6b52c;
   border-radius: 16px;
-  background: #fff8db;
+  background: #fff9e8;
   text-align: left;
 }
+
+.hibernation-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: #ffedb8;
+  font-size: 20px;
+}
+
+.hibernation-content { min-width: 0; }
+.hibernation-content h3 { color: var(--text-plum); font-size: 17px; line-height: 1.25; }
+.hibernation-content > p { margin-top: 3px; color: var(--text-olive); font-size: 13px; }
+
+.hibernation-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 12px;
+}
+
+.hibernation-details div { display: flex; gap: 6px; font-size: 12px; }
+.hibernation-details dt { color: var(--text-olive); }
+.hibernation-details dd { color: var(--text-plum); font-weight: 600; }
+
+.wake-up-btn {
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #f2b705;
+  color: #211922;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.2s, transform 0.1s;
+}
+
+.wake-up-btn:hover { filter: brightness(0.96); }
+.wake-up-btn:active { transform: scale(0.98); }
+.wake-up-btn:focus-visible { outline: 3px solid #85b8ff; outline-offset: 2px; }
 
 .masonry-grid-fallback {
   display: grid;
@@ -279,12 +326,14 @@ body {
   display: flex; 
   align-items: center; 
   gap: 16px; 
+  min-width: 0;
 }
 
 .job-name { 
   font-weight: 600; 
   color: var(--text-plum); 
   font-size: 16px; 
+  overflow-wrap: anywhere;
 }
 
 /* Status Badges */
@@ -466,13 +515,28 @@ body {
 
 /* Breakpoints cho di động */
 @media (max-width: 576px) {
+  .app-container { padding: 32px 16px; }
+  .header { margin-bottom: 32px; }
+  .header h1 { font-size: 24px; letter-spacing: -0.8px; }
   .batch-dashboard { grid-template-columns: 1fr; }
+  .hibernation-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 16px;
+  }
+  .hibernation-details { flex-direction: column; gap: 5px; }
+  .wake-up-btn { grid-column: 1 / -1; width: 100%; }
   .upload-section {
     flex-direction: column;
+    padding: 20px !important;
   }
+  #folderNameInput,
+  .file-input-wrap { width: 100%; min-width: 0 !important; }
   .file-input {
     max-width: 100%;
   }
+  .queue-header-actions > div { width: 100%; flex-wrap: wrap; }
   .job-header {
     flex-direction: column;
     align-items: flex-start;

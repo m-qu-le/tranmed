@@ -6,7 +6,7 @@ const systemSchema = new mongoose.Schema({
     stats: {
         startTime: String,
         wakeupTime: String,
-        sleepHours: Number,
+        wakeupPolicy: String,
         hibernationCount: Number
     }
 }, { timestamps: true });

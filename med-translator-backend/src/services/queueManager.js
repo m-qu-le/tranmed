@@ -33,7 +33,16 @@ const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
+export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
+const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
 export const PARALLEL_SOURCE_BUDGET_BYTES = 10 * 1024 * 1024;
+
+export function nextCircuitBreakerWakeup(now = new Date()) {
+    const wakeupTime = new Date(now.getTime());
+    wakeupTime.setUTCHours(CIRCUIT_BREAKER_WAKEUP_UTC_HOUR, 0, 0, 0);
+    if (wakeupTime <= now) wakeupTime.setUTCDate(wakeupTime.getUTCDate() + 1);
+    return wakeupTime;
+}
 
 export class QueueManager extends EventEmitter {
     constructor({
@@ -105,11 +114,29 @@ export class QueueManager extends EventEmitter {
 
         const sysState = await System.findOne({ key: CIRCUIT_BREAKER_KEY });
         if (sysState?.isHibernating && sysState.stats?.wakeupTime) {
-            const wakeupTime = new Date(sysState.stats.wakeupTime);
+            let stats = sysState.stats.toObject?.() || sysState.stats;
+            if (stats.wakeupPolicy !== CIRCUIT_BREAKER_WAKEUP_POLICY) {
+                const storedStartTime = new Date(stats.startTime);
+                const policyStartTime = Number.isNaN(storedStartTime.getTime()) ? now : storedStartTime;
+                const legacyStats = { ...stats };
+                delete legacyStats.sleepHours;
+                stats = {
+                    ...legacyStats,
+                    wakeupTime: nextCircuitBreakerWakeup(policyStartTime).toISOString(),
+                    wakeupPolicy: CIRCUIT_BREAKER_WAKEUP_POLICY,
+                };
+                await System.findOneAndUpdate(
+                    { key: CIRCUIT_BREAKER_KEY },
+                    { $set: { stats } },
+                    { upsert: true }
+                );
+            }
+
+            const wakeupTime = new Date(stats.wakeupTime);
             if (wakeupTime > now) {
                 this.isHibernating = true;
-                this.hibernationStats = sysState.stats.toObject?.() || sysState.stats;
-                this.hibernationCount = sysState.stats.hibernationCount || 0;
+                this.hibernationStats = stats;
+                this.hibernationCount = stats.hibernationCount || 0;
                 this.scheduleWakeUp(wakeupTime.getTime() - now.getTime());
             } else {
                 await System.findOneAndUpdate(
@@ -164,12 +191,12 @@ export class QueueManager extends EventEmitter {
     async triggerHibernation() {
         if (this.isHibernating) return;
 
-        const sleepHours = 4;
-        const sleepMs = sleepHours * 60 * 60 * 1000;
+        const startTime = new Date();
+        const wakeupTime = nextCircuitBreakerWakeup(startTime);
         const stats = {
-            startTime: new Date().toISOString(),
-            wakeupTime: new Date(Date.now() + sleepMs).toISOString(),
-            sleepHours,
+            startTime: startTime.toISOString(),
+            wakeupTime: wakeupTime.toISOString(),
+            wakeupPolicy: CIRCUIT_BREAKER_WAKEUP_POLICY,
             hibernationCount: this.hibernationCount + 1
         };
 
@@ -183,8 +210,8 @@ export class QueueManager extends EventEmitter {
         this.hibernationCount = stats.hibernationCount;
         this.hibernationStats = stats;
         this.emit('systemStatusChanged', this.getSystemStatus());
-        this.scheduleWakeUp(sleepMs);
-        console.log(`🛑 [CIRCUIT BREAKER] Ngủ đông ${sleepHours} giờ sau lỗi quota liên tiếp.`);
+        this.scheduleWakeUp(wakeupTime.getTime() - startTime.getTime());
+        console.log(`🛑 [CIRCUIT BREAKER] Ngủ đông đến 15:00 giờ Việt Nam: ${wakeupTime.toISOString()}.`);
     }
 
     async wakeUp() {
@@ -256,12 +283,12 @@ export class QueueManager extends EventEmitter {
     }
 
     async getJobsSummary({ limit = 100, cursor = null } = {}) {
-        const filter = cursor ? { _id: { $lt: cursor } } : {};
+        const filter = cursor ? { _id: { $gt: cursor } } : {};
         const rows = await Job.find(
             filter,
             'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
         )
-            .sort({ _id: -1 })
+            .sort({ _id: 1 })
             .limit(limit + 1)
             .lean();
 

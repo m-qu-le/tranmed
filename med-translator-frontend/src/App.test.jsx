@@ -49,6 +49,54 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByRole('region', { name: 'Tổng quan tiến độ' })).toBeInTheDocument()
   })
 
+  it('shows the daily 15:00 Vietnam wake-up policy while hibernating', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: {
+        isHibernating: true,
+        stats: {
+          startTime: '2026-07-18T07:00:00.000Z',
+          wakeupTime: '2026-07-18T08:00:00.000Z',
+          wakeupPolicy: 'daily_15_asia_ho_chi_minh',
+          hibernationCount: 1,
+        },
+      } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText(/mốc 15:00 mỗi ngày/i)).toBeInTheDocument()
+    expect(screen.getByText('Số lần ngủ đông')).toBeInTheDocument()
+  })
+
+  it('sorts folders and file names A-Z using natural Vietnamese ordering', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 3, processing: 0, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [
+        { jobId: 'z-10', folderName: 'Zeta', originalName: 'Bài 10.pdf', status: 'pending' },
+        { jobId: 'a-10', folderName: 'Alpha', originalName: 'Bài 10.pdf', status: 'pending' },
+        { jobId: 'a-2', folderName: 'Alpha', originalName: 'Bài 2.pdf', status: 'pending' },
+      ], nextCursor: null } })
+    })
+
+    render(<App />)
+    await screen.findByText('📄 Bài 2.pdf')
+
+    const folderToggles = screen.getAllByRole('button', { name: /📁 (Alpha|Zeta)/ })
+    expect(folderToggles.map(node => node.textContent.replace(/\s+/g, ''))).toEqual([
+      '▼📁Alpha(2files)',
+      '▼📁Zeta(1files)',
+    ])
+
+    const alphaGroup = screen.getByText(/📁 Alpha \(2 files\)/).closest('.folder-group')
+    const alphaFiles = within(alphaGroup).getAllByText(/📄 Bài/).map(node => node.textContent)
+    expect(alphaFiles).toEqual(['📄 Bài 2.pdf', '📄 Bài 10.pdf'])
+  })
+
   it('uses global job stats and does not change the dashboard when loading more history', async () => {
     api.get.mockImplementation((url, options) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
