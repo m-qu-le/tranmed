@@ -35,9 +35,16 @@ const persistHiddenUploadBatchIds = hiddenIds => {
 
 const normalizeJobStats = value => {
   const keys = ['pending', 'processing', 'completed', 'failed'];
-  return keys.every(key => Number.isSafeInteger(value?.[key]) && value[key] >= 0)
-    ? Object.fromEntries(keys.map(key => [key, value[key]]))
+  if (!keys.every(key => Number.isSafeInteger(value?.[key]) && value[key] >= 0)) return null;
+  const folders = Array.isArray(value.folders)
+    ? value.folders.filter(folder => typeof folder?.name === 'string'
+      && Number.isSafeInteger(folder.count) && folder.count >= 0)
+    : [];
+  const cloudKeys = ['uploadingBatches', 'uploadedBytes', 'totalBytes', 'confirmedFiles', 'totalFiles', 'safeFiles'];
+  const cloud = cloudKeys.every(key => Number.isFinite(value.cloud?.[key]) && value.cloud[key] >= 0)
+    ? Object.fromEntries(cloudKeys.map(key => [key, value.cloud[key]]))
     : null;
+  return { ...Object.fromEntries(keys.map(key => [key, value[key]])), folders, cloud };
 };
 
 const serverBatchToTask = batch => ({
@@ -794,7 +801,9 @@ function App() {
     return acc;
   }, {});
 
-  const dashboard = {
+  const folderCounts = new Map((jobStats?.folders || []).map(folder => [folder.name, folder.count]));
+
+  const localDashboard = {
     uploadingBatches: localQueue.filter(task => !task.canCloseClient).length,
     uploadedBytes: localQueue.reduce((total, task) => total + (task.uploadedBytes || 0), 0),
     totalBytes: localQueue.reduce((total, task) => total + (task.totalBytes || 0), 0),
@@ -802,6 +811,14 @@ function App() {
     totalFiles: localQueue.reduce((total, task) => total + (task.totalFiles || 0), 0),
     safeFiles: localQueue.reduce((total, task) => total + (task.canCloseClient ? (task.confirmedFiles || 0) : 0), 0),
   };
+  const dashboard = jobStats?.cloud ? {
+    ...jobStats.cloud,
+    uploadingBatches: Math.max(jobStats.cloud.uploadingBatches, localDashboard.uploadingBatches),
+    ...(localDashboard.uploadingBatches > 0 ? {
+      uploadedBytes: localDashboard.uploadedBytes,
+      totalBytes: localDashboard.totalBytes,
+    } : {}),
+  } : localDashboard;
 
   return (
     <div className="app-container">
@@ -976,7 +993,7 @@ function App() {
                     style={{ color: '#007bff', margin: 0, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span style={{ fontSize: '0.7em', display: 'inline-block', transition: 'transform 0.2s ease', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                    📁 {folderName} ({folderJobs.length} files)
+                    📁 {folderName} ({folderCounts.get(folderName) ?? folderJobs.length} files)
                   </h3>
                 
                 <div style={{ display: 'flex', gap: '10px' }}>

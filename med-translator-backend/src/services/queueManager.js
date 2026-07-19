@@ -301,13 +301,49 @@ export class QueueManager extends EventEmitter {
     }
 
     async getJobStats() {
-        const rows = await Job.aggregate([
-            { $match: { status: { $in: ['pending', 'processing', 'completed', 'failed'] } } },
-            { $group: { _id: '$status', count: { $sum: 1 } } }
+        const [jobRows, cloudRows] = await Promise.all([
+            Job.aggregate([{
+                $facet: {
+                    statuses: [
+                        { $match: { status: { $in: ['pending', 'processing', 'completed', 'failed'] } } },
+                        { $group: { _id: '$status', count: { $sum: 1 } } },
+                    ],
+                    folders: [
+                        { $group: { _id: '$folderName', count: { $sum: 1 } } },
+                    ],
+                },
+            }]),
+            UploadBatch.aggregate([{
+                $group: {
+                    _id: null,
+                    uploadingBatches: { $sum: { $cond: [{ $in: ['$status', ['uploading', 'partial']] }, 1, 0] } },
+                    uploadedBytes: { $sum: { $cond: [{ $in: ['$status', ['uploading', 'partial']] }, '$confirmedBytes', 0] } },
+                    uploadTotalBytes: { $sum: { $cond: [{ $in: ['$status', ['uploading', 'partial']] }, '$totalBytes', 0] } },
+                    confirmedFiles: { $sum: '$confirmedFiles' },
+                    totalFiles: { $sum: '$totalFiles' },
+                    safeFiles: { $sum: { $cond: [{ $eq: ['$status', 'ready'] }, '$confirmedFiles', 0] } },
+                },
+            }]),
         ]);
+        const snapshot = jobRows[0] || {};
         const stats = { pending: 0, processing: 0, completed: 0, failed: 0 };
-        for (const row of rows) stats[row._id] = row.count;
-        return stats;
+        for (const row of snapshot.statuses || []) stats[row._id] = row.count;
+        const cloud = cloudRows[0] || {};
+        return {
+            ...stats,
+            folders: (snapshot.folders || []).map(row => ({
+                name: typeof row._id === 'string' && row._id.trim() ? row._id : 'Mặc định',
+                count: row.count,
+            })),
+            cloud: {
+                uploadingBatches: cloud.uploadingBatches || 0,
+                uploadedBytes: cloud.uploadedBytes || 0,
+                totalBytes: cloud.uploadTotalBytes || 0,
+                confirmedFiles: cloud.confirmedFiles || 0,
+                totalFiles: cloud.totalFiles || 0,
+                safeFiles: cloud.safeFiles || 0,
+            },
+        };
     }
 
     async getJobResult(jobId) {

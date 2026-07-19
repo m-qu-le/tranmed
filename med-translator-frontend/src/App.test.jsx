@@ -103,6 +103,11 @@ describe('App Cloud Uploader', () => {
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
       if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: {
         pending: 473, processing: 1, completed: 32, failed: 0,
+        folders: [{ name: 'Mới', count: 500 }],
+        cloud: {
+          uploadingBatches: 0, uploadedBytes: 0, totalBytes: 0,
+          confirmedFiles: 100, totalFiles: 100, safeFiles: 100,
+        },
       } })
       if (options?.params?.cursor) return Promise.resolve({ data: { items: [
         { jobId: 'older-completed', folderName: 'Cũ', status: 'completed' },
@@ -117,10 +122,14 @@ describe('App Cloud Uploader', () => {
     expect(await within(dashboard).findByText('32')).toBeInTheDocument()
     expect(within(dashboard).getByText('File đã xong')).toBeInTheDocument()
     expect(within(dashboard).getByText('Chờ 473 · xử lý 1 · lỗi 0')).toBeInTheDocument()
+    expect(within(dashboard).getByText('100')).toBeInTheDocument()
+    expect(within(dashboard).getByText('Đã xác nhận 100/100 file')).toBeInTheDocument()
+    expect(screen.getByText(/📁 Mới \(500 files\)/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Tải thêm lịch sử' }))
     await screen.findByText('📄 Tài liệu')
     expect(within(dashboard).getByText('32')).toBeInTheDocument()
+    expect(screen.getByText(/📁 Mới \(500 files\)/)).toBeInTheDocument()
     expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(1)
   })
 
