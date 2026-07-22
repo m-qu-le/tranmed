@@ -332,6 +332,31 @@ body {
   cursor: not-allowed; 
 }
 
+.priority-upload-section {
+  max-width: 850px;
+  margin: -20px auto 40px;
+  padding: 18px;
+  border: 2px dashed #d97706;
+  border-radius: 14px;
+  background: #fff7ed;
+  color: #9a3412;
+  text-align: center;
+}
+
+.priority-upload-section > div { margin-top: 4px; font-size: 14px; }
+
+.priority-upload-section button {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  background: #fff;
+  color: #9a3412;
+  cursor: pointer;
+}
+
+.priority-upload-section button:disabled { cursor: not-allowed; opacity: 0.6; }
+
 /* =========================================================
    QUEUE & EMPTY STATE
    ========================================================= */

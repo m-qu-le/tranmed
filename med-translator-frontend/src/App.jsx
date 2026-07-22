@@ -1147,35 +1147,6 @@ function App() {
             </div>
           </div>
 
-          <div
-            aria-label="Hàng đợi ưu tiên"
-            onDragEnter={(event) => event.preventDefault()}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={handlePriorityDrop}
-            style={{ padding: '18px', border: '2px dashed #d97706', borderRadius: '14px', background: '#fff7ed', color: '#9a3412', textAlign: 'center' }}
-          >
-            <strong>⚡ Hàng đợi ưu tiên</strong>
-            <div style={{ marginTop: '4px', fontSize: '14px' }}>Thả PDF vào đây để tự upload và dịch trước toàn bộ hàng đợi thường.</div>
-            <button
-              type="button"
-              onClick={() => priorityFileInputRef.current?.click()}
-              disabled={sysStatus.isMaintenancePaused}
-              style={{ marginTop: '12px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d97706', background: '#fff', color: '#9a3412', cursor: 'pointer' }}
-            >
-              Chọn PDF ưu tiên
-            </button>
-            <input
-              ref={priorityFileInputRef}
-              type="file"
-              accept="application/pdf"
-              multiple
-              onChange={handlePriorityFileChange}
-              disabled={sysStatus.isMaintenancePaused}
-              className="sr-only"
-              aria-label="Chọn các file PDF ưu tiên"
-            />
-          </div>
-          
           <button 
             onClick={handleAddToQueue} 
             disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId) || sysStatus.isMaintenancePaused}
@@ -1238,6 +1209,34 @@ function App() {
             </div>
           )}
         </div>
+
+        <section
+          className="priority-upload-section"
+          aria-label="Hàng đợi ưu tiên"
+          onDragEnter={(event) => event.preventDefault()}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handlePriorityDrop}
+        >
+          <strong>⚡ Hàng đợi ưu tiên</strong>
+          <div>Thả PDF vào đây để tự upload và dịch trước toàn bộ hàng đợi thường.</div>
+          <button
+            type="button"
+            onClick={() => priorityFileInputRef.current?.click()}
+            disabled={sysStatus.isMaintenancePaused}
+          >
+            Chọn PDF ưu tiên
+          </button>
+          <input
+            ref={priorityFileInputRef}
+            type="file"
+            accept="application/pdf"
+            multiple
+            onChange={handlePriorityFileChange}
+            disabled={sysStatus.isMaintenancePaused}
+            className="sr-only"
+            aria-label="Chọn các file PDF ưu tiên"
+          />
+        </section>
 
         <div className="jobs-container">
           {Object.entries(groupedJobs).map(([folderName, folderJobs]) => {

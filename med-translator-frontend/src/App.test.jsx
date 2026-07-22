@@ -399,6 +399,16 @@ describe('App Cloud Uploader', () => {
     expect(await screen.findByRole('button', { name: /📌 Ưu tiên/i })).toBeInTheDocument()
   })
 
+  it('renders the priority upload frame below and outside the standard upload card', async () => {
+    render(<App />)
+
+    const uploadCard = document.querySelector('.upload-section')
+    const priorityFrame = screen.getByLabelText('Hàng đợi ưu tiên')
+
+    expect(uploadCard).not.toContainElement(priorityFrame)
+    expect(uploadCard.compareDocumentPosition(priorityFrame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('renders the priority group before alphabetically earlier normal folders and hides it when absent', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
