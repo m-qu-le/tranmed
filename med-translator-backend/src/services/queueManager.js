@@ -34,6 +34,7 @@ const LEASE_HEARTBEAT_MS = 60 * 1000;
 const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
+export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
 export const PARALLEL_SOURCE_BUDGET_BYTES = 10 * 1024 * 1024;
 
@@ -56,7 +57,6 @@ export class QueueManager extends EventEmitter {
         this.activeSourceBytes = 0;
         this.pumpPromise = null;
         this.pumpRequested = false;
-        this.consecutiveFailures = 0;
         this.isHibernating = false;
         this.isMaintenancePaused = false;
         this.hibernationCount = 0;
@@ -116,7 +116,7 @@ export class QueueManager extends EventEmitter {
         const sysState = await System.findOne({ key: CIRCUIT_BREAKER_KEY });
         if (sysState?.isHibernating && sysState.stats?.wakeupTime) {
             let stats = sysState.stats.toObject?.() || sysState.stats;
-            if (stats.wakeupPolicy !== CIRCUIT_BREAKER_WAKEUP_POLICY) {
+            if (![CIRCUIT_BREAKER_WAKEUP_POLICY, POOL_EXHAUSTION_WAKEUP_POLICY].includes(stats.wakeupPolicy)) {
                 const storedStartTime = new Date(stats.startTime);
                 const policyStartTime = Number.isNaN(storedStartTime.getTime()) ? now : storedStartTime;
                 const legacyStats = { ...stats };
@@ -207,15 +207,18 @@ export class QueueManager extends EventEmitter {
         return this.getSystemStatus();
     }
 
-    async triggerHibernation() {
+    async triggerHibernation(retryAfterMs = null) {
         if (this.isHibernating) return;
 
         const startTime = new Date();
-        const wakeupTime = nextCircuitBreakerWakeup(startTime);
+        const hasRetryAfter = Number.isFinite(retryAfterMs) && retryAfterMs > 0;
+        const wakeupTime = hasRetryAfter
+            ? new Date(startTime.getTime() + retryAfterMs)
+            : nextCircuitBreakerWakeup(startTime);
         const stats = {
             startTime: startTime.toISOString(),
             wakeupTime: wakeupTime.toISOString(),
-            wakeupPolicy: CIRCUIT_BREAKER_WAKEUP_POLICY,
+            wakeupPolicy: hasRetryAfter ? POOL_EXHAUSTION_WAKEUP_POLICY : CIRCUIT_BREAKER_WAKEUP_POLICY,
             hibernationCount: this.hibernationCount + 1
         };
 
@@ -230,7 +233,7 @@ export class QueueManager extends EventEmitter {
         this.hibernationStats = stats;
         this.emit('systemStatusChanged', this.getSystemStatus());
         this.scheduleWakeUp(wakeupTime.getTime() - startTime.getTime());
-        console.log(`🛑 [CIRCUIT BREAKER] Ngủ đông đến 15:00 giờ Việt Nam: ${wakeupTime.toISOString()}.`);
+        console.log(`🛑 [CIRCUIT BREAKER] Tạm dừng đến ${wakeupTime.toISOString()} vì toàn bộ Gemini key chưa thể cấp phát.`);
     }
 
     async wakeUp() {
@@ -240,7 +243,6 @@ export class QueueManager extends EventEmitter {
             { upsert: true }
         );
 
-        this.consecutiveFailures = 0;
         this.isHibernating = false;
         this.hibernationStats = null;
         this.hibernationTimer = null;
@@ -812,7 +814,6 @@ export class QueueManager extends EventEmitter {
 
         await this.safeUnlink(job.filePath);
         await this.cleanupSourceSafely(job, 'completed');
-        this.consecutiveFailures = 0;
         this.emitJobUpdate(job.jobId, 'completed', {
             ...(translationMode === 'quality' ? {
                 translationMode: 'quality',
@@ -841,12 +842,6 @@ export class QueueManager extends EventEmitter {
             return;
         }
 
-        if (error.quotaRelated) {
-            this.consecutiveFailures += 1;
-        } else {
-            this.consecutiveFailures = 0;
-        }
-
         const shouldRetry = error.retryable && job.attemptCount < job.maxAttempts;
         if (shouldRetry) {
             const nextRetryAt = this.calculateRetryAt(error, job.attemptCount);
@@ -870,6 +865,7 @@ export class QueueManager extends EventEmitter {
                 maxAttempts: job.maxAttempts,
                 nextRetryAt
             });
+            if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
             return;
         }
 
@@ -898,6 +894,7 @@ export class QueueManager extends EventEmitter {
             attemptCount: job.attemptCount,
             maxAttempts: job.maxAttempts
         });
+        if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
     }
 
     async runActiveJob(job) {
@@ -916,9 +913,6 @@ export class QueueManager extends EventEmitter {
                 await this.handleProcessingFailure(job, error);
             }
 
-            if (this.consecutiveFailures >= 10) {
-                await this.triggerHibernation();
-            }
         } catch (error) {
             console.error(`❌ [QUEUE] Worker ${job.jobId} gặp lỗi database/hạ tầng:`, error.message);
             setTimeout(() => void this.startWorker(), 5000);

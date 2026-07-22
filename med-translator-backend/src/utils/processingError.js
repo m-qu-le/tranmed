@@ -28,6 +28,7 @@ export class ProcessingError extends Error {
         this.code = code;
         this.retryable = options.retryable ?? false;
         this.quotaRelated = options.quotaRelated ?? false;
+        this.poolExhausted = options.poolExhausted ?? false;
         this.publicMessage = options.publicMessage || message;
     }
 }

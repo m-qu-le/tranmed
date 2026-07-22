@@ -25,7 +25,8 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
 
     const queue = new QueueManager();
     queue.safeUnlink = async () => {};
-    queue.consecutiveFailures = 2;
+    const hibernationCalls = [];
+    queue.triggerHibernation = async retryAfterMs => hibernationCalls.push(retryAfterMs);
     const job = {
         jobId: 'job-policy',
         filePath: 'fixture.pdf',
@@ -39,7 +40,7 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
         new ProcessingError(ErrorCodes.INVALID_PDF, 'broken', { publicMessage: 'PDF hỏng' })
     );
     assert.equal(updates.at(-1).update.$set.status, 'failed');
-    assert.equal(queue.consecutiveFailures, 0);
+    assert.deepEqual(hibernationCalls, []);
 
     await queue.handleProcessingFailure(
         job,
@@ -51,7 +52,17 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
     );
     assert.equal(updates.at(-1).update.$set.status, 'pending');
     assert.equal(updates.at(-1).update.$set.errorCode, ErrorCodes.GEMINI_RATE_LIMIT);
-    assert.equal(queue.consecutiveFailures, 1);
+    assert.deepEqual(hibernationCalls, []);
+
+    const poolError = new ProcessingError(ErrorCodes.GEMINI_RATE_LIMIT, 'all keys cooling down', {
+        retryable: true,
+        quotaRelated: true,
+        poolExhausted: true,
+        publicMessage: 'Toàn bộ Gemini key đang chờ quota.'
+    });
+    poolError.retryAfterMs = 60_000;
+    await queue.handleProcessingFailure(job, poolError);
+    assert.deepEqual(hibernationCalls, [60_000]);
 });
 
 test('FILE_MISSING preserves translated chunks so a re-upload can resume', async (context) => {

@@ -71,6 +71,28 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByText('Số lần ngủ đông')).toBeInTheDocument()
   })
 
+  it('shows a key-pool cooldown wake-up instead of the daily policy', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: {
+        isHibernating: true,
+        stats: {
+          startTime: '2026-07-18T07:00:00.000Z',
+          wakeupTime: '2026-07-18T07:01:00.000Z',
+          wakeupPolicy: 'pool_retry_after',
+          hibernationCount: 1,
+        },
+      } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText(/khi pool key hết thời gian chờ/i)).toBeInTheDocument()
+    expect(screen.queryByText(/mốc 15:00 mỗi ngày/i)).not.toBeInTheDocument()
+  })
+
   it('pauses new job claims for redeploy from the subtle header control', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     vi.stubGlobal('prompt', vi.fn(() => 'redeploy-secret'))
@@ -113,6 +135,10 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByText(/Key 1: Sẵn sàng/i)).toBeInTheDocument()
     expect(screen.getByText(/Key 2: Đang chờ quota/i)).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('secret-key')
+
+    fireEvent.click(screen.getByRole('button', { name: /kiểm tra api key/i }))
+    expect(screen.queryByText('Đã nạp 2 API key')).not.toBeInTheDocument()
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/gemini-keys/status'))).toHaveLength(1)
   })
 
   it('sorts folders and file names A-Z using natural Vietnamese ordering', async () => {

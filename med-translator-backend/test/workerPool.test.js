@@ -194,7 +194,7 @@ test('redeploy pause stops refilling and is not carried into a new server instan
     await new Promise(resolve => setImmediate(resolve));
 });
 
-test('wake-up resets failure state and fills both configured lanes', async context => {
+test('wake-up clears the pause and fills both configured lanes', async context => {
     const originalFindOneAndUpdate = System.findOneAndUpdate;
     System.findOneAndUpdate = async () => ({});
     context.after(() => { System.findOneAndUpdate = originalFindOneAndUpdate; });
@@ -205,7 +205,6 @@ test('wake-up resets failure state and fills both configured lanes', async conte
         { jobId: 'wake-b', sourceSize: MiB, processingToken: 'wake-token-b', attemptCount: 1, maxAttempts: 3 },
     ];
     queue.isHibernating = true;
-    queue.consecutiveFailures = 10;
     queue.recoverExpiredLeases = async () => 0;
     queue.scheduleNextRetry = async () => {};
     queue.createLeaseHeartbeat = () => null;
@@ -215,7 +214,6 @@ test('wake-up resets failure state and fills both configured lanes', async conte
     await queue.wakeUp();
 
     assert.equal(queue.isHibernating, false);
-    assert.equal(queue.consecutiveFailures, 0);
     assert.equal(queue.activeJobs.size, 2);
     gates.forEach(gate => gate.resolve());
     await new Promise(resolve => setImmediate(resolve));

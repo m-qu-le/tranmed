@@ -126,6 +126,7 @@ test('all-key quota exhaustion returns one durable retry error without spinning'
         }),
         error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
             && error.quotaRelated
+            && error.poolExhausted
             && error.retryAfterMs === 60_000
     );
     assert.equal(calls.length, 7);

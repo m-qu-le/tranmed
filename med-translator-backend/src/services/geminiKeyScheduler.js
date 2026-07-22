@@ -28,7 +28,12 @@ function rateLimitError(message, retryMs) {
     const error = new ProcessingError(
         ErrorCodes.GEMINI_RATE_LIMIT,
         message,
-        { retryable: true, quotaRelated: true, publicMessage: 'Gemini đang hết quota, hệ thống sẽ thử lại.' }
+        {
+            retryable: true,
+            quotaRelated: true,
+            poolExhausted: true,
+            publicMessage: 'Toàn bộ Gemini key đang chờ quota, hệ thống sẽ thử lại.'
+        }
     );
     error.retryAfterMs = retryMs;
     return error;

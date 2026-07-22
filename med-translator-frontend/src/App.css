@@ -129,6 +129,17 @@ body {
 .gemini-key-status-result strong { display: block; }
 .gemini-key-status-result ul { margin: 5px 0 0; padding-left: 17px; }
 .gemini-key-status-result.error { color: #8a3c3c; }
+.gemini-key-status-close {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
 
 .header h1 { 
   color: var(--text-plum); 

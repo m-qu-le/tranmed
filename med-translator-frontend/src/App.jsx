@@ -912,6 +912,10 @@ function App() {
   };
 
   const handleCheckGeminiKeys = async () => {
+    if (geminiKeyStatus) {
+      setGeminiKeyStatus(null);
+      return;
+    }
     setIsCheckingGeminiKeys(true);
     try {
       const response = await api.get('/gemini-keys/status', { timeout: 30_000 });
@@ -960,12 +964,14 @@ function App() {
             className="gemini-key-status-control"
             onClick={handleCheckGeminiKeys}
             disabled={isCheckingGeminiKeys}
-            title="Xem số lượng và trạng thái API key đang được backend nạp"
+            aria-expanded={Boolean(geminiKeyStatus)}
+            title={geminiKeyStatus ? 'Đóng bảng trạng thái API key' : 'Xem trạng thái API key cục bộ của backend'}
           >
             {isCheckingGeminiKeys ? 'Đang kiểm tra…' : '🔑 Kiểm tra API key'}
           </button>
           {geminiKeyStatus?.type === 'success' && (
             <aside className="gemini-key-status-result" role="status">
+              <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
               <strong>Đã nạp {geminiKeyStatus.keyCount} API key</strong>
               <ul>
                 {geminiKeyStatus.keys.map(key => (
@@ -981,6 +987,7 @@ function App() {
           )}
           {geminiKeyStatus?.type === 'error' && (
             <aside className="gemini-key-status-result error" role="alert">
+              <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
               {geminiKeyStatus.message}
             </aside>
           )}
@@ -1031,7 +1038,12 @@ function App() {
                 </div>
                 <div>
                   <dt>Tự động thức dậy</dt>
-                  <dd>{formatVietnamDateTime(sysStatus.stats.wakeupTime)} · mốc 15:00 mỗi ngày</dd>
+                  <dd>
+                    {formatVietnamDateTime(sysStatus.stats.wakeupTime)}
+                    {sysStatus.stats.wakeupPolicy === 'daily_15_asia_ho_chi_minh'
+                      ? ' · mốc 15:00 mỗi ngày'
+                      : ' · khi pool key hết thời gian chờ'}
+                  </dd>
                 </div>
                 <div>
                   <dt>Số lần ngủ đông</dt>

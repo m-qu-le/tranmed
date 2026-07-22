@@ -61,10 +61,12 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
     let lastError = null;
     let lastStatus = null;
     let authFailures = 0;
+    let quotaFailures = 0;
 
     for (let keysTried = 0; keysTried < keysCount; keysTried += 1) {
         assertNotCancelled(signal);
         let retries = 0;
+        let finalStatus = null;
         const maxRetriesPerKey = 3;
         const attemptingKeyIndex = (firstKeyIndex + keysTried) % keysCount;
 
@@ -102,6 +104,7 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
                 lastError = error;
                 const status = error?.status || error?.response?.status || null;
                 lastStatus = status;
+                finalStatus = status;
 
                 if (status === 401 || status === 403) {
                     authFailures += 1;
@@ -136,7 +139,8 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
                     );
                 }
             }
-        } 
+        }
+        if (finalStatus === 429) quotaFailures += 1;
     } 
 
     if (authFailures === keysCount) {
@@ -147,11 +151,26 @@ async function callGeminiWithKeyRotation(base64Data, chunkLabel, emitLog, signal
         );
     }
 
-    if (lastStatus === 429) {
-        throw new ProcessingError(
+    if (quotaFailures === keysCount) {
+        const error = new ProcessingError(
             ErrorCodes.GEMINI_RATE_LIMIT,
             lastError?.message || 'Gemini đã hết quota.',
-            { retryable: true, quotaRelated: true, publicMessage: 'Gemini đang hết quota, hệ thống sẽ thử lại.' }
+            {
+                retryable: true,
+                quotaRelated: true,
+                poolExhausted: true,
+                publicMessage: 'Toàn bộ Gemini key đang chờ quota, hệ thống sẽ thử lại.'
+            }
+        );
+        error.retryAfterMs = 60_000;
+        throw error;
+    }
+
+    if (lastStatus === 429) {
+        throw new ProcessingError(
+            ErrorCodes.GEMINI_UNAVAILABLE,
+            lastError?.message || 'Gemini tạm thời không khả dụng.',
+            { retryable: true, publicMessage: 'Gemini tạm thời không khả dụng, hệ thống sẽ thử lại.' }
         );
     }
 
