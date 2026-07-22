@@ -138,17 +138,17 @@ test('all-key quota exhaustion returns one durable retry error without spinning'
             error.status = 429;
             throw error;
         }),
-        error => error.retryAfterMs === 120_000
+        error => error.retryAfterMs === 60_000
     );
 });
 
-test('all-key quota exhaustion publishes the server Retry-After when present', async () => {
+test('all-key quota exhaustion wakes at the earliest key Retry-After', async () => {
     const scheduler = new GeminiKeyScheduler({ keysProvider: () => sevenKeys });
     await assert.rejects(
-        scheduler.execute(async () => {
+        scheduler.execute(async ({ keyIndex }) => {
             const error = new Error('quota');
             error.status = 429;
-            error.response = { headers: { get: () => '2' } };
+            error.response = { headers: { get: () => String(keyIndex + 2) } };
             throw error;
         }),
         error => error.code === ErrorCodes.GEMINI_RATE_LIMIT && error.retryAfterMs === 2_000

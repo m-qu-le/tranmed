@@ -34,6 +34,7 @@ const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
 const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
+const MAX_QUOTA_RETRIES = 15;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
@@ -260,6 +261,7 @@ export class QueueManager extends EventEmitter {
                     existing.error = null;
                     existing.errorCode = null;
                     existing.attemptCount = 0;
+                    existing.quotaRetryCount = 0;
                     existing.nextRetryAt = new Date();
                     existing.cancelRequested = false;
                     await existing.save();
@@ -307,7 +309,7 @@ export class QueueManager extends EventEmitter {
         const filter = cursor ? { _id: { $gt: cursor } } : {};
         const rows = await Job.find(
             filter,
-            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
+            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
         )
             .sort({ _id: 1 })
             .limit(limit + 1)
@@ -388,6 +390,7 @@ export class QueueManager extends EventEmitter {
 
     calculateRetryAt(error, attemptCount) {
         if (Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) {
+            if (error.poolExhausted) return new Date(Date.now() + error.retryAfterMs);
             const jitter = Math.floor(Math.random() * Math.min(30_000, error.retryAfterMs / 4));
             return new Date(Date.now() + error.retryAfterMs + jitter);
         }
@@ -841,7 +844,11 @@ export class QueueManager extends EventEmitter {
             return;
         }
 
-        const shouldRetry = error.retryable && job.attemptCount < job.maxAttempts;
+        const quotaRetryCount = Number.isSafeInteger(job.quotaRetryCount) ? job.quotaRetryCount : 0;
+        const isPoolExhausted = error.poolExhausted;
+        const shouldRetry = isPoolExhausted
+            ? quotaRetryCount < MAX_QUOTA_RETRIES
+            : error.retryable && job.attemptCount < job.maxAttempts;
         if (shouldRetry) {
             const nextRetryAt = this.calculateRetryAt(error, job.attemptCount);
             await Job.updateOne(
@@ -854,13 +861,16 @@ export class QueueManager extends EventEmitter {
                         nextRetryAt,
                         processingToken: null,
                         leaseExpiresAt: null
-                    }
+                    },
+                    ...(isPoolExhausted ? {
+                        $inc: { attemptCount: -1, quotaRetryCount: 1 }
+                    } : {})
                 }
             );
             this.emitJobUpdate(job.jobId, 'pending', {
                 error: error.publicMessage,
                 errorCode: error.code,
-                attemptCount: job.attemptCount,
+                attemptCount: isPoolExhausted ? Math.max(0, job.attemptCount - 1) : job.attemptCount,
                 maxAttempts: job.maxAttempts,
                 nextRetryAt
             });

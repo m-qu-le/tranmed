@@ -38,6 +38,7 @@ const jobSchema = new mongoose.Schema({
     errorCode: { type: String, default: null },
     attemptCount: { type: Number, default: 0, min: 0 },
     maxAttempts: { type: Number, default: 3, min: 1 },
+    quotaRetryCount: { type: Number, default: 0, min: 0 },
     nextRetryAt: { type: Date, default: null },
     cancelRequested: { type: Boolean, default: false },
     processingToken: { type: String, default: null },

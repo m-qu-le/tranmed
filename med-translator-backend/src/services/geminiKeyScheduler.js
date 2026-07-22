@@ -181,7 +181,6 @@ export class GeminiKeyScheduler {
         let authFailures = 0;
         let quotaFailures = 0;
         let lastError = null;
-        let longestRetryMs = 0;
         while (excluded.size < keys.length) {
             if (signal?.aborted) throw cancellationError();
             const reservation = this.reserve(keys.length, excluded, estimatedInputTokens);
@@ -212,9 +211,6 @@ export class GeminiKeyScheduler {
                     const explicitRetryMs = retryAfterMs(error, this.clock());
                     const waitMs = explicitRetryMs ?? 60_000;
                     state.cooldownUntil = this.clock() + waitMs;
-                    if (explicitRetryMs != null) {
-                        longestRetryMs = Math.max(longestRetryMs, explicitRetryMs);
-                    }
                     quotaFailures += 1;
                     onEvent({ type: 'cooldown', keyIndex, status, retryAfterMs: waitMs });
                     continue;
@@ -241,9 +237,14 @@ export class GeminiKeyScheduler {
             this.exhaustionCount += 1;
             const exponentialRetryMs = (60_000 * (2 ** Math.min(this.exhaustionCount - 1, 5)))
                 + Math.floor(this.random() * 15_000);
+            const now = this.clock();
+            const earliestCooldownMs = this.states
+                .slice(0, keys.length)
+                .filter(state => !state.disabled && state.cooldownUntil > now)
+                .reduce((earliest, state) => Math.min(earliest, state.cooldownUntil - now), Infinity);
             throw rateLimitError(
                 quotaFailures > 0 ? 'Tất cả Gemini key khả dụng đang cooling down.' : 'Gemini key pool đã chạm headroom nội bộ.',
-                longestRetryMs || exponentialRetryMs
+                Number.isFinite(earliestCooldownMs) ? earliestCooldownMs : exponentialRetryMs
             );
         }
         if (CONTENT_RESPONSE_ERROR_CODES.has(lastError?.code)) throw lastError;
