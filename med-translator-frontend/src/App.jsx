@@ -283,6 +283,7 @@ function App() {
   
   const [jobs, setJobs] = useState([]); 
   const [terminalFailures, setTerminalFailures] = useState([]);
+  const [showTerminalFailures, setShowTerminalFailures] = useState(false);
   const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
   const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
@@ -969,57 +970,50 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
-        {sysStatus.isMaintenancePaused ? (
-          <button className="redeploy-pause-control" onClick={handleCancelRedeployPause}>
-            ↩ Hủy dừng redeploy
-          </button>
-        ) : (
-          <button
-            className="redeploy-pause-control"
-            onClick={handlePauseForRedeploy}
-            disabled={sysStatus.maintenance?.controlEnabled === false}
-            title={sysStatus.maintenance?.controlEnabled === false
-              ? 'Cần cấu hình MAINTENANCE_CONTROL_TOKEN trên Render'
-              : 'Tạm dừng nhận job mới trước khi redeploy'}
-          >
-            ⏸ Tạm dừng để redeploy
-          </button>
-        )}
-        <div className="gemini-key-status-control-wrap">
-          <button
-            className="gemini-key-status-control"
-            onClick={handleCheckGeminiKeys}
-            disabled={isCheckingGeminiKeys}
-            aria-expanded={Boolean(geminiKeyStatus)}
-            title={geminiKeyStatus ? 'Đóng bảng trạng thái API key' : 'Xem trạng thái API key cục bộ của backend'}
-          >
-            {isCheckingGeminiKeys ? 'Đang kiểm tra…' : '🔑 Kiểm tra API key'}
-          </button>
-          {geminiKeyStatus?.type === 'success' && (
-            <aside className="gemini-key-status-result" role="status">
-              <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
-              <strong>Đã nạp {geminiKeyStatus.keyCount} API key</strong>
-              <ul>
-                {geminiKeyStatus.keys.map(key => (
-                  <li key={key.index}>
-                    Key {key.index}: {GEMINI_KEY_STATUS_LABELS[key.status]}
-                    {key.status === 'cooldown' && key.cooldownUntil
-                      ? ` · thử lại sau ${formatVietnamDateTime(key.cooldownUntil)}`
-                      : ''}
-                  </li>
-                ))}
-              </ul>
-            </aside>
+        <div className="header-controls">
+          {sysStatus.isMaintenancePaused ? (
+            <button className="redeploy-pause-control" onClick={handleCancelRedeployPause}>
+              ↩ Hủy dừng redeploy
+            </button>
+          ) : (
+            <button
+              className="redeploy-pause-control"
+              onClick={handlePauseForRedeploy}
+              disabled={sysStatus.maintenance?.controlEnabled === false}
+              title={sysStatus.maintenance?.controlEnabled === false
+                ? 'Cần cấu hình MAINTENANCE_CONTROL_TOKEN trên Render'
+                : 'Tạm dừng nhận job mới trước khi redeploy'}
+            >
+              ⏸ Tạm dừng để redeploy
+            </button>
           )}
-          {geminiKeyStatus?.type === 'error' && (
-            <aside className="gemini-key-status-result error" role="alert">
-              <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
-              {geminiKeyStatus.message}
-            </aside>
-          )}
+          <div className="gemini-key-status-control-wrap">
+            <button
+              className="gemini-key-status-control"
+              onClick={handleCheckGeminiKeys}
+              disabled={isCheckingGeminiKeys}
+              aria-expanded={Boolean(geminiKeyStatus)}
+              title={geminiKeyStatus ? 'Đóng bảng trạng thái API key' : 'Xem trạng thái API key cục bộ của backend'}
+            >
+              {isCheckingGeminiKeys ? 'Đang kiểm tra…' : '🔑 Kiểm tra API key'}
+            </button>
+            {geminiKeyStatus?.type === 'success' && (
+              <aside className="gemini-key-status-result" role="status">
+                <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
+                <strong>Đã nạp {geminiKeyStatus.keyCount} API key</strong>
+                <ul>{geminiKeyStatus.keys.map(key => <li key={key.index}>Key {key.index}: {GEMINI_KEY_STATUS_LABELS[key.status]}{key.status === 'cooldown' && key.cooldownUntil ? ` · thử lại sau ${formatVietnamDateTime(key.cooldownUntil)}` : ''}</li>)}</ul>
+              </aside>
+            )}
+            {geminiKeyStatus?.type === 'error' && <aside className="gemini-key-status-result error" role="alert"><button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>{geminiKeyStatus.message}</aside>}
+          </div>
           <button className="gemini-key-status-control" onClick={handleRetryTerminalFailures} title="Chỉ thử lại các file lỗi còn source trên Cloud">
             🔄 Thử lại lỗi có thể phục hồi
           </button>
+          {terminalFailures.length > 0 && (
+            <button className="gemini-key-status-control" onClick={() => setShowTerminalFailures(previous => !previous)} aria-expanded={showTerminalFailures}>
+              ⚠️ {showTerminalFailures ? 'Ẩn' : 'Xem'} danh sách file lỗi ({terminalFailures.length})
+            </button>
+          )}
         </div>
         <h1>🩺 StudyMed Translator</h1>
         <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
@@ -1053,9 +1047,12 @@ function App() {
           </article>
         </section>
 
-        {terminalFailures.length > 0 && (
+        {showTerminalFailures && terminalFailures.length > 0 && (
           <section className="terminal-failures" aria-label="File cần tải lại hoặc xử lý" style={{ marginBottom: '24px', border: '1px solid #e6a700', borderRadius: '10px', padding: '16px', background: '#fffaf0' }}>
-            <h2 style={{ marginTop: 0 }}>⚠️ Cần tải lại / Cần xử lý ({terminalFailures.length})</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center' }}>
+              <h2 style={{ margin: 0 }}>⚠️ Cần tải lại / Cần xử lý ({terminalFailures.length})</h2>
+              <button onClick={() => setShowTerminalFailures(false)}>Ẩn danh sách</button>
+            </div>
             <p>Danh sách này được lưu trên máy chủ. Nếu file nguồn đã mất hoặc hết hạn, hãy tải lại PDF như một job mới.</p>
             <div style={{ overflowX: 'auto' }}>
               <table>

@@ -68,10 +68,18 @@ body {
   margin-bottom: 48px; 
 }
 
-.redeploy-pause-control,
-.gemini-key-status-control {
+.header-controls {
   position: absolute;
   top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.redeploy-pause-control,
+.gemini-key-status-control {
   padding: 5px 8px;
   border: 1px solid #d5d7d2;
   border-radius: 8px;
@@ -83,12 +91,8 @@ body {
   opacity: 0.72;
 }
 
-.redeploy-pause-control { left: 0; }
-
 .gemini-key-status-control-wrap {
-  position: absolute;
-  top: 36px;
-  left: 0;
+  position: relative;
 }
 
 .gemini-key-status-control { position: static; }
@@ -711,9 +715,8 @@ body {
 .hide-batch-btn:focus-visible { outline: 3px solid #85b8ff; outline-offset: 2px; }
 
 @media (max-width: 576px) {
-  .header { padding-top: 68px; }
-  .redeploy-pause-control { left: 50%; transform: translateX(-50%); }
-  .gemini-key-status-control-wrap { top: 36px; left: 50%; transform: translateX(-50%); }
+  .header { padding-top: 156px; }
+  .header-controls { left: 50%; transform: translateX(-50%); align-items: center; }
   .gemini-key-status-result { left: 50%; transform: translateX(-50%); }
   .cloud-task { align-items: stretch; flex-direction: column; }
   .cloud-task-actions { width: 100%; }
