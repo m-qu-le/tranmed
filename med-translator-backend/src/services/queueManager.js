@@ -44,6 +44,7 @@ const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
+export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 10;
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
 export function nextCircuitBreakerWakeup(now = new Date()) {
     const wakeupTime = new Date(now.getTime());
@@ -68,6 +69,7 @@ export class QueueManager extends EventEmitter {
         this.pumpRequested = false;
         this.isHibernating = false;
         this.isMaintenancePaused = false;
+        this.consecutivePoolExhaustions = 0;
         this.hibernationCount = 0;
         this.hibernationStats = null;
         this.hibernationTimer = null;
@@ -252,6 +254,7 @@ export class QueueManager extends EventEmitter {
             { upsert: true }
         );
 
+        this.consecutivePoolExhaustions = 0;
         this.isHibernating = false;
         this.hibernationStats = null;
         this.hibernationTimer = null;
@@ -897,6 +900,7 @@ export class QueueManager extends EventEmitter {
 
         await this.safeUnlink(job.filePath);
         await this.cleanupSourceSafely(job, 'completed');
+        this.consecutivePoolExhaustions = 0;
         this.emitJobUpdate(job.jobId, 'completed', {
             ...(translationMode === 'quality' ? {
                 translationMode: 'quality',
@@ -924,6 +928,11 @@ export class QueueManager extends EventEmitter {
             this.emitJobUpdate(job.jobId, 'cancelled', { error: null, errorCode: ErrorCodes.CANCELLED });
             return;
         }
+
+        this.consecutivePoolExhaustions = error.poolExhausted
+            ? this.consecutivePoolExhaustions + 1
+            : 0;
+        const shouldHibernate = this.consecutivePoolExhaustions >= POOL_EXHAUSTION_HIBERNATION_THRESHOLD;
 
         const category = classifyFailure(error.code);
         const now = new Date();
@@ -959,7 +968,7 @@ export class QueueManager extends EventEmitter {
                 maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : null,
                 nextRetryAt
             });
-            if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
+            if (shouldHibernate) await this.triggerHibernation(error.retryAfterMs);
             return;
         }
 
@@ -995,7 +1004,7 @@ export class QueueManager extends EventEmitter {
             sourceRetentionUntil,
             failureAdvice: terminalAdvice,
         });
-        if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
+        if (shouldHibernate) await this.triggerHibernation(error.retryAfterMs);
     }
 
     async runActiveJob(job) {

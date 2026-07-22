@@ -61,6 +61,11 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
         publicMessage: 'Toàn bộ Gemini key đang chờ quota.'
     });
     poolError.retryAfterMs = 60_000;
+    for (let index = 0; index < 9; index += 1) {
+        await queue.handleProcessingFailure(job, poolError);
+    }
+    assert.deepEqual(hibernationCalls, []);
+
     await queue.handleProcessingFailure(job, poolError);
     assert.deepEqual(hibernationCalls, [60_000]);
     assert.equal(updates.at(-1).update.$inc.retryCount, 1);
