@@ -39,6 +39,7 @@ import {
 } from './jobFailurePolicy.js';
 
 const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
+const PRIORITY_FOLDER_NAME = 'Ưu tiên';
 const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
@@ -50,6 +51,8 @@ export function nextCircuitBreakerWakeup(now = new Date()) {
     if (wakeupTime <= now) wakeupTime.setUTCDate(wakeupTime.getUTCDate() + 1);
     return wakeupTime;
 }
+
+const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings';
 
 export class QueueManager extends EventEmitter {
     constructor({
@@ -313,10 +316,7 @@ export class QueueManager extends EventEmitter {
 
     async getJobsSummary({ limit = 100, cursor = null } = {}) {
         const filter = cursor ? { _id: { $gt: cursor } } : {};
-        const rows = await Job.find(
-            filter,
-            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
-        )
+        const rows = await Job.find(filter, JOB_SUMMARY_FIELDS)
             .sort({ _id: 1 })
             .limit(limit + 1)
             .lean();
@@ -329,6 +329,21 @@ export class QueueManager extends EventEmitter {
         };
     }
 
+    async getFolderJobsSummary({ folderName, limit = 100, cursor = null } = {}) {
+        const isPriorityFolder = folderName === PRIORITY_FOLDER_NAME;
+        const filter = {
+            ...(isPriorityFolder ? { priority: 1 } : { folderName, priority: { $ne: 1 } }),
+            ...(cursor ? { _id: { $gt: cursor } } : {}),
+        };
+        const rows = await Job.find(filter, JOB_SUMMARY_FIELDS)
+            .sort({ _id: 1 })
+            .limit(limit + 1)
+            .lean();
+        const hasMore = rows.length > limit;
+        const items = hasMore ? rows.slice(0, limit) : rows;
+        return { items, nextCursor: hasMore ? String(items.at(-1)._id) : null };
+    }
+
     async getJobStats() {
         const [jobRows, cloudRows] = await Promise.all([
             Job.aggregate([{
@@ -337,9 +352,21 @@ export class QueueManager extends EventEmitter {
                         { $match: { status: { $in: ['pending', 'processing', 'completed', 'failed'] } } },
                         { $group: { _id: '$status', count: { $sum: 1 } } },
                     ],
-                    folders: [
-                        { $group: { _id: '$folderName', count: { $sum: 1 } } },
-                    ],
+                    folders: [{
+                        $group: {
+                            _id: {
+                                name: {
+                                    $cond: [
+                                        { $eq: ['$priority', 1] },
+                                        PRIORITY_FOLDER_NAME,
+                                        { $ifNull: ['$folderName', 'Mặc định'] },
+                                    ],
+                                },
+                                priority: { $eq: ['$priority', 1] },
+                            },
+                            count: { $sum: 1 },
+                        },
+                    }],
                 },
             }]),
             UploadBatch.aggregate([{
@@ -361,7 +388,8 @@ export class QueueManager extends EventEmitter {
         return {
             ...stats,
             folders: (snapshot.folders || []).map(row => ({
-                name: typeof row._id === 'string' && row._id.trim() ? row._id : 'Mặc định',
+                name: typeof row._id?.name === 'string' && row._id.name.trim() ? row._id.name : 'Mặc định',
+                priority: row._id?.priority === true,
                 count: row.count,
             })),
             cloud: {

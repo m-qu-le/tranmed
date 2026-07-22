@@ -61,6 +61,7 @@ const normalizeJobStats = value => {
   const folders = Array.isArray(value.folders)
     ? value.folders.filter(folder => typeof folder?.name === 'string'
       && Number.isSafeInteger(folder.count) && folder.count >= 0)
+      .map(folder => ({ ...folder, priority: folder.priority === true }))
     : [];
   const cloudKeys = ['uploadingBatches', 'uploadedBytes', 'totalBytes', 'confirmedFiles', 'totalFiles', 'safeFiles'];
   const cloud = cloudKeys.every(key => Number.isFinite(value.cloud?.[key]) && value.cloud[key] >= 0)
@@ -68,6 +69,9 @@ const normalizeJobStats = value => {
     : null;
   return { ...Object.fromEntries(keys.map(key => [key, value[key]])), folders, cloud };
 };
+
+const folderNameForJob = job => job.priority === 1 ? PRIORITY_FOLDER_NAME : (job.folderName || 'Mặc định');
+const folderCacheKey = folder => `${folder.priority ? 'priority' : 'folder'}:${folder.name}`;
 
 const serverBatchToTask = batch => ({
   id: `server-${batch.batchId}`,
@@ -289,8 +293,8 @@ function App() {
   const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
   const [isCheckingGeminiKeys, setIsCheckingGeminiKeys] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState({});
+  const [folderPages, setFolderPages] = useState({});
   const [sseConnected, setSseConnected] = useState(false);
-  const [nextCursor, setNextCursor] = useState(null);
   const hiddenUploadBatchIds = useRef(null);
   const jobStatusById = useRef(new Map());
   const statsRefreshTimer = useRef(null);
@@ -313,18 +317,13 @@ function App() {
     }
   };
 
-  const toggleFolder = (folderName) => { 
-    setCollapsedFolders(prev => ({ ...prev, [folderName]: !prev[folderName] })); 
-  };
-
   // 1. Phục hồi trạng thái khi F5 (Bao gồm cả trạng thái Hệ thống và Jobs)
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
         // Lấy trạng thái hệ thống
-        const [statusRes, jobsRes, statsRes, terminalFailuresRes] = await Promise.all([
+        const [statusRes, statsRes, terminalFailuresRes] = await Promise.all([
           api.get('/status'),
-          api.get('/jobs'),
           api.get('/jobs/stats').catch(error => {
             console.error('Không thể tải thống kê job:', error);
             return null;
@@ -339,17 +338,6 @@ function App() {
         if (initialStats) setJobStats(initialStats);
         setTerminalFailures(Array.isArray(terminalFailuresRes?.data?.items) ? terminalFailuresRes.data.items : []);
         
-        // Cầu chì bảo vệ: Chặn trường hợp Render trả về trang HTML 502 thay vì JSON
-        const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
-        if (Array.isArray(jobItems)) {
-            const formattedJobs = jobItems.map(j => ({ ...j, logs: [], result: null }));
-            rememberJobStatuses(formattedJobs);
-            setJobs(formattedJobs);
-            setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
-        } else {
-            throw new Error("Cloud Server trả về dữ liệu không hợp lệ.");
-        }
-
         try {
           const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
           const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
@@ -385,9 +373,8 @@ function App() {
 
     const resync = async () => {
       try {
-        const [statusRes, jobsRes, batchesRes, statsRes, terminalFailuresRes] = await Promise.all([
+        const [statusRes, batchesRes, statsRes, terminalFailuresRes] = await Promise.all([
           api.get('/status', { timeout: 30_000 }),
-          api.get('/jobs', { timeout: 30_000 }),
           api.get('/upload-batches', { params: { limit: 20 }, timeout: 30_000 }),
           api.get('/jobs/stats', { timeout: 30_000 }).catch(error => {
             console.error('Không thể đồng bộ thống kê job:', error);
@@ -396,13 +383,6 @@ function App() {
           api.get('/jobs/terminal-failures', { timeout: 30_000 }).catch(() => null),
         ]);
         setSysStatus(statusRes.data);
-        const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
-        if (Array.isArray(jobItems)) {
-          const formattedJobs = jobItems.map(job => ({ ...job, logs: [], result: null }));
-          rememberJobStatuses(formattedJobs);
-          setJobs(formattedJobs);
-          setNextCursor(Array.isArray(jobsRes.data) ? null : jobsRes.data.nextCursor);
-        }
         const refreshedStats = normalizeJobStats(statsRes?.data);
         if (refreshedStats) setJobStats(refreshedStats);
         if (Array.isArray(terminalFailuresRes?.data?.items)) setTerminalFailures(terminalFailuresRes.data.items);
@@ -515,6 +495,7 @@ function App() {
             const known = new Set(previous.map(job => job.jobId));
             return [...preparedJobs.filter(job => !known.has(job.jobId)), ...previous];
           });
+          void refreshJobStats();
         },
         onProgress: progress => updateCloudTask(task.id, {
           ...progress,
@@ -661,23 +642,42 @@ function App() {
     }
   };
 
-  const handleLoadMoreJobs = async () => {
-    if (!nextCursor) return;
+  const loadFolderJobs = async (folder, cursor = null) => {
+    const key = folderCacheKey(folder);
+    if (folderPages[key]?.loading) return;
+    setFolderPages(previous => ({
+      ...previous,
+      [key]: { ...previous[key], loading: true, error: null },
+    }));
     try {
-      const response = await api.get('/jobs', {
-        params: { cursor: nextCursor, limit: 100 },
+      const response = await api.get(`/folders/${encodeURIComponent(folder.name)}/jobs`, {
+        params: { ...(cursor ? { cursor } : {}), limit: 100 },
         timeout: 30_000,
       });
       const items = response.data?.items || [];
+      if (!Array.isArray(items)) throw new Error('Máy chủ trả về danh sách file không hợp lệ.');
       rememberJobStatuses(items);
       setJobs(previous => {
         const knownIds = new Set(previous.map(job => job.jobId));
         return [...previous, ...items.filter(job => !knownIds.has(job.jobId))];
       });
-      setNextCursor(response.data?.nextCursor || null);
+      setFolderPages(previous => ({
+        ...previous,
+        [key]: { loading: false, error: null, loaded: true, nextCursor: response.data?.nextCursor || null },
+      }));
     } catch (error) {
-      alert(`Không thể tải thêm lịch sử: ${error.response?.data?.error || error.message}`);
+      setFolderPages(previous => ({
+        ...previous,
+        [key]: { ...previous[key], loading: false, error: error.response?.data?.error || error.message },
+      }));
     }
+  };
+
+  const toggleFolder = (folder) => {
+    const key = folderCacheKey(folder);
+    const isCollapsed = collapsedFolders[key] ?? true;
+    if (isCollapsed && !folderPages[key]?.loaded) void loadFolderJobs(folder);
+    setCollapsedFolders(previous => ({ ...previous, [key]: !isCollapsed }));
   };
 
   const handleDeleteJob = async (jobId, status) => {
@@ -726,7 +726,8 @@ function App() {
   };
 
   // Khối logic xóa toàn bộ thư mục
-  const handleDeleteEntireFolder = async (targetFolderName) => {
+  const handleDeleteEntireFolder = async (folder) => {
+    const targetFolderName = folder.name;
     const isConfirm = window.confirm(`🧨 CẢNH BÁO: Bạn có chắc chắn muốn XÓA GỐC toàn bộ thư mục [${targetFolderName}] không?\n\nHành động này sẽ hủy tất cả các file đang chờ dịch và dọn sạch dữ liệu.`);
     if (!isConfirm) return;
 
@@ -735,11 +736,20 @@ function App() {
       await api.delete(`/folder/${encodeURIComponent(targetFolderName)}`);
       
       // Lọc bỏ toàn bộ job thuộc thư mục này ra khỏi State để UI cập nhật ngay lập tức
-      setJobs(prevJobs => prevJobs.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
+      setJobs(prevJobs => prevJobs.filter(job => folderCacheKey({
+        name: folderNameForJob(job), priority: job.priority === 1,
+      }) !== folderCacheKey(folder)));
       setTerminalFailures(previous => previous.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
       for (const job of jobs) {
-        if ((job.folderName || 'Mặc định') === targetFolderName) jobStatusById.current.delete(job.jobId);
+        if (folderCacheKey({ name: folderNameForJob(job), priority: job.priority === 1 }) === folderCacheKey(folder)) {
+          jobStatusById.current.delete(job.jobId);
+        }
       }
+      setFolderPages(previous => {
+        const next = { ...previous };
+        delete next[folderCacheKey(folder)];
+        return next;
+      });
       void refreshJobStats();
     } catch (error) {
       alert('Lỗi khi xóa toàn bộ thư mục: ' + (error.response?.data?.error || error.message));
@@ -861,18 +871,27 @@ function App() {
     }
   };  
 
-  const groupedJobs = [...jobs].sort((left, right) => (
-    (Number(right.priority === 1) - Number(left.priority === 1))
-    || vietnameseNameCollator.compare(left.folderName || 'Mặc định', right.folderName || 'Mặc định')
-    || vietnameseNameCollator.compare(left.originalName || left.fileName || '', right.originalName || right.fileName || '')
-  )).reduce((acc, job) => {
-    const folder = job.priority === 1 ? PRIORITY_FOLDER_NAME : (job.folderName || 'Mặc định');
-    if (!acc[folder]) acc[folder] = [];
-    acc[folder].push(job);
-    return acc;
+  const foldersByKey = new Map((jobStats?.folders || []).map(folder => [folderCacheKey(folder), folder]));
+  for (const job of jobs) {
+    const folder = { name: folderNameForJob(job), priority: job.priority === 1, count: 1 };
+    if (!foldersByKey.has(folderCacheKey(folder))) foldersByKey.set(folderCacheKey(folder), folder);
+  }
+  const folders = [...foldersByKey.values()].sort((left, right) => (
+    Number(right.priority) - Number(left.priority)
+    || vietnameseNameCollator.compare(left.name, right.name)
+  ));
+  const jobsByFolder = jobs.reduce((grouped, job) => {
+    const folder = { name: folderNameForJob(job), priority: job.priority === 1 };
+    const key = folderCacheKey(folder);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(job);
+    return grouped;
   }, {});
-
-  const folderCounts = new Map((jobStats?.folders || []).map(folder => [folder.name, folder.count]));
+  for (const folderJobs of Object.values(jobsByFolder)) {
+    folderJobs.sort((left, right) => vietnameseNameCollator.compare(
+      left.originalName || left.fileName || '', right.originalName || right.fileName || '',
+    ));
+  }
 
   const localDashboard = {
     uploadingBatches: localQueue.filter(task => !task.canCloseClient).length,
@@ -1239,17 +1258,19 @@ function App() {
         </section>
 
         <div className="jobs-container">
-          {Object.entries(groupedJobs).map(([folderName, folderJobs]) => {
-            const isCollapsed = collapsedFolders[folderName];
-            const isPriorityFolder = folderName === PRIORITY_FOLDER_NAME && folderJobs.some(job => job.priority === 1);
+          {folders.map(folder => {
+            const key = folderCacheKey(folder);
+            const page = folderPages[key] || {};
+            const folderJobs = jobsByFolder[key] || [];
+            const isCollapsed = collapsedFolders[key] ?? true;
             return (
-              <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
+              <div key={key} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
                 <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
                   <h3 
                     className="queue-title" 
-                    onClick={() => toggleFolder(folderName)}
+                    onClick={() => toggleFolder(folder)}
                     onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') toggleFolder(folderName);
+                      if (event.key === 'Enter' || event.key === ' ') toggleFolder(folder);
                     }}
                     role="button"
                     tabIndex={0}
@@ -1257,24 +1278,23 @@ function App() {
                     style={{ color: '#007bff', margin: 0, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span style={{ fontSize: '0.7em', display: 'inline-block', transition: 'transform 0.2s ease', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                    {isPriorityFolder ? '📌 Ưu tiên' : `📁 ${folderName}`} ({folderCounts.get(folderName) ?? folderJobs.length} files)
+                    {folder.priority ? '📌 Ưu tiên' : `📁 ${folder.name}`} ({folder.count} files)
                   </h3>
                 
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  {/* Đã chỉnh sửa điều kiện hiển thị nút tải: Xóa && j.result */}
                   {folderJobs.some(j => j.status === 'completed') && (
-                    <button onClick={() => handleDownloadFolder(folderName, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
-                      📥 Tải các file đã xong
+                    <button onClick={() => handleDownloadFolder(folder.name, folderJobs)} className="download-all-btn" style={{ background: '#28a745', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
+                      📥 Tải các file đã tải xong
                     </button>
                   )}
                   {folderJobs.some(j => j.status === 'completed' || j.status === 'failed') && (
-                    <button onClick={() => handleBulkDeleteFolder(folderName, folderJobs)} className="cleanup-btn" style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
-                      🧹 Dọn dẹp
+                    <button onClick={() => handleBulkDeleteFolder(folder.name, folderJobs)} className="cleanup-btn" style={{ background: '#dc3545', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer' }}>
+                      🧹 Dọn dẹp file đã tải
                     </button>
                   )}
                   
                   <button 
-                    onClick={() => handleDeleteEntireFolder(folderName)} 
+                    onClick={() => handleDeleteEntireFolder(folder)}
                     className="delete-folder-btn" 
                     style={{ background: '#850000', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}
                   >
@@ -1282,27 +1302,35 @@ function App() {
                   </button>
                 </div>
               </div>
-              
-              {!isCollapsed && (
-                <div className="masonry-grid-fallback">
-                  {folderJobs.map(job => (
-                    <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
-                  ))}
-                </div>
-              )}
+
+               {!isCollapsed && (
+                 <div className="masonry-grid-fallback">
+                   {page.loading && <p>Đang tải file trong thư mục…</p>}
+                   {page.error && (
+                     <p>
+                       Không thể tải file: {page.error}{' '}
+                       <button onClick={() => void loadFolderJobs(folder, page.nextCursor || null)}>Thử lại</button>
+                     </p>
+                   )}
+                   {folderJobs.map(job => (
+                     <JobCard key={job.jobId} job={job} onDelete={handleDeleteJob} />
+                   ))}
+                   {!page.loading && !page.error && page.loaded && folderJobs.length === 0 && <p>Thư mục này chưa có file.</p>}
+                   {page.nextCursor && (
+                     <button className="load-more-btn" onClick={() => void loadFolderJobs(folder, page.nextCursor)}>
+                       Tải thêm file trong thư mục
+                     </button>
+                   )}
+                 </div>
+               )}
             </div>
             );
           })}
 
-          {jobs.length === 0 && (
+          {folders.length === 0 && (
             <div className="empty-state">
               <div className="empty-wash">Chưa có tài liệu nào trong hệ thống.</div>
             </div>
-          )}
-          {nextCursor && (
-            <button className="load-more-btn" onClick={handleLoadMoreJobs}>
-              Tải thêm lịch sử
-            </button>
           )}
         </div>
       </main>

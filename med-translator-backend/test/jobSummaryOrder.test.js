@@ -29,3 +29,33 @@ test('job history pages follow creation order so uploaded A-Z files stay A-Z', a
     assert.deepEqual(result.items.map(item => item._id), ['000000000000000000000101']);
     assert.equal(result.nextCursor, '000000000000000000000101');
 });
+
+test('folder pages scope priority separately and keep the same cursor order', async (context) => {
+    const originalFind = Job.find;
+    const calls = {};
+    Job.find = (filter, fields) => {
+        calls.filter = filter;
+        calls.fields = fields;
+        return {
+            sort(value) { calls.sort = value; return this; },
+            limit(value) { calls.limit = value; return this; },
+            async lean() {
+                return [{ _id: '000000000000000000000201' }, { _id: '000000000000000000000202' }];
+            },
+        };
+    };
+    context.after(() => { Job.find = originalFind; });
+
+    const result = await new QueueManager().getFolderJobsSummary({
+        folderName: 'Ưu tiên',
+        limit: 1,
+        cursor: '000000000000000000000200',
+    });
+
+    assert.deepEqual(calls.filter, { priority: 1, _id: { $gt: '000000000000000000000200' } });
+    assert.deepEqual(calls.sort, { _id: 1 });
+    assert.equal(calls.limit, 2);
+    assert.match(calls.fields, /priority/);
+    assert.deepEqual(result.items.map(item => item._id), ['000000000000000000000201']);
+    assert.equal(result.nextCursor, '000000000000000000000201');
+});

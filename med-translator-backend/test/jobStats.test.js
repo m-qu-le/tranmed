@@ -3,7 +3,7 @@ import test from 'node:test';
 import Job from '../src/models/jobModel.js';
 import UploadBatch from '../src/models/uploadBatchModel.js';
 import { QueueManager } from '../src/services/queueManager.js';
-import { getJobStats } from '../src/controllers/translateController.js';
+import { getFolderJobsSummary, getJobStats } from '../src/controllers/translateController.js';
 
 test('job stats aggregate global statuses, folders, and cloud uploads', async (context) => {
     const originalAggregate = Job.aggregate;
@@ -13,7 +13,7 @@ test('job stats aggregate global statuses, folders, and cloud uploads', async (c
         pipeline = value;
         return [{
             statuses: [{ _id: 'pending', count: 473 }, { _id: 'completed', count: 32 }],
-            folders: [{ _id: 'Harrison', count: 500 }],
+            folders: [{ _id: { name: 'Harrison', priority: false }, count: 500 }],
         }];
     };
     UploadBatch.aggregate = async () => [{
@@ -33,7 +33,7 @@ test('job stats aggregate global statuses, folders, and cloud uploads', async (c
 
     assert.deepEqual(stats, {
         pending: 473, processing: 0, completed: 32, failed: 0,
-        folders: [{ name: 'Harrison', count: 500 }],
+        folders: [{ name: 'Harrison', priority: false, count: 500 }],
         cloud: {
             uploadingBatches: 0, uploadedBytes: 0, totalBytes: 0,
             confirmedFiles: 100, totalFiles: 100, safeFiles: 100,
@@ -59,4 +59,21 @@ test('job stats controller returns a short public error when MongoDB fails', asy
 
     assert.equal(response.statusCode, 500);
     assert.deepEqual(response.body, { error: 'Không thể đọc thống kê công việc.' });
+});
+
+test('folder summary controller rejects an empty name and invalid cursor before querying MongoDB', async () => {
+    const response = {
+        statusCode: null,
+        body: null,
+        status(code) { this.statusCode = code; return this; },
+        json(body) { this.body = body; return this; },
+    };
+
+    await getFolderJobsSummary({ params: { folderName: ' ' }, query: {} }, response);
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.body, { error: 'Tên thư mục không hợp lệ.' });
+
+    await getFolderJobsSummary({ params: { folderName: 'Harrison' }, query: { cursor: 'not-an-object-id' } }, response);
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.body, { error: 'Cursor không hợp lệ.' });
 });

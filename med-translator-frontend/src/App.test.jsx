@@ -17,6 +17,16 @@ class MockEventSource {
   close = vi.fn()
 }
 
+const jobStats = (folders = [], counts = {}) => ({
+  pending: 0, processing: 0, completed: 0, failed: 0,
+  folders,
+  ...counts,
+})
+
+const openFolder = async name => {
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`(📌 Ưu tiên|📁 ${name})`) }))
+}
+
 describe('App Cloud Uploader', () => {
   afterEach(() => cleanup())
 
@@ -145,15 +155,20 @@ describe('App Cloud Uploader', () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 3, processing: 0, completed: 0, failed: 0 } })
-      return Promise.resolve({ data: { items: [
-        { jobId: 'z-10', folderName: 'Zeta', originalName: 'Bài 10.pdf', status: 'pending' },
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([
+        { name: 'Alpha', count: 2 }, { name: 'Zeta', count: 1 },
+      ], { pending: 3 }) })
+      if (url.endsWith('/folders/Alpha/jobs')) return Promise.resolve({ data: { items: [
         { jobId: 'a-10', folderName: 'Alpha', originalName: 'Bài 10.pdf', status: 'pending' },
         { jobId: 'a-2', folderName: 'Alpha', originalName: 'Bài 2.pdf', status: 'pending' },
+      ], nextCursor: null } })
+      return Promise.resolve({ data: { items: [
+        { jobId: 'z-10', folderName: 'Zeta', originalName: 'Bài 10.pdf', status: 'pending' },
       ], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Alpha')
     await screen.findByText('📄 Bài 2.pdf')
 
     const folderToggles = screen.getAllByRole('button', { name: /📁 (Alpha|Zeta)/ })
@@ -167,7 +182,7 @@ describe('App Cloud Uploader', () => {
     expect(alphaFiles).toEqual(['📄 Bài 2.pdf', '📄 Bài 10.pdf'])
   })
 
-  it('uses global job stats and does not change the dashboard when loading more history', async () => {
+  it('uses global job stats and loads extra files only for the opened folder', async () => {
     api.get.mockImplementation((url, options) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
@@ -179,12 +194,13 @@ describe('App Cloud Uploader', () => {
           confirmedFiles: 100, totalFiles: 100, safeFiles: 100,
         },
       } })
-      if (options?.params?.cursor) return Promise.resolve({ data: { items: [
-        { jobId: 'older-completed', folderName: 'Cũ', status: 'completed' },
+      if (url.endsWith('/folders/M%E1%BB%9Bi/jobs') && options?.params?.cursor) return Promise.resolve({ data: { items: [
+        { jobId: 'older-completed', folderName: 'Mới', originalName: 'older.pdf', status: 'completed' },
       ], nextCursor: null } })
-      return Promise.resolve({ data: { items: [
-        { jobId: 'new-pending', folderName: 'Mới', status: 'pending' },
+      if (url.endsWith('/folders/M%E1%BB%9Bi/jobs')) return Promise.resolve({ data: { items: [
+        { jobId: 'new-pending', folderName: 'Mới', originalName: 'new.pdf', status: 'pending' },
       ], nextCursor: 'next-page' } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
@@ -196,24 +212,29 @@ describe('App Cloud Uploader', () => {
     expect(within(dashboard).getByText('Đã xác nhận 100/100 file')).toBeInTheDocument()
     expect(screen.getByText(/📁 Mới \(500 files\)/)).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tải thêm lịch sử' }))
-    await screen.findByText('📄 Tài liệu')
+    await openFolder('Mới')
+    await screen.findByText('📄 new.pdf')
+    fireEvent.click(screen.getByRole('button', { name: 'Tải thêm file trong thư mục' }))
+    await screen.findByText('📄 older.pdf')
     expect(within(dashboard).getByText('32')).toBeInTheDocument()
     expect(screen.getByText(/📁 Mới \(500 files\)/)).toBeInTheDocument()
     expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(1)
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/folders/M%E1%BB%9Bi/jobs'))).toHaveLength(2)
   })
 
   it('debounces job stats refresh only for a real SSE status transition', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 1, completed: 0, failed: 0 } })
-      return Promise.resolve({ data: { items: [{
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Realtime', count: 1 }], { processing: 1 }) })
+      if (url.endsWith('/folders/Realtime/jobs')) return Promise.resolve({ data: { items: [{
         jobId: 'transition-job', folderName: 'Realtime', status: 'processing',
       }], nextCursor: null } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Realtime')
     await screen.findByText(/Đang dịch/i)
     await waitFor(() => expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs/stats'))).toHaveLength(1))
 
@@ -409,23 +430,47 @@ describe('App Cloud Uploader', () => {
     expect(uploadCard.compareDocumentPosition(priorityFrame) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('renders the priority group before alphabetically earlier normal folders and hides it when absent', async () => {
+  it('renders every folder header from global stats and pins priority before an earlier normal folder', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 2, processing: 0, completed: 0, failed: 0 } })
-      return Promise.resolve({ data: { items: [
-        { jobId: 'normal-job', folderName: 'Alpha', originalName: 'normal.pdf', status: 'pending', priority: 0 },
-        { jobId: 'priority-job', folderName: 'Ưu tiên', originalName: 'priority.pdf', status: 'pending', priority: 1 },
-      ], nextCursor: null } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([
+        { name: 'Alpha', priority: false, count: 200 },
+        { name: 'Ưu tiên', priority: true, count: 1 },
+        { name: 'Zeta', priority: false, count: 50 },
+      ], { pending: 251 }) })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
-    const toggles = await screen.findAllByRole('button', { name: /(📌 Ưu tiên|📁 Alpha)/ })
+    const toggles = await screen.findAllByRole('button', { name: /(📌 Ưu tiên|📁 Alpha|📁 Zeta)/ })
     expect(toggles.map(node => node.textContent.replace(/\s+/g, ''))).toEqual([
       '▼📌Ưutiên(1files)',
-      '▼📁Alpha(1files)',
+      '▼📁Alpha(200files)',
+      '▼📁Zeta(50files)',
     ])
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/jobs'))).toHaveLength(0)
+  })
+
+  it('loads a folder only when opened and keeps its cached files when collapsed again', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Giải phẫu', count: 1 }], { pending: 1 }) })
+      if (url.endsWith('/folders/Gi%E1%BA%A3i%20ph%E1%BA%ABu/jobs')) return Promise.resolve({ data: { items: [
+        { jobId: 'anatomy-1', folderName: 'Giải phẫu', originalName: 'atlas.pdf', status: 'pending' },
+      ], nextCursor: null } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+    await openFolder('Giải phẫu')
+    expect(await screen.findByText('📄 atlas.pdf')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /📁 Giải phẫu/i }))
+    expect(screen.queryByText('📄 atlas.pdf')).not.toBeInTheDocument()
+    await openFolder('Giải phẫu')
+    expect(screen.getByText('📄 atlas.pdf')).toBeInTheDocument()
+    expect(api.get.mock.calls.filter(([url]) => url.endsWith('/folders/Gi%E1%BA%A3i%20ph%E1%BA%ABu/jobs'))).toHaveLength(1)
   })
 
   it('restores a close-safe batch from MongoDB without local File objects', async () => {
@@ -564,7 +609,8 @@ describe('App Cloud Uploader', () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      return Promise.resolve({ data: {
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Quality stages', count: stages.length }], { processing: stages.length }) })
+      if (url.endsWith('/folders/Quality%20stages/jobs')) return Promise.resolve({ data: {
         items: stages.map(([stage], index) => ({
           jobId: `quality-${stage}`,
           originalName: `${stage}.pdf`,
@@ -580,9 +626,11 @@ describe('App Cloud Uploader', () => {
         })),
         nextCursor: null,
       } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Quality stages')
     for (const [index, [, label]] of stages.entries()) {
       expect(await screen.findByText(`⚙️ ${label} ${index}/5`)).toBeInTheDocument()
     }
@@ -593,7 +641,8 @@ describe('App Cloud Uploader', () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      return Promise.resolve({ data: { items: [{
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Quality warnings', count: 1 }], { completed: 1 }) })
+      if (url.endsWith('/folders/Quality%20warnings/jobs')) return Promise.resolve({ data: { items: [{
         jobId: 'quality-warning',
         originalName: 'warning.pdf',
         folderName: 'Quality warnings',
@@ -605,9 +654,11 @@ describe('App Cloud Uploader', () => {
         needsReviewChunks: 1,
         qualityWarnings: [{ chunkIndex: 3, pageStart: 7, pageEnd: 8 }],
       }], nextCursor: null } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Quality warnings')
     expect(await screen.findByText('⚠️ Hoàn thành có cảnh báo')).toBeInTheDocument()
     expect(screen.getByText('Phần 4: trang 7–8')).toBeInTheDocument()
     expect(screen.queryByText(/audit|diagnostic/i)).not.toBeInTheDocument()
@@ -633,7 +684,8 @@ describe('App Cloud Uploader', () => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
       if (url.endsWith('/jobs/quality-output/result')) return Promise.resolve({ data: { result } })
-      return Promise.resolve({ data: { items: [{
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Quality warnings', count: 1 }], { completed: 1 }) })
+      if (url.endsWith('/folders/Quality%20warnings/jobs')) return Promise.resolve({ data: { items: [{
         jobId: 'quality-output',
         originalName: 'warning.pdf',
         folderName: 'Quality warnings',
@@ -645,9 +697,11 @@ describe('App Cloud Uploader', () => {
         needsReviewChunks: 1,
         qualityWarnings: [{ chunkIndex: 0, pageStart: 1, pageEnd: 1 }],
       }], nextCursor: null } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Quality warnings')
     fireEvent.click(await screen.findByRole('button', { name: /Xem trước/i }))
     expect(await screen.findByRole('heading', { name: '⚠️ Lưu ý kiểm soát chất lượng' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Phần 1 — trang 1' })).toBeInTheDocument()
@@ -662,7 +716,8 @@ describe('App Cloud Uploader', () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
-      return Promise.resolve({ data: { items: [{
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats([{ name: 'Legacy', count: 1 }], { processing: 1 }) })
+      if (url.endsWith('/folders/Legacy/jobs')) return Promise.resolve({ data: { items: [{
         jobId: 'legacy-processing',
         originalName: 'legacy.pdf',
         folderName: 'Legacy',
@@ -672,9 +727,11 @@ describe('App Cloud Uploader', () => {
         chunkCount: 3,
         completedChunks: 1,
       }], nextCursor: null } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
     })
 
     render(<App />)
+    await openFolder('Legacy')
     expect(await screen.findByText('⚙️ Đang dịch 1/3')).toBeInTheDocument()
     expect(screen.queryByText(/Kiểm soát chất lượng:/i)).not.toBeInTheDocument()
   })

@@ -7,6 +7,7 @@ import { rateLimit } from 'express-rate-limit';
 import { 
     uploadFiles, 
     getJobsSummary, 
+    getFolderJobsSummary,
     getTerminalFailures,
     retryTerminalFailures,
     getJobStats,
@@ -62,6 +63,7 @@ router.get('/upload-batches/:batchId', getUploadBatchStatus);
 
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
+router.get('/folders/:folderName/jobs', getFolderJobsSummary);
 router.get('/jobs/stats', getJobStats);
 router.get('/jobs/terminal-failures', getTerminalFailures);
 router.get('/gemini-keys/status', getGeminiKeyStatus);

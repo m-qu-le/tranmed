@@ -362,6 +362,27 @@ export const forceWakeUpSystem = async (req, res) => {
     }
 };
 
+export const getFolderJobsSummary = async (req, res) => {
+    try {
+        const requestedLimit = Number.parseInt(req.query.limit || '100', 10);
+        const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 100));
+        const cursor = req.query.cursor || null;
+        const requestedFolderName = typeof req.params.folderName === 'string' ? req.params.folderName.trim() : '';
+        if (!requestedFolderName || requestedFolderName.length > 120) {
+            return res.status(400).json({ error: 'Tên thư mục không hợp lệ.' });
+        }
+        if (cursor && !mongoose.isValidObjectId(cursor)) {
+            return res.status(400).json({ error: 'Cursor không hợp lệ.' });
+        }
+        const folderName = requestedFolderName.localeCompare(PRIORITY_FOLDER_NAME, 'vi', { sensitivity: 'base' }) === 0
+            ? PRIORITY_FOLDER_NAME
+            : requestedFolderName;
+        res.status(200).json(await translationQueue.getFolderJobsSummary({ folderName, limit, cursor }));
+    } catch {
+        res.status(500).json({ error: 'Không thể đọc danh sách tài liệu của thư mục.' });
+    }
+};
+
 export const getTerminalFailures = async (req, res) => {
     try {
         const requestedLimit = Number.parseInt(req.query.limit || '100', 10);
