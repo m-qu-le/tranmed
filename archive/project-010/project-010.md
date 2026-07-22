@@ -1,5 +1,7 @@
 # Project 010 — Nâng cấp Gemini 3.1 Flash-Lite lên Gemini 3.5 Flash-Lite
 
+> **Trạng thái cuối:** ĐÃ ĐÓNG VÀ LƯU TRỮ ngày 22/07/2026 theo quyết định của chủ dự án.
+
 ## 1. Mục tiêu và quyết định
 
 Nâng backend StudyMed Translator từ `gemini-3.1-flash-lite` lên model GA
@@ -67,9 +69,9 @@ Frontend không gọi Gemini trực tiếp; không có thay đổi frontend dự
 | P010-G1-S01 đến S04 | Đã thực hiện cục bộ | SDK nâng lên 2.13.0, Node 22 tương thích; backend đạt 133/133 và frontend đạt 30/30 test. |
 | P010-G2-S01 đến S06 | Đã thực hiện cục bộ | Model/config/test/README đã được cập nhật; pipeline version là `p010-v1`. |
 | P010-G3-S02 đến S04 | Đã đạt trong môi trường cục bộ/API thật | 24/24 key trong `.env` mới tương thích payload P010. `smoke:p010-gemini` xác nhận text 65536, JSON schema 16384, thinking HIGH và Gemini Files API PDF đều trả `STOP` từ model 3.5. Smoke quality end-to-end đạt và được lưu tại `project-010-quality-smoke-report.json`. |
-| P010-G4 | Đang theo dõi | Live traffic hậu deploy đã xác nhận model/contract; corpus chuyên môn có reviewer vẫn chưa hoàn tất. |
-| P010-G5 | Đã deploy, đạt gate kỹ thuật ban đầu | Readiness, cấu hình runtime, telemetry model và cleanup đều đạt; còn chờ hết cửa sổ theo dõi production. |
-| P010-G6 | Chờ đóng | Chỉ đóng sau khi queue hậu deploy hoàn tất ổn định và có tổng kết theo dõi/reviewer. |
+| P010-G4 | Đóng với chấp nhận rủi ro | Live traffic hậu deploy đã xác nhận model/contract; chủ dự án chấp nhận đóng mà không chờ corpus chuyên môn có reviewer. |
+| P010-G5 | Hoàn thành | Readiness, cấu hình runtime, telemetry model và cleanup đều đạt trên production. |
+| P010-G6 | Hoàn thành | Đã ghi nhận phiên bản, kết quả kiểm thử, telemetry cuối và các điều kiện được miễn trừ trước khi lưu trữ. |
 
 ### Kết quả kiểm chứng trước redeploy — 22/07/2026
 
@@ -93,6 +95,16 @@ Frontend không gọi Gemini trực tiếp; không có thay đổi frontend dự
 - MongoDB metadata chỉ đọc ghi nhận 79/79 stage call hậu deploy dùng `gemini-3.5-flash-lite` và 79/79 có `finishReason=STOP`; không có terminal error code.
 - Tại snapshot cuối: 7 chunk `passed`, 1 chunk `needs_review`, 18 chunk còn tiếp tục pipeline; 9 job còn `pending`. `needs_review` là kết quả guard chất lượng, không phải lỗi model/config.
 - Gate kỹ thuật hậu deploy đạt; P010 chưa đóng cho tới khi hoàn tất thời gian theo dõi production và review corpus chuyên môn.
+
+### Biên bản đóng dự án — 22/07/2026
+
+- Chủ dự án yêu cầu đóng và đưa P010 vào lưu trữ ngày 22/07/2026.
+- Snapshot production cuối lúc `2026-07-22T13:17:10Z`: instance mới khởi động lúc `2026-07-22T13:07:23.684Z`; readiness `ready`, MongoDB/R2 available, cleanup/upload backlog bằng 0, không key bị disable hoặc cooldown.
+- Metadata production tích lũy ghi nhận 309/309 stage call dùng `gemini-3.5-flash-lite`, 309/309 `finishReason=STOP`, 42 chunk `passed`, 7 chunk `needs_review` và không có terminal error code.
+- Tại thời điểm đóng còn 2 job `processing` và 21 job `pending`. Việc đóng hồ sơ không hủy hoặc can thiệp các job này; queue production tiếp tục xử lý theo scheduler/lease hiện hành.
+- Không hoàn tất review corpus chuyên môn độc lập, theo dõi đủ 24 giờ và rollback drill production. Ba hạng mục này được ghi nhận là rủi ro tồn dư được chủ dự án chấp nhận khi yêu cầu đóng, không được ghi nhận sai là đã kiểm thử.
+- Phiên bản đóng: `@google/genai@2.13.0`, model `gemini-3.5-flash-lite`, pipeline `p010-v1`, text output 65536 và JSON output 16384.
+- Commit triển khai chính: `8dda2ff`; commit kiểm chứng production: `6889d6d`.
 
 ## 4. Kế hoạch theo giai đoạn
 
@@ -238,13 +250,12 @@ finish reason, token usage, key index và error code. Không log nội dung PDF 
 4. **Job lai model khi deploy vội.** Chặn bằng maintenance pause và `activeJobs = 0`.
 5. **Test Retry-After có dấu hiệu không ổn định.** Tách khỏi P010 nếu lỗi không tái lập; không che lỗi bằng retry CI vô hạn.
 
-## 8. Điều kiện hoàn thành P010
+## 8. Kết quả đóng P010
 
-P010 chỉ hoàn thành khi tất cả điều kiện sau đúng:
-
-- Production dùng rõ ràng `gemini-3.5-flash-lite`.
-- Không gửi sampling parameter đã deprecate.
-- Text stage dùng output ceiling 65536; JSON stage giữ 16384.
-- Backend/frontend test, smoke API và canary chuyên môn đều đạt.
-- Không có migration database; rollback về 3.1 đã được diễn tập hoặc có bằng chứng cấu hình rõ ràng.
-- Có release note với commit, phiên bản SDK, thời gian deploy và kết quả theo dõi hậu deploy.
+- [x] Production dùng rõ ràng `gemini-3.5-flash-lite`.
+- [x] Không gửi sampling parameter đã deprecate.
+- [x] Text stage dùng output ceiling 65536; JSON stage giữ 16384.
+- [x] Backend 133/133, frontend 30/30, key compatibility 24/24 và smoke API/end-to-end đều đạt.
+- [x] Không cần migration database; rollback vẫn là đổi model/env và redeploy artifact baseline.
+- [x] Có commit, phiên bản SDK, thời gian deploy và telemetry hậu deploy không chứa secret/nội dung tài liệu.
+- [~] Review corpus chuyên môn, theo dõi đủ 24 giờ và rollback drill không thực hiện đầy đủ; đóng theo chấp nhận rủi ro của chủ dự án.
