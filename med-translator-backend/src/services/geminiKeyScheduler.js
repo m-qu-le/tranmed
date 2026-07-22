@@ -63,6 +63,7 @@ export class GeminiKeyScheduler {
             this.states.push({
                 disabled: false,
                 cooldownUntil: 0,
+                hasSucceeded: false,
                 requestTimes: [],
                 tokenEvents: [],
                 day: null,
@@ -111,8 +112,15 @@ export class GeminiKeyScheduler {
     }
 
     recordSuccess(reservation, result) {
+        reservation.state.hasSucceeded = true;
         const actualInput = result?.metadata?.usage?.promptTokenCount;
         if (Number.isFinite(actualInput) && actualInput >= 0) reservation.tokenEvent.count = actualInput;
+    }
+
+    initialize() {
+        const keyCount = this.keysProvider().length;
+        this.ensureStates(keyCount);
+        return keyCount;
     }
 
     snapshot() {
@@ -128,6 +136,24 @@ export class GeminiKeyScheduler {
                 rpd: state.dailyCount,
             };
         });
+    }
+
+    publicStatus() {
+        this.initialize();
+        const now = this.clock();
+        return this.states.map((state, keyIndex) => ({
+            index: keyIndex + 1,
+            status: state.disabled
+                ? 'disabled'
+                : state.cooldownUntil > now
+                    ? 'cooldown'
+                    : state.hasSucceeded
+                        ? 'available'
+                        : 'untested',
+            cooldownUntil: state.cooldownUntil > now
+                ? new Date(state.cooldownUntil).toISOString()
+                : null,
+        }));
     }
 
     async execute(requestFactory, options = {}) {

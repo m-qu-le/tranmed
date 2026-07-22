@@ -71,6 +71,25 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByText('Số lần ngủ đông')).toBeInTheDocument()
   })
 
+  it('pauses new job claims for redeploy from the subtle header control', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.stubGlobal('prompt', vi.fn(() => 'redeploy-secret'))
+    api.post.mockResolvedValue({ data: {
+      isMaintenancePaused: true,
+      worker: { activeJobs: 0 },
+      message: 'Hàng đợi đã dừng an toàn; có thể redeploy.',
+    } })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /tạm dừng để redeploy/i }))
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/maintenance/pause', null, {
+      headers: { 'X-Maintenance-Token': 'redeploy-secret' },
+      timeout: 30_000,
+    }))
+    expect(screen.getByText(/không có job đang chạy; có thể redeploy ngay/i)).toBeInTheDocument()
+  })
+
   it('sorts folders and file names A-Z using natural Vietnamese ordering', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })

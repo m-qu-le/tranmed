@@ -58,6 +58,7 @@ export class QueueManager extends EventEmitter {
         this.pumpRequested = false;
         this.consecutiveFailures = 0;
         this.isHibernating = false;
+        this.isMaintenancePaused = false;
         this.hibernationCount = 0;
         this.hibernationStats = null;
         this.hibernationTimer = null;
@@ -162,6 +163,7 @@ export class QueueManager extends EventEmitter {
         return {
             isHibernating: this.isHibernating,
             stats: this.hibernationStats,
+            isMaintenancePaused: this.isMaintenancePaused,
             worker: {
                 concurrency: this.concurrency,
                 activeJobs: this.activeJobs.size,
@@ -186,6 +188,23 @@ export class QueueManager extends EventEmitter {
         if (this.hibernationTimer) clearTimeout(this.hibernationTimer);
         await this.wakeUp();
         return true;
+    }
+
+    pauseForRedeploy() {
+        this.isMaintenancePaused = true;
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
+        this.emit('systemStatusChanged', this.getSystemStatus());
+        return this.getSystemStatus();
+    }
+
+    async cancelRedeployPause() {
+        this.isMaintenancePaused = false;
+        this.emit('systemStatusChanged', this.getSystemStatus());
+        await this.startWorker();
+        return this.getSystemStatus();
     }
 
     async triggerHibernation() {
@@ -910,13 +929,13 @@ export class QueueManager extends EventEmitter {
                 this.activeJobs.delete(job.jobId);
                 this.activeSourceBytes -= active.sourceSize || 0;
             }
-            if (!this.isHibernating) void this.startWorker();
+            if (!this.isHibernating && !this.isMaintenancePaused) void this.startWorker();
         }
     }
 
     async pumpWorker() {
         await this.recoverExpiredLeases();
-        while (!this.isHibernating && this.activeJobs.size < this.concurrency) {
+        while (!this.isHibernating && !this.isMaintenancePaused && this.activeJobs.size < this.concurrency) {
             const job = await this.claimAdmissibleJob();
             if (!job) {
                 await this.scheduleNextRetry();
@@ -937,7 +956,7 @@ export class QueueManager extends EventEmitter {
     }
 
     async startWorker() {
-        if (this.isHibernating) return;
+        if (this.isHibernating || this.isMaintenancePaused) return;
         if (this.pumpPromise) {
             this.pumpRequested = true;
             return this.pumpPromise;

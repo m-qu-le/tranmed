@@ -14,6 +14,23 @@ Backend xem `.env.example`:
 
 Frontend: `VITE_API_URL` là base `/api/translate`, production hiện dùng `https://tranmed.onrender.com/api/translate`.
 
+## Kiểm tra Gemini API key pool
+
+Khi người dùng yêu cầu kiểm tra số lượng hoặc trạng thái `GEMINI_API_KEYS` trên web/Render, luôn kiểm tra runtime qua endpoint production trước; không đọc, in, mask, hoặc yêu cầu giá trị key.
+
+```powershell
+Invoke-RestMethod https://tranmed.onrender.com/api/translate/gemini-keys/status
+```
+
+Response chỉ gồm `keyCount` và `keys[]` với `index` (bắt đầu từ 1), `status`, `cooldownUntil`:
+
+- `untested`: key đã nạp nhưng chưa có request thành công qua quality scheduler kể từ lúc server khởi động.
+- `available`: key đã có request thành công và hiện có thể được dùng.
+- `cooldown`: Gemini vừa trả quota/rate-limit; `cooldownUntil` là thời điểm ISO 8601 được thử lại.
+- `disabled`: Gemini trả 401/403; key bị bỏ qua đến khi server restart hoặc cấu hình được thay đổi/redeploy.
+
+Sau thay đổi `GEMINI_API_KEYS`, xác nhận Render đã deploy/restart rồi gọi endpoint; đối chiếu `keyCount` với số key tách bằng dấu phẩy, bỏ khoảng trắng và phần tử rỗng. Nếu endpoint trả 404, deployment chưa chứa backend version có diagnostics này; nếu không kết nối được, báo trạng thái không xác minh được thay vì suy đoán từ `.env` local. Log khởi động Render phải có dạng `🔑 [GEMINI] Key pool: N keys loaded.`; log này không chứa key.
+
 ## Lệnh kiểm tra local
 
 ```powershell

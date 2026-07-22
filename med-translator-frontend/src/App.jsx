@@ -262,7 +262,7 @@ function App() {
   
   const [jobs, setJobs] = useState([]); 
   const [jobStats, setJobStats] = useState(null);
-  const [sysStatus, setSysStatus] = useState({ isHibernating: false, stats: null });
+  const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
   const [collapsedFolders, setCollapsedFolders] = useState({});
   const [sseConnected, setSseConnected] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
@@ -558,6 +558,10 @@ function App() {
   };
 
   const handleAddToQueue = () => {
+    if (sysStatus.isMaintenancePaused) {
+      alert('Hệ thống đang tạm dừng để redeploy; hãy chờ Render deploy xong rồi upload.');
+      return;
+    }
     if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
     if (!enqueueFilesForUpload(selectedFiles, { targetFolderName: folderName })) return;
     document.getElementById('fileInput').value = '';
@@ -567,10 +571,12 @@ function App() {
 
   const handlePriorityDrop = (event) => {
     event.preventDefault();
+    if (sysStatus.isMaintenancePaused) return;
     enqueueFilesForUpload(event.dataTransfer.files, { priority: true });
   };
 
   const handlePriorityFileChange = (event) => {
+    if (sysStatus.isMaintenancePaused) return;
     if (enqueueFilesForUpload(event.target.files, { priority: true })) event.target.value = '';
   };
 
@@ -841,6 +847,46 @@ function App() {
     totalFiles: localQueue.reduce((total, task) => total + (task.totalFiles || 0), 0),
     safeFiles: localQueue.reduce((total, task) => total + (task.canCloseClient ? (task.confirmedFiles || 0) : 0), 0),
   };
+
+  const requestMaintenanceToken = () => {
+    const token = window.prompt('Nhập mã quản trị redeploy:');
+    return typeof token === 'string' ? token.trim() : '';
+  };
+
+  const handlePauseForRedeploy = async () => {
+    const unsafeUpload = activeUploadTaskId || localQueue.some(task => !task.canCloseClient && task.status !== 'hidden');
+    if (unsafeUpload) {
+      alert('Hãy chờ toàn bộ batch được xác nhận an toàn trên Cloud trước khi tạm dừng để redeploy.');
+      return;
+    }
+    if (!window.confirm('Dừng nhận job mới để redeploy? Job đang chạy sẽ được hoàn tất; khi Render deploy bản mới, hàng đợi tự hoạt động lại.')) return;
+    const token = requestMaintenanceToken();
+    if (!token) return;
+    try {
+      const response = await api.post('/maintenance/pause', null, {
+        headers: { 'X-Maintenance-Token': token },
+        timeout: 30_000,
+      });
+      setSysStatus(previous => ({ ...previous, ...response.data }));
+      alert(`⏸️ ${response.data.message}`);
+    } catch (error) {
+      alert('Không thể tạm dừng: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  const handleCancelRedeployPause = async () => {
+    const token = requestMaintenanceToken();
+    if (!token) return;
+    try {
+      const response = await api.post('/maintenance/cancel', null, {
+        headers: { 'X-Maintenance-Token': token },
+        timeout: 30_000,
+      });
+      setSysStatus(previous => ({ ...previous, ...response.data }));
+    } catch (error) {
+      alert('Không thể tiếp tục hàng đợi: ' + (error.response?.data?.error || error.message));
+    }
+  };
   const dashboard = jobStats?.cloud ? {
     ...jobStats.cloud,
     uploadingBatches: Math.max(jobStats.cloud.uploadingBatches, localDashboard.uploadingBatches),
@@ -853,6 +899,22 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
+        {sysStatus.isMaintenancePaused ? (
+          <button className="redeploy-pause-control" onClick={handleCancelRedeployPause}>
+            ↩ Hủy dừng redeploy
+          </button>
+        ) : (
+          <button
+            className="redeploy-pause-control"
+            onClick={handlePauseForRedeploy}
+            disabled={sysStatus.maintenance?.controlEnabled === false}
+            title={sysStatus.maintenance?.controlEnabled === false
+              ? 'Cần cấu hình MAINTENANCE_CONTROL_TOKEN trên Render'
+              : 'Tạm dừng nhận job mới trước khi redeploy'}
+          >
+            ⏸ Tạm dừng để redeploy
+          </button>
+        )}
         <h1>🩺 StudyMed Translator</h1>
         <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
         <span className={`connection-status ${sseConnected ? 'connected' : 'disconnected'}`}>
@@ -913,6 +975,18 @@ function App() {
           </aside>
         )}
 
+        {sysStatus.isMaintenancePaused && (
+          <aside className="maintenance-banner" role="status">
+            <div>
+              <strong>Đang tạm dừng để redeploy.</strong>{' '}
+              {sysStatus.worker?.activeJobs > 0
+                ? `Còn ${sysStatus.worker.activeJobs} job đang hoàn tất; đừng redeploy trước khi về 0.`
+                : 'Không có job đang chạy; có thể redeploy ngay.'}
+            </div>
+            <small>Bản Render mới sẽ tự tiếp tục hàng đợi sau khi khởi động.</small>
+          </aside>
+        )}
+
         <div className="upload-section" style={{ display: 'flex', flexDirection: 'column', gap: '20px', background: '#ffffff', padding: '32px', borderRadius: '24px', boxShadow: '0 8px 30px rgba(0,0,0,0.06)', border: '1px solid #eaeaea', maxWidth: '850px', margin: '0 auto 40px auto' }}>
           <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
             <label className="sr-only" htmlFor="folderNameInput">Tên thư mục</label>
@@ -922,6 +996,7 @@ function App() {
               placeholder="📁 Tên thư mục (Vd: USMLE Step 1)" 
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
+              disabled={sysStatus.isMaintenancePaused}
               style={{ padding: '14px 18px', borderRadius: '12px', border: '1.5px solid #e0e0e0', flex: 1, minWidth: '250px', fontSize: '15px', outline: 'none', transition: 'border-color 0.2s', backgroundColor: '#fafafa', color: '#333' }}
               onFocus={(e) => { e.target.style.borderColor = '#007bff'; e.target.style.backgroundColor = '#fff'; }}
               onBlur={(e) => { e.target.style.borderColor = '#e0e0e0'; e.target.style.backgroundColor = '#fafafa'; }}
@@ -934,6 +1009,7 @@ function App() {
                 accept="application/pdf" 
                 multiple 
                 onChange={handleFileChange} 
+                disabled={sysStatus.isMaintenancePaused}
                 className="file-input"
                 style={{ width: '100%', padding: '12px 15px', background: '#f0f4f8', border: '1.5px dashed #a0aec0', borderRadius: '12px', cursor: 'pointer', color: '#4a5568', transition: 'background 0.2s', fontSize: '14px' }}
                 onMouseEnter={(e) => e.target.style.background = '#e2e8f0'}
@@ -954,6 +1030,7 @@ function App() {
             <button
               type="button"
               onClick={() => priorityFileInputRef.current?.click()}
+              disabled={sysStatus.isMaintenancePaused}
               style={{ marginTop: '12px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d97706', background: '#fff', color: '#9a3412', cursor: 'pointer' }}
             >
               Chọn PDF ưu tiên
@@ -964,6 +1041,7 @@ function App() {
               accept="application/pdf"
               multiple
               onChange={handlePriorityFileChange}
+              disabled={sysStatus.isMaintenancePaused}
               className="sr-only"
               aria-label="Chọn các file PDF ưu tiên"
             />
@@ -971,7 +1049,7 @@ function App() {
           
           <button 
             onClick={handleAddToQueue} 
-            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId)}
+            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId) || sysStatus.isMaintenancePaused}
             className="upload-btn"
             style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', background: (!selectedFiles || selectedFiles.length === 0) ? '#e9ecef' : '#007bff', color: (!selectedFiles || selectedFiles.length === 0) ? '#adb5bd' : '#ffffff', border: 'none', cursor: (!selectedFiles || selectedFiles.length === 0) ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: (!selectedFiles || selectedFiles.length === 0) ? 'none' : '0 4px 12px rgba(0, 123, 255, 0.3)' }}
           >

@@ -1,4 +1,5 @@
 import express from 'express';
+import { timingSafeEqual } from 'crypto';
 import upload from '../middlewares/upload.js';
 import { enforceStorageBudget, getCapacity, reserveUploadCapacity } from '../middlewares/capacity.js';
 import validatePdf from '../middlewares/validatePdf.js';
@@ -7,6 +8,7 @@ import {
     uploadFiles, 
     getJobsSummary, 
     getJobStats,
+    getGeminiKeyStatus,
     getJobResult, 
     downloadJobResult,
     streamLogs,
@@ -15,6 +17,8 @@ import {
     getSystemStatus,
     getOperationalMetrics,
     forceWakeUpSystem, // [THÊM MỚI] Import hàm ép thức dậy
+    pauseForRedeploy,
+    cancelRedeployPause,
     deleteFolderQueue, // [THÊM DÒNG NÀY]
     prepareUploadBatch,
     confirmUploadBatch,
@@ -22,6 +26,7 @@ import {
     listUploadBatches,
     abandonUploadBatchItems
 } from '../controllers/translateController.js'; 
+import { runtimeConfig } from '../services/runtimeServices.js';
 
 const router = express.Router();
 const uploadRateLimit = rateLimit({
@@ -31,6 +36,18 @@ const uploadRateLimit = rateLimit({
     legacyHeaders: false,
     message: { error: 'Đã gửi quá nhiều upload trong một giờ. Vui lòng thử lại sau.' }
 });
+
+function requireMaintenanceControl(req, res, next) {
+    const expected = runtimeConfig.maintenanceControlToken;
+    const received = req.get('X-Maintenance-Token') || '';
+    if (!expected) return res.status(503).json({ error: 'Chưa cấu hình MAINTENANCE_CONTROL_TOKEN trên Render.' });
+    const expectedBuffer = Buffer.from(expected);
+    const receivedBuffer = Buffer.from(received);
+    if (expectedBuffer.length !== receivedBuffer.length || !timingSafeEqual(expectedBuffer, receivedBuffer)) {
+        return res.status(403).json({ error: 'Mã quản trị không hợp lệ.' });
+    }
+    next();
+}
 
 // Frontend có thể giữ hàng trăm file trong Local Queue, nhưng backend chỉ nhận một file/lần.
 router.post('/', uploadRateLimit, reserveUploadCapacity, upload.array('files', 1), validatePdf, enforceStorageBudget, uploadFiles);
@@ -44,6 +61,7 @@ router.get('/upload-batches/:batchId', getUploadBatchStatus);
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
 router.get('/jobs/stats', getJobStats);
+router.get('/gemini-keys/status', getGeminiKeyStatus);
 router.get('/status', getSystemStatus); // Route lấy trạng thái hệ thống
 router.get('/metrics', getOperationalMetrics);
 router.get('/jobs/:jobId/result', getJobResult);
@@ -63,6 +81,8 @@ router.delete('/jobs/:jobId', deleteJob);
 // [THÊM MỚI] 6. API Ép hệ thống thức dậy thủ công
 // Gọi POST /force-wakeup để hủy trạng thái ngủ đông
 router.post('/force-wakeup', forceWakeUpSystem);
+router.post('/maintenance/pause', requireMaintenanceControl, pauseForRedeploy);
+router.post('/maintenance/cancel', requireMaintenanceControl, cancelRedeployPause);
 
 // [THÊM MỚI] 7. API Xóa toàn bộ hàng đợi thư mục (Nhận folderName qua URL params)
 router.delete('/folder/:folderName', deleteFolderQueue);

@@ -63,8 +63,36 @@ body {
 }
 
 .header { 
+  position: relative;
   text-align: center; 
   margin-bottom: 48px; 
+}
+
+.redeploy-pause-control {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 5px 8px;
+  border: 1px solid #d5d7d2;
+  border-radius: 8px;
+  background: transparent;
+  color: #73776f;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.redeploy-pause-control:hover:not(:disabled),
+.redeploy-pause-control:focus-visible {
+  border-color: #aeb3aa;
+  color: #4d514b;
+  opacity: 1;
+}
+
+.redeploy-pause-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
 }
 
 .header h1 { 
@@ -98,6 +126,22 @@ body {
 .storage-status.available { color: #16803a; }
 .storage-status.unavailable { color: #9e0a0a; }
 .storage-status.checking { color: var(--text-olive); }
+
+.maintenance-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 850px;
+  margin: 0 auto 24px;
+  padding: 12px 16px;
+  border: 1px solid #d8d6c8;
+  border-radius: 12px;
+  background: #fffdf4;
+  color: #5d5a47;
+  font-size: 14px;
+}
+
+.maintenance-banner small { color: #7d7960; }
 
 .batch-dashboard {
   display: grid;
@@ -621,6 +665,8 @@ body {
 .hide-batch-btn:focus-visible { outline: 3px solid #85b8ff; outline-offset: 2px; }
 
 @media (max-width: 576px) {
+  .header { padding-top: 30px; }
+  .redeploy-pause-control { left: 50%; transform: translateX(-50%); }
   .cloud-task { align-items: stretch; flex-direction: column; }
   .cloud-task-actions { width: 100%; }
   .cloud-queue-header { align-items: flex-start; }

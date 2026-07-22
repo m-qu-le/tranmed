@@ -3,7 +3,7 @@ import TranslationChunk from '../models/translationChunkModel.js';
 import mongoose from 'mongoose';
 import Job from '../models/jobModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
-import { r2Service, uploadBatchService } from '../services/runtimeServices.js';
+import { r2Service, runtimeConfig, uploadBatchService } from '../services/runtimeServices.js';
 import { PRIORITY_FOLDER_NAME, UploadBatchError } from '../services/uploadBatchService.js';
 import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
@@ -36,6 +36,15 @@ function sendUploadBatchError(res, error) {
     }
     throw error;
 }
+
+export function buildGeminiKeyStatusPayload(scheduler = qualityKeyScheduler) {
+    const keys = scheduler.publicStatus();
+    return { keyCount: keys.length, keys };
+}
+
+export const getGeminiKeyStatus = (_req, res) => {
+    res.status(200).json(buildGeminiKeyStatusPayload());
+};
 
 export const prepareUploadBatch = async (req, res) => {
     try {
@@ -311,6 +320,7 @@ export const getSystemStatus = async (req, res) => {
         ]);
         res.status(200).json({
             ...translationQueue.getSystemStatus(),
+            maintenance: { controlEnabled: Boolean(runtimeConfig.maintenanceControlToken) },
             storage: {
                 configured: readiness.configured,
                 available: readiness.available,
@@ -349,6 +359,25 @@ export const forceWakeUpSystem = async (req, res) => {
         }
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+};
+
+export const pauseForRedeploy = (_req, res) => {
+    const status = translationQueue.pauseForRedeploy();
+    res.status(200).json({
+        message: status.worker.activeJobs > 0
+            ? `Đã dừng nhận job mới. Chờ ${status.worker.activeJobs} job đang chạy hoàn tất trước khi redeploy.`
+            : 'Hàng đợi đã dừng an toàn; có thể redeploy.',
+        ...status,
+    });
+};
+
+export const cancelRedeployPause = async (_req, res) => {
+    try {
+        const status = await translationQueue.cancelRedeployPause();
+        res.status(200).json({ message: 'Đã tiếp tục nhận job mới.', ...status });
+    } catch {
+        res.status(500).json({ error: 'Không thể tiếp tục hàng đợi.' });
     }
 };
 

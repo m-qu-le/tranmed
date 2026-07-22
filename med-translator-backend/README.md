@@ -19,10 +19,15 @@ Các giới hạn quan trọng:
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
 - `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận `1` hoặc `2`, mặc định `1`. Rollback tải xử lý bằng cách đặt lại `1` và restart Render.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
+- `MAINTENANCE_CONTROL_TOKEN`: mã riêng để tạm dừng hàng đợi trước redeploy; đặt một chuỗi ngẫu nhiên dài trên Render, không đặt trong biến `VITE_*` hay commit vào Git.
 - `TRANSLATION_PIPELINE_MODE`: mặc định `quality` sau khi chủ dự án chốt B4; đặt rõ `legacy` để rollback.
 - `PDF_PAGES_PER_CHUNK`: số trang mỗi chunk, mặc định 2.
 - `GEMINI_THINKING_LEVEL`: P003 bắt buộc `HIGH` cho quality mode.
 - `QUALITY_MAX_REPAIR_CYCLES`: từ 0 đến 2; mặc định 2. Không có vòng lặp vô hạn.
+
+## Redeploy có kiểm soát
+
+Sau khi mọi batch upload đã báo an toàn trên Cloud, chọn nút nhỏ **“Tạm dừng để redeploy”** ở góc trên trái, nhập `MAINTENANCE_CONTROL_TOKEN`, rồi chờ banner báo không còn job đang chạy. Khi đó có thể redeploy Render. Chế độ tạm dừng chỉ tồn tại trong instance cũ; server mới tự nhận queue và chạy bình thường, không cần bấm nút khởi động lại.
 
 ## Thống kê và worker pool P005
 

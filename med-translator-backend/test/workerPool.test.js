@@ -157,6 +157,43 @@ test('hibernation blocks refill while allowing in-flight work to finish', async 
     assert.equal(claims, 2, 'finishing in-flight work must not refill while hibernating');
 });
 
+test('redeploy pause stops refilling and is not carried into a new server instance', async () => {
+    const queue = new QueueManager();
+    const first = deferred();
+    const second = deferred();
+    const jobs = [
+        { jobId: 'before-redeploy', sourceSize: MiB, processingToken: 'token-before', attemptCount: 1, maxAttempts: 3 },
+        { jobId: 'after-redeploy', sourceSize: MiB, processingToken: 'token-after', attemptCount: 1, maxAttempts: 3 },
+    ];
+    let claims = 0;
+    queue.recoverExpiredLeases = async () => 0;
+    queue.scheduleNextRetry = async () => {};
+    queue.createLeaseHeartbeat = () => null;
+    queue.claimAdmissibleJob = async () => {
+        claims += 1;
+        return jobs.shift() || null;
+    };
+    queue.processClaimedJob = async job => {
+        await (job.jobId === 'before-redeploy' ? first.promise : second.promise);
+    };
+
+    await queue.startWorker();
+    assert.equal(queue.activeJobs.size, 1);
+    const paused = queue.pauseForRedeploy();
+    assert.equal(paused.isMaintenancePaused, true);
+    assert.equal(new QueueManager().isMaintenancePaused, false);
+
+    first.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(claims, 1, 'pause must not claim a replacement job');
+    assert.equal(queue.activeJobs.size, 0);
+
+    await queue.cancelRedeployPause();
+    assert.equal(queue.activeJobs.size, 1, 'a running instance can cancel an accidental pause');
+    second.resolve();
+    await new Promise(resolve => setImmediate(resolve));
+});
+
 test('wake-up resets failure state and fills both configured lanes', async context => {
     const originalFindOneAndUpdate = System.findOneAndUpdate;
     System.findOneAndUpdate = async () => ({});

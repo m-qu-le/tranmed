@@ -7,9 +7,12 @@ import { r2Service, runtimeConfig, uploadBatchService } from './services/runtime
 
 // [THÊM MỚI] Bổ sung đường truyền tĩnh mạch: Import QueueManager để gọi khởi tạo sau khi có DB
 import { translationQueue } from './services/queueManager.js'; 
+import { qualityKeyScheduler } from './services/qualityGeminiExecutors.js';
 
 const app = express();
 const PORT = runtimeConfig.port;
+const geminiKeyCount = qualityKeyScheduler.initialize();
+console.log(`🔑 [GEMINI] Key pool: ${geminiKeyCount} keys loaded.`);
 app.set('trust proxy', 1);
 
 // [CẤU HÌNH CORS ĐỘNG VÀ LOGGING]

@@ -140,6 +140,7 @@ export function validateRuntimeEnv() {
         port: readPositiveInteger('PORT', 8080),
         mongodbUri,
         frontendUrl: process.env.FRONTEND_URL?.trim() || null,
+        maintenanceControlToken: process.env.MAINTENANCE_CONTROL_TOKEN?.trim() || null,
         maxUploadStorageMb: MAX_UPLOAD_STORAGE_MB,
         maxFileSizeMb: MAX_FILE_SIZE_MB,
         maxJobAttempts: MAX_JOB_ATTEMPTS,

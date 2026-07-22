@@ -21,6 +21,49 @@ test('quality scheduler distributes 700 requests evenly without exposing key val
     assert.doesNotMatch(JSON.stringify(scheduler.snapshot()), /secret-key/);
 });
 
+test('public status initializes all keys without exposing values and tracks passive state', async () => {
+    let now = 1_000_000;
+    const scheduler = new GeminiKeyScheduler({ keysProvider: () => sevenKeys, clock: () => now });
+
+    assert.deepEqual(scheduler.publicStatus(), sevenKeys.map((_, index) => ({
+        index: index + 1,
+        status: 'untested',
+        cooldownUntil: null,
+    })));
+
+    await scheduler.execute(async ({ keyIndex }) => {
+        if (keyIndex === 0) {
+            const error = new Error('quota');
+            error.status = 429;
+            error.response = { headers: { get: () => '2' } };
+            throw error;
+        }
+        return { metadata: { usage: { promptTokenCount: 1 } } };
+    }, { estimatedInputTokens: 1 });
+
+    const status = scheduler.publicStatus();
+    assert.deepEqual(status[0], { index: 1, status: 'cooldown', cooldownUntil: new Date(now + 2000).toISOString() });
+    assert.deepEqual(status[1], { index: 2, status: 'available', cooldownUntil: null });
+    assert.equal(status.slice(2).every(key => key.status === 'untested' && key.cooldownUntil === null), true);
+    assert.doesNotMatch(JSON.stringify(status), /secret-key/);
+
+    now += 2001;
+    assert.deepEqual(scheduler.publicStatus()[0], { index: 1, status: 'untested', cooldownUntil: null });
+});
+
+test('public status reports disabled keys without exposing internal scheduler details', async () => {
+    const scheduler = new GeminiKeyScheduler({ keysProvider: () => ['secret-key'] });
+    await assert.rejects(
+        scheduler.execute(async () => {
+            const error = new Error('forbidden');
+            error.status = 403;
+            throw error;
+        }),
+        error => error.code === ErrorCodes.GEMINI_AUTH
+    );
+    assert.deepEqual(scheduler.publicStatus(), [{ index: 1, status: 'disabled', cooldownUntil: null }]);
+});
+
 test('429 rotates immediately to the next project and respects Retry-After', async () => {
     let now = 1_000_000;
     const scheduler = new GeminiKeyScheduler({ keysProvider: () => sevenKeys, clock: () => now });
