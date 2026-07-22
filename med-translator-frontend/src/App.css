@@ -68,10 +68,10 @@ body {
   margin-bottom: 48px; 
 }
 
-.redeploy-pause-control {
+.redeploy-pause-control,
+.gemini-key-status-control {
   position: absolute;
   top: 0;
-  left: 0;
   padding: 5px 8px;
   border: 1px solid #d5d7d2;
   border-radius: 8px;
@@ -83,17 +83,52 @@ body {
   opacity: 0.72;
 }
 
+.redeploy-pause-control { left: 0; }
+
+.gemini-key-status-control-wrap {
+  position: absolute;
+  top: 36px;
+  left: 0;
+}
+
+.gemini-key-status-control { position: static; }
+
 .redeploy-pause-control:hover:not(:disabled),
-.redeploy-pause-control:focus-visible {
+.redeploy-pause-control:focus-visible,
+.gemini-key-status-control:hover:not(:disabled),
+.gemini-key-status-control:focus-visible {
   border-color: #aeb3aa;
   color: #4d514b;
   opacity: 1;
 }
 
-.redeploy-pause-control:disabled {
+.redeploy-pause-control:disabled,
+.gemini-key-status-control:disabled {
   cursor: not-allowed;
   opacity: 0.38;
 }
+
+.gemini-key-status-result {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 48px));
+  padding: 9px 10px;
+  border: 1px solid #d5d7d2;
+  border-radius: 8px;
+  background: #fff;
+  color: #4d514b;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.gemini-key-status-result strong { display: block; }
+.gemini-key-status-result ul { margin: 5px 0 0; padding-left: 17px; }
+.gemini-key-status-result.error { color: #8a3c3c; }
 
 .header h1 { 
   color: var(--text-plum); 
@@ -665,8 +700,10 @@ body {
 .hide-batch-btn:focus-visible { outline: 3px solid #85b8ff; outline-offset: 2px; }
 
 @media (max-width: 576px) {
-  .header { padding-top: 30px; }
+  .header { padding-top: 68px; }
   .redeploy-pause-control { left: 50%; transform: translateX(-50%); }
+  .gemini-key-status-control-wrap { top: 36px; left: 50%; transform: translateX(-50%); }
+  .gemini-key-status-result { left: 50%; transform: translateX(-50%); }
   .cloud-task { align-items: stretch; flex-direction: column; }
   .cloud-task-actions { width: 100%; }
   .cloud-queue-header { align-items: flex-start; }

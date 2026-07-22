@@ -90,6 +90,31 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByText(/không có job đang chạy; có thể redeploy ngay/i)).toBeInTheDocument()
   })
 
+  it('checks the public Gemini key pool and renders a friendly result without key values', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/gemini-keys/status')) return Promise.resolve({ data: {
+        keyCount: 2,
+        keys: [
+          { index: 1, status: 'available', cooldownUntil: null },
+          { index: 2, status: 'cooldown', cooldownUntil: '2026-07-22T08:00:00.000Z' },
+        ],
+      } })
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 0, processing: 0, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /kiểm tra api key/i }))
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/gemini-keys/status', { timeout: 30_000 }))
+    expect(screen.getByText('Đã nạp 2 API key')).toBeInTheDocument()
+    expect(screen.getByText(/Key 1: Sẵn sàng/i)).toBeInTheDocument()
+    expect(screen.getByText(/Key 2: Đang chờ quota/i)).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('secret-key')
+  })
+
   it('sorts folders and file names A-Z using natural Vietnamese ordering', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })

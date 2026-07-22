@@ -17,6 +17,27 @@ const formatVietnamDateTime = value => new Intl.DateTimeFormat('vi-VN', {
   year: 'numeric',
 }).format(new Date(value));
 
+const GEMINI_KEY_STATUS_LABELS = Object.freeze({
+  untested: 'Chưa có lượt dùng',
+  available: 'Sẵn sàng',
+  cooldown: 'Đang chờ quota',
+  disabled: 'Bị Gemini từ chối',
+});
+
+const normalizeGeminiKeyStatus = value => {
+  if (!Number.isSafeInteger(value?.keyCount) || value.keyCount < 0 || !Array.isArray(value.keys)) return null;
+  const keys = value.keys.map(key => ({
+    index: key?.index,
+    status: key?.status,
+    cooldownUntil: key?.cooldownUntil ?? null,
+  }));
+  if (keys.length !== value.keyCount
+    || keys.some(key => !Number.isSafeInteger(key.index) || key.index < 1
+      || !Object.hasOwn(GEMINI_KEY_STATUS_LABELS, key.status)
+      || (key.cooldownUntil !== null && typeof key.cooldownUntil !== 'string'))) return null;
+  return { keyCount: value.keyCount, keys };
+};
+
 const readHiddenUploadBatchIds = () => {
   try {
     const value = JSON.parse(window.localStorage.getItem(HIDDEN_UPLOAD_BATCH_IDS_KEY) || '[]');
@@ -263,6 +284,8 @@ function App() {
   const [jobs, setJobs] = useState([]); 
   const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
+  const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
+  const [isCheckingGeminiKeys, setIsCheckingGeminiKeys] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState({});
   const [sseConnected, setSseConnected] = useState(false);
   const [nextCursor, setNextCursor] = useState(null);
@@ -887,6 +910,23 @@ function App() {
       alert('Không thể tiếp tục hàng đợi: ' + (error.response?.data?.error || error.message));
     }
   };
+
+  const handleCheckGeminiKeys = async () => {
+    setIsCheckingGeminiKeys(true);
+    try {
+      const response = await api.get('/gemini-keys/status', { timeout: 30_000 });
+      const status = normalizeGeminiKeyStatus(response.data);
+      if (!status) throw new Error('Máy chủ trả về trạng thái API key không hợp lệ.');
+      setGeminiKeyStatus({ type: 'success', ...status });
+    } catch (error) {
+      const message = error.response?.status === 404
+        ? 'Backend chưa có chức năng kiểm tra API key. Hãy deploy backend mới rồi thử lại.'
+        : 'Chưa thể kiểm tra API key. Vui lòng thử lại sau.';
+      setGeminiKeyStatus({ type: 'error', message });
+    } finally {
+      setIsCheckingGeminiKeys(false);
+    }
+  };
   const dashboard = jobStats?.cloud ? {
     ...jobStats.cloud,
     uploadingBatches: Math.max(jobStats.cloud.uploadingBatches, localDashboard.uploadingBatches),
@@ -915,6 +955,36 @@ function App() {
             ⏸ Tạm dừng để redeploy
           </button>
         )}
+        <div className="gemini-key-status-control-wrap">
+          <button
+            className="gemini-key-status-control"
+            onClick={handleCheckGeminiKeys}
+            disabled={isCheckingGeminiKeys}
+            title="Xem số lượng và trạng thái API key đang được backend nạp"
+          >
+            {isCheckingGeminiKeys ? 'Đang kiểm tra…' : '🔑 Kiểm tra API key'}
+          </button>
+          {geminiKeyStatus?.type === 'success' && (
+            <aside className="gemini-key-status-result" role="status">
+              <strong>Đã nạp {geminiKeyStatus.keyCount} API key</strong>
+              <ul>
+                {geminiKeyStatus.keys.map(key => (
+                  <li key={key.index}>
+                    Key {key.index}: {GEMINI_KEY_STATUS_LABELS[key.status]}
+                    {key.status === 'cooldown' && key.cooldownUntil
+                      ? ` · thử lại sau ${formatVietnamDateTime(key.cooldownUntil)}`
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          )}
+          {geminiKeyStatus?.type === 'error' && (
+            <aside className="gemini-key-status-result error" role="alert">
+              {geminiKeyStatus.message}
+            </aside>
+          )}
+        </div>
         <h1>🩺 StudyMed Translator</h1>
         <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
         <span className={`connection-status ${sseConnected ? 'connected' : 'disconnected'}`}>
