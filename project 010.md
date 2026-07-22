@@ -67,7 +67,9 @@ Frontend không gọi Gemini trực tiếp; không có thay đổi frontend dự
 | P010-G1-S01 đến S04 | Đã thực hiện cục bộ | SDK nâng lên 2.13.0, Node 22 tương thích; backend đạt 133/133 và frontend đạt 30/30 test. |
 | P010-G2-S01 đến S06 | Đã thực hiện cục bộ | Model/config/test/README đã được cập nhật; pipeline version là `p010-v1`. |
 | P010-G3-S02 đến S04 | Đã đạt trong môi trường cục bộ/API thật | 24/24 key trong `.env` mới tương thích payload P010. `smoke:p010-gemini` xác nhận text 65536, JSON schema 16384, thinking HIGH và Gemini Files API PDF đều trả `STOP` từ model 3.5. Smoke quality end-to-end đạt và được lưu tại `project-010-quality-smoke-report.json`. |
-| P010-G4 đến G6 | Chờ canary/deploy | Cần corpus đã được reviewer duyệt và quyền thao tác môi trường Render production. |
+| P010-G4 | Đang theo dõi | Live traffic hậu deploy đã xác nhận model/contract; corpus chuyên môn có reviewer vẫn chưa hoàn tất. |
+| P010-G5 | Đã deploy, đạt gate kỹ thuật ban đầu | Readiness, cấu hình runtime, telemetry model và cleanup đều đạt; còn chờ hết cửa sổ theo dõi production. |
+| P010-G6 | Chờ đóng | Chỉ đóng sau khi queue hậu deploy hoàn tất ổn định và có tổng kết theo dõi/reviewer. |
 
 ### Kết quả kiểm chứng trước redeploy — 22/07/2026
 
@@ -80,6 +82,17 @@ Frontend không gọi Gemini trực tiếp; không có thay đổi frontend dự
 - Final gate: backend 133/133, frontend 30/30, `git diff --check` không có lỗi và không còn runner kiểm thử chạy nền.
 - Cleanup: R2 source đã xóa, Gemini File tạm đã xóa, Mongo database cô lập đã drop.
 - Trạng thái rollout: sẵn sàng cho maintenance pause và redeploy; chưa xác nhận production sau deploy.
+
+### Kết quả kiểm chứng production sau deploy — 22/07/2026
+
+- Render process khởi động lúc `2026-07-22T12:24:50.854Z` (`19:24:50` giờ Việt Nam).
+- `GET /api/readiness` trả HTTP 200/`ready`; MongoDB và R2 đều available.
+- Runtime production khớp `.env` đã tải từ Render: model `gemini-3.5-flash-lite`, 24 key, worker concurrency 3 và parallel source budget 50 MiB.
+- Worker đã thoát maintenance, cleanup backlog và upload backlog đều bằng 0; không key nào bị disable.
+- Live traffic tự đi qua chu kỳ cooldown rồi tiếp tục xử lý; active jobs giảm từ 3 xuống 0 trước khi queue tạm hibernate vì cooldown. Không tạo thêm PDF canary để tránh tăng tải khi còn job thật.
+- MongoDB metadata chỉ đọc ghi nhận 79/79 stage call hậu deploy dùng `gemini-3.5-flash-lite` và 79/79 có `finishReason=STOP`; không có terminal error code.
+- Tại snapshot cuối: 7 chunk `passed`, 1 chunk `needs_review`, 18 chunk còn tiếp tục pipeline; 9 job còn `pending`. `needs_review` là kết quả guard chất lượng, không phải lỗi model/config.
+- Gate kỹ thuật hậu deploy đạt; P010 chưa đóng cho tới khi hoàn tất thời gian theo dõi production và review corpus chuyên môn.
 
 ## 4. Kế hoạch theo giai đoạn
 
