@@ -49,10 +49,11 @@ async function runPool(items, concurrency, worker) {
   await Promise.all(runners)
 }
 
-function buildManifest({ clientBatchId, folderName, entries }) {
+function buildManifest({ clientBatchId, folderName, priority = false, entries }) {
   return {
     clientBatchId,
     folderName,
+    priority,
     files: entries.map(({ file, clientUploadId }) => ({
       clientUploadId,
       name: file.name,
@@ -65,6 +66,7 @@ function buildManifest({ clientBatchId, folderName, entries }) {
 export async function uploadBatchToCloud({
   clientBatchId,
   folderName,
+  priority = false,
   entries,
   concurrency = 4,
   confirmChunkSize = 10,
@@ -76,7 +78,7 @@ export async function uploadBatchToCloud({
   onProgress = () => {},
   onItemState = () => {},
 }) {
-  const manifest = buildManifest({ clientBatchId, folderName, entries })
+  const manifest = buildManifest({ clientBatchId, folderName, priority, entries })
   const fileByClientId = new Map(entries.map(entry => [entry.clientUploadId, entry.file]))
   const totalBytes = entries.reduce((sum, entry) => sum + entry.file.size, 0)
   const loadedByClientId = new Map()

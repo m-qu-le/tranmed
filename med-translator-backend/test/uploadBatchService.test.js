@@ -38,6 +38,12 @@ test('manifest validation rejects duplicate IDs, non-PDF files and oversized bat
         ...base,
         files: [{ ...base.files[0], size: config.maxBatchBytes + 1 }],
     }, { ...config, maxFileSizeBytes: config.maxBatchBytes + 1 }), /vượt giới hạn/);
+    assert.throws(() => validateUploadManifest({ ...base, priority: 'true' }, config), /priority/);
+    assert.throws(() => validateUploadManifest({ ...base, folderName: 'Ưu tiên' }, config), /chỉ dùng cho hàng đợi ưu tiên/);
+
+    const priorityManifest = validateUploadManifest({ ...base, folderName: 'Bất kỳ', priority: true }, config);
+    assert.equal(priorityManifest.priority, true);
+    assert.equal(priorityManifest.folderName, 'Ưu tiên');
 });
 
 test('prepare creates 200 stable R2 jobs and repeated prepare reissues URLs without duplicates', async () => {
@@ -92,6 +98,45 @@ test('prepare creates 200 stable R2 jobs and repeated prepare reissues URLs with
     assert.equal(insertCalls, 1);
     assert.equal(presignCalls, 400);
     assert.equal((await batchEvent)[0].totalFiles, 200);
+});
+
+test('priority manifest persists its priority and reserved output group across prepare retries', async () => {
+    let batch = null;
+    let jobs = [];
+    const UploadBatch = {
+        findOne: () => query(batch),
+        async create(row) {
+            batch = { ...row, status: 'uploading', confirmedFiles: 0, confirmedBytes: 0, failedFiles: 0 };
+            return { ...batch, toObject: () => ({ ...batch }) };
+        },
+        async deleteOne() {},
+    };
+    const Job = {
+        find: filter => query(jobs.filter(job => job.uploadBatchId === filter.uploadBatchId)),
+        async insertMany(rows) { jobs = rows.map(row => ({ ...row })); },
+        async deleteMany() { jobs = []; },
+    };
+    const service = new UploadBatchService({
+        Job,
+        UploadBatch,
+        config,
+        r2: { async createPresignedPut() { return 'https://signed.invalid/priority'; } },
+    });
+    const manifest = {
+        clientBatchId: 'priority-client-batch',
+        folderName: 'Tên người dùng không được dùng',
+        priority: true,
+        files: [{ clientUploadId: 'priority-file', name: 'priority.pdf', size: 42, type: 'application/pdf' }],
+    };
+
+    await service.prepareBatch(manifest);
+    await service.prepareBatch(manifest);
+
+    assert.equal(batch.priority, 1);
+    assert.equal(batch.folderName, 'Ưu tiên');
+    assert.deepEqual(jobs.map(job => ({ priority: job.priority, folderName: job.folderName })), [
+        { priority: 1, folderName: 'Ưu tiên' },
+    ]);
 });
 
 test('confirm verifies size and ETag once, then remains idempotent', async () => {

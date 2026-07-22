@@ -4,6 +4,7 @@ const uploadBatchSchema = new mongoose.Schema({
     batchId: { type: String, required: true, unique: true },
     clientBatchId: { type: String, unique: true, sparse: true },
     folderName: { type: String, required: true, maxlength: 120 },
+    priority: { type: Number, enum: [0, 1], default: 0 },
     status: {
         type: String,
         enum: ['uploading', 'ready', 'partial', 'failed', 'completed', 'cancelled'],

@@ -93,4 +93,35 @@ describe('uploadBatchToCloud', () => {
       canCloseClient: true,
     }))
   })
+
+  it('includes the priority flag in the upload manifest', async () => {
+    const entry = {
+      clientUploadId: 'priority-client-file',
+      file: new File(['%PDF-priority'], 'priority.pdf', { type: 'application/pdf' }),
+    }
+    const apiClient = {
+      post: vi.fn(async (url, body) => {
+        if (url === '/upload-batches/prepare') {
+          expect(body.priority).toBe(true)
+          return { data: {
+            batchId: 'priority-batch',
+            items: [{ jobId: 'priority-job', clientUploadId: entry.clientUploadId, name: entry.file.name, size: entry.file.size, status: 'uploading', uploadUrl: 'https://account.r2.cloudflarestorage.com/incoming/priority.pdf?signed=1' }],
+          } }
+        }
+        return { data: { items: [{ jobId: 'priority-job', status: 'pending' }], canCloseClient: true } }
+      }),
+      get: vi.fn(async () => ({ data: { batchId: 'priority-batch', totalFiles: 1, confirmedFiles: 1, totalBytes: entry.file.size, confirmedBytes: entry.file.size, canCloseClient: true } })),
+    }
+
+    await uploadBatchToCloud({
+      clientBatchId: 'priority-client-batch',
+      folderName: 'Ưu tiên',
+      priority: true,
+      entries: [entry],
+      apiClient,
+      putFile: async (_url, file, { onProgress }) => onProgress({ loaded: file.size }),
+    })
+
+    expect(apiClient.post).toHaveBeenCalledWith('/upload-batches/prepare', expect.objectContaining({ priority: true }), expect.anything())
+  })
 })

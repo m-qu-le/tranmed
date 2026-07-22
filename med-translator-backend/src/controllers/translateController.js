@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import Job from '../models/jobModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
 import { r2Service, uploadBatchService } from '../services/runtimeServices.js';
-import { UploadBatchError } from '../services/uploadBatchService.js';
+import { PRIORITY_FOLDER_NAME, UploadBatchError } from '../services/uploadBatchService.js';
 import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
 import { qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
@@ -98,7 +98,17 @@ export const uploadFiles = async (req, res) => {
         }
 
         // [THÊM MỚI] Trích xuất tên thư mục từ request, nếu không có thì để "Mặc định"
-        const folderName = (req.body.folderName || 'Mặc định').trim().slice(0, 120) || 'Mặc định';
+        if (typeof req.body.priority !== 'undefined' && !['true', 'false'].includes(req.body.priority)) {
+            return res.status(400).json({ error: 'priority không hợp lệ.' });
+        }
+        const priority = req.body.priority === 'true';
+        const requestedFolderName = (req.body.folderName || 'Mặc định').trim().slice(0, 120) || 'Mặc định';
+        if (!priority && requestedFolderName.localeCompare(PRIORITY_FOLDER_NAME, 'vi', { sensitivity: 'base' }) === 0) {
+            return res.status(400).json({ error: `Tên thư mục ${PRIORITY_FOLDER_NAME} chỉ dùng cho hàng đợi ưu tiên.` });
+        }
+        const folderName = priority
+            ? PRIORITY_FOLDER_NAME
+            : requestedFolderName;
         const clientUploadId = typeof req.body.clientUploadId === 'string'
             ? req.body.clientUploadId.trim().slice(0, 100)
             : null;
@@ -107,7 +117,7 @@ export const uploadFiles = async (req, res) => {
 
         for (const file of req.files) {
             try {
-                jobs.push(await translationQueue.addJob(file, folderName, clientUploadId));
+                jobs.push(await translationQueue.addJob(file, folderName, clientUploadId, priority));
             } catch (error) {
                 await translationQueue.safeUnlink(file.path);
                 failures.push({ originalName: file.originalname, error: 'Không thể tạo job trong MongoDB.' });

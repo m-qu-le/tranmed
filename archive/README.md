@@ -6,5 +6,6 @@ Thư mục này chỉ chứa bằng chứng và báo cáo lịch sử của các
 - `project-003/`: hồ sơ đóng, báo cáo benchmark, migration, canary, hiệu năng và smoke đã lọc của PROJECT 003.
 - `project-004/`: hồ sơ đóng của cảnh báo kiểm soát chất lượng trong Preview, Copy và Download.
 - `project-005/`: hồ sơ đóng của thống kê toàn cục, ẩn batch bền vững và worker hai lane có admission 10 MiB.
+- `project-007/`: hồ sơ đóng của hàng đợi ưu tiên, gồm upload priority, claim tuyệt đối, tương thích ngủ đông và kiểm thử logic/mock.
 
 Kiến trúc, vận hành và giới hạn đang hiệu lực nằm trong `../.codex/knowledge/`.

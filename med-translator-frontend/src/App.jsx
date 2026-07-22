@@ -6,6 +6,7 @@ import { uploadBatchToCloud } from './cloudUploader.js';
 
 const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
 const HIDDEN_UPLOAD_BATCH_IDS_KEY = 'studymed.hiddenUploadBatchIds.v1';
+const PRIORITY_FOLDER_NAME = 'Ưu tiên';
 const vietnameseNameCollator = new Intl.Collator('vi', { numeric: true, sensitivity: 'base' });
 const formatVietnamDateTime = value => new Intl.DateTimeFormat('vi-VN', {
   timeZone: 'Asia/Ho_Chi_Minh',
@@ -52,6 +53,7 @@ const serverBatchToTask = batch => ({
   batchId: batch.batchId,
   clientBatchId: batch.clientBatchId,
   folderName: batch.folderName,
+  priority: batch.priority === 1 || batch.priority === true,
   entries: [],
   totalFiles: batch.totalFiles,
   totalBytes: batch.totalBytes,
@@ -267,6 +269,8 @@ function App() {
   const hiddenUploadBatchIds = useRef(null);
   const jobStatusById = useRef(new Map());
   const statsRefreshTimer = useRef(null);
+  const priorityFileInputRef = useRef(null);
+  const uploadStartLock = useRef(null);
   if (hiddenUploadBatchIds.current === null) hiddenUploadBatchIds.current = readHiddenUploadBatchIds();
 
   const rememberJobStatuses = items => {
@@ -452,13 +456,15 @@ function App() {
   };
 
   const startCloudUpload = async (task) => {
-    if (activeUploadTaskId) return;
+    if (uploadStartLock.current) return;
+    uploadStartLock.current = task.id;
     setActiveUploadTaskId(task.id);
     updateCloudTask(task.id, { status: 'preparing', progressMsg: 'Đang chuẩn bị URL upload an toàn...' });
     try {
       const result = await uploadBatchToCloud({
         clientBatchId: task.clientBatchId,
         folderName: task.folderName,
+        priority: task.priority,
         entries: task.entries,
         concurrency: 4,
         onPrepared: prepared => {
@@ -467,6 +473,7 @@ function App() {
             jobId: item.jobId,
             originalName: item.name,
             folderName: task.folderName,
+            priority: task.priority ? 1 : 0,
             status: item.status,
             logs: [],
             result: null,
@@ -506,27 +513,34 @@ function App() {
         progressMsg: `❌ ${error.message} Hãy bấm “Thử lại”.`,
       });
     } finally {
+      uploadStartLock.current = null;
       setActiveUploadTaskId(null);
+      setLocalQueue(current => {
+        const nextTask = current.find(candidate => candidate.status === 'queued');
+        if (nextTask) queueMicrotask(() => void startCloudUpload(nextTask));
+        return current;
+      });
     }
   };
 
-  const handleAddToQueue = () => {
-    if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
-    const files = Array.from(selectedFiles);
+  const enqueueFilesForUpload = (inputFiles, { priority = false, targetFolderName = '' } = {}) => {
+    const files = Array.from(inputFiles || []);
+    if (files.length === 0) return false;
     if (files.length > 500) {
       alert('Mỗi batch chỉ được tối đa 500 file PDF.');
-      return;
+      return false;
     }
     const invalidFile = files.find(file => !file.name.toLowerCase().endsWith('.pdf')
       || (file.type && file.type !== 'application/pdf'));
     if (invalidFile) {
       alert(`${invalidFile.name} không phải file PDF hợp lệ.`);
-      return;
+      return false;
     }
     const task = {
       id: crypto.randomUUID(),
       clientBatchId: crypto.randomUUID(),
-      folderName: folderName.trim() || 'Mặc định',
+      folderName: priority ? PRIORITY_FOLDER_NAME : (targetFolderName.trim() || 'Mặc định'),
+      priority,
       entries: files.map(file => ({ file, clientUploadId: crypto.randomUUID() })),
       totalFiles: files.length,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
@@ -535,14 +549,29 @@ function App() {
       percent: 0,
       canCloseClient: false,
       itemStates: {},
-      status: 'preparing',
-      progressMsg: 'Đang chuẩn bị upload lên Cloud...',
+      status: 'queued',
+      progressMsg: priority ? '⚡ Đang chờ upload ưu tiên lên Cloud...' : 'Đang chờ upload lên Cloud...',
     };
     setLocalQueue(previous => [...previous, task]);
+    void startCloudUpload(task);
+    return true;
+  };
+
+  const handleAddToQueue = () => {
+    if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
+    if (!enqueueFilesForUpload(selectedFiles, { targetFolderName: folderName })) return;
     document.getElementById('fileInput').value = '';
     setSelectedFiles(null);
     setFolderName('');
-    void startCloudUpload(task);
+  };
+
+  const handlePriorityDrop = (event) => {
+    event.preventDefault();
+    enqueueFilesForUpload(event.dataTransfer.files, { priority: true });
+  };
+
+  const handlePriorityFileChange = (event) => {
+    if (enqueueFilesForUpload(event.target.files, { priority: true })) event.target.value = '';
   };
 
   const handleRemoveFromQueue = (taskId) => {
@@ -569,7 +598,7 @@ function App() {
 
   const handleRetryLocalTask = (taskId) => {
     const task = localQueue.find(candidate => candidate.id === taskId);
-    if (task && !activeUploadTaskId) void startCloudUpload(task);
+    if (task && !uploadStartLock.current) void startCloudUpload(task);
   };
 
   const handleAbandonFailedItems = async (task) => {
@@ -792,10 +821,11 @@ function App() {
   };  
 
   const groupedJobs = [...jobs].sort((left, right) => (
-    vietnameseNameCollator.compare(left.folderName || 'Mặc định', right.folderName || 'Mặc định')
+    (Number(right.priority === 1) - Number(left.priority === 1))
+    || vietnameseNameCollator.compare(left.folderName || 'Mặc định', right.folderName || 'Mặc định')
     || vietnameseNameCollator.compare(left.originalName || left.fileName || '', right.originalName || right.fileName || '')
   )).reduce((acc, job) => {
-    const folder = job.folderName || 'Mặc định';
+    const folder = job.priority === 1 ? PRIORITY_FOLDER_NAME : (job.folderName || 'Mặc định');
     if (!acc[folder]) acc[folder] = [];
     acc[folder].push(job);
     return acc;
@@ -911,6 +941,33 @@ function App() {
               />
             </div>
           </div>
+
+          <div
+            aria-label="Hàng đợi ưu tiên"
+            onDragEnter={(event) => event.preventDefault()}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handlePriorityDrop}
+            style={{ padding: '18px', border: '2px dashed #d97706', borderRadius: '14px', background: '#fff7ed', color: '#9a3412', textAlign: 'center' }}
+          >
+            <strong>⚡ Hàng đợi ưu tiên</strong>
+            <div style={{ marginTop: '4px', fontSize: '14px' }}>Thả PDF vào đây để tự upload và dịch trước toàn bộ hàng đợi thường.</div>
+            <button
+              type="button"
+              onClick={() => priorityFileInputRef.current?.click()}
+              style={{ marginTop: '12px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #d97706', background: '#fff', color: '#9a3412', cursor: 'pointer' }}
+            >
+              Chọn PDF ưu tiên
+            </button>
+            <input
+              ref={priorityFileInputRef}
+              type="file"
+              accept="application/pdf"
+              multiple
+              onChange={handlePriorityFileChange}
+              className="sr-only"
+              aria-label="Chọn các file PDF ưu tiên"
+            />
+          </div>
           
           <button 
             onClick={handleAddToQueue} 
@@ -944,7 +1001,7 @@ function App() {
                 {localQueue.map(task => (
                   <li key={task.id} className={`cloud-task ${task.status}`}>
                     <div className="cloud-task-main">
-                      <strong>📁 {task.folderName} <span>({task.totalFiles} files · {formatMegabytes(task.totalBytes)})</span></strong>
+                      <strong>{task.priority ? '⚡' : '📁'} {task.folderName} <span>({task.totalFiles} files · {formatMegabytes(task.totalBytes)})</span></strong>
                       <span className="cloud-task-message">
                         {task.progressMsg}
                       </span>
@@ -978,6 +1035,7 @@ function App() {
         <div className="jobs-container">
           {Object.entries(groupedJobs).map(([folderName, folderJobs]) => {
             const isCollapsed = collapsedFolders[folderName];
+            const isPriorityFolder = folderName === PRIORITY_FOLDER_NAME && folderJobs.some(job => job.priority === 1);
             return (
               <div key={folderName} className="folder-group" style={{ marginBottom: '40px', border: '1px solid #e0e0e0', borderRadius: '8px', padding: '15px', background: '#fcfcfc' }}>
                 <div className="queue-header-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #007bff', paddingBottom: '10px', marginBottom: '20px' }}>
@@ -993,7 +1051,7 @@ function App() {
                     style={{ color: '#007bff', margin: 0, cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '8px' }}
                   >
                     <span style={{ fontSize: '0.7em', display: 'inline-block', transition: 'transform 0.2s ease', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-                    📁 {folderName} ({folderCounts.get(folderName) ?? folderJobs.length} files)
+                    {isPriorityFolder ? '📌 Ưu tiên' : `📁 ${folderName}`} ({folderCounts.get(folderName) ?? folderJobs.length} files)
                   </h3>
                 
                 <div style={{ display: 'flex', gap: '10px' }}>

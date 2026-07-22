@@ -10,7 +10,8 @@ StudyMed Translator nhận batch PDF y khoa, upload trực tiếp lên Cloudflar
 | `archive/project-003/` | Báo cáo lịch sử P003 đã lọc nội dung; không phải runtime | `project-003-production-long-canary-analysis.md` |
 | `archive/project-004/` | Hồ sơ cảnh báo kiểm soát chất lượng đã đóng; không phải runtime | `project-004.md` |
 | `archive/project-005/` | Hồ sơ thống kê toàn cục và worker hai lane đã đóng; không phải runtime | `project-005.md` |
-| `archive/project-001/`–`archive/project-005/` | Hồ sơ năm dự án đã đóng | `project-00x.md` |
+| `archive/project-007/` | Hồ sơ hàng đợi ưu tiên đã đóng; không phải runtime | `project-007.md` |
+| `archive/project-001/`–`archive/project-005/`, `archive/project-007/` | Hồ sơ dự án đã đóng | `project-00x.md` |
 
 ## Luồng hiện hành
 
@@ -19,7 +20,9 @@ React tạo upload batch (tối đa 200 PDF)
   → backend cấp presigned PUT URL + Job uploading
   → browser PUT trực tiếp lên R2, concurrency 4
   → backend confirm size/ETag; canCloseClient khi mọi item confirmed/skipped
-  → atomic claim pending → processing + processingToken + lease
+  → atomic claim pending theo priority DESC, createdAt ASC, _id ASC
+       (priority hoàn toàn trước normal; job đang processing không bị preempt)
+  → processing + processingToken + lease
   → Render stream một R2 object về file .part rồi rename atomically
   → PDF Worker cắt 2 trang/chunk và trả page range
   → quality: tạo context passport toàn PDF một lần/job
@@ -40,6 +43,7 @@ React tạo upload batch (tối đa 200 PDF)
 ## Bất biến phải giữ
 
 - Claim Job atomic; processing token + lease ngăn worker cũ ghi đè worker mới.
+- `Job.priority=1` luôn claim trước `priority=0`; retry vẫn tôn trọng `nextRetryAt`, còn ngủ đông không claim bất kỳ job nào.
 - Worker pool không vượt cấu hình `1|2`; job lớn/không rõ size chạy đơn và lane hai không bỏ qua FIFO.
 - Chỉ báo có thể đóng tab khi backend xác nhận batch an toàn trên R2.
 - `clientUploadId`, `clientBatchId` và storage key UUID giữ prepare/confirm/retry idempotent.
@@ -57,6 +61,7 @@ React tạo upload batch (tối đa 200 PDF)
 
 - Frontend không giữ secret R2/Gemini/MongoDB; chỉ nhận presigned URL hữu hạn từ backend.
 - MongoDB là nguồn sự thật cho batch, job, lease, stage và cleanup retry. SSE chỉ là tín hiệu; reconnect luôn resync qua HTTP.
+- Priority là metadata MongoDB của Job/UploadBatch, không suy luận từ UI hay tên folder; nhóm hệ thống `Ưu tiên` được backend dành riêng.
 - R2 là nguồn PDF bền vững trong lúc chờ/xử lý. Filesystem Render chỉ là cache tạm của đúng source đang chạy và có thể mất bất kỳ lúc nào.
 - Gemini được gọi trong backend. Mỗi chunk chạy stage tuần tự; concurrency chỉ nằm giữa tối đa hai chunk và trong pool upload phía browser.
 - Kết quả public chỉ lấy `TranslationChunk.content`; report/context/artifact trung gian là private và được dọn khi có thể.
@@ -71,6 +76,6 @@ React tạo upload batch (tối đa 200 PDF)
 
 ## Phần không thuộc runtime
 
-- `archive/project-001/`–`archive/project-005/` là bằng chứng/quyết định lịch sử, không được import bởi ứng dụng.
+- `archive/project-001/`–`archive/project-005/` và `archive/project-007/` là bằng chứng/quyết định lịch sử, không được import bởi ứng dụng.
 - `scripts/migrate-*`, `backup-*`, `reconcile-r2.js` và smoke scripts là công cụ vận hành chủ động, không chạy trong server.
 - Unit/regression test được giữ vì khóa các bất biến production. Harness benchmark P002/P003 một lần và test riêng của chúng đã được xóa.

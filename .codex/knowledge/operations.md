@@ -28,11 +28,11 @@ npm run build
 npm audit
 ```
 
-Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đóng; workload Gemini mới cần một dự án hoặc quyết định mới.
+Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đóng; workload Gemini mới cần một dự án hoặc quyết định mới. P007 được đóng bằng mock/unit/component test, không gọi Gemini, R2/Mongo production hay deployment smoke.
 
 ## Migration và deploy
 
-- Migration P001–P003 là additive/idempotent; production P003 đã backup, dry-run, migrate và verify index. Field P004 nullable nên không cần migration bắt buộc.
+- Migration P001–P003 là additive/idempotent; production P003 đã backup, dry-run, migrate và verify index. Field P004 nullable nên không cần migration bắt buộc. P007 thêm `priority` nullable/default-compatible và index claim additive; deploy backend trước frontend, không migration destructive.
 - Mốc commit đóng hồ sơ P003 trước lượt dọn cuối: `5edce7a`; đã có trên `main` và `feature/project-003-translation-quality`.
 - Render restart sau deploy v3 tại `2026-07-16T15:41:03.348Z`; health/readiness đạt, Mongo/R2 available, backlog 0.
 - Frontend tương thích legacy và quality; P004 công khai header đã escape chỉ khi job quality hoàn thành còn chunk cần review.
@@ -41,7 +41,7 @@ Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đó
 Checklist cho thay đổi tương lai:
 
 1. Backend test; frontend test/lint/build; `git diff --check`.
-2. Nếu đổi schema/index production: dry-run, backup khi có dữ liệu, rồi hậu kiểm.
+2. Nếu đổi schema/index production: dry-run, backup khi có dữ liệu, rồi hậu kiểm. Với P007, xác nhận index `{ status: 1, priority: -1, createdAt: 1, _id: 1 }` tồn tại trước khi xem hiệu năng priority là production-ready.
 3. Deploy backend trước frontend khi API contract thay đổi.
 4. Smoke chỉ ở mức tương xứng với rủi ro; không dùng dữ liệu sách trong log/commit.
 

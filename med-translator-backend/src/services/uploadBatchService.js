@@ -5,6 +5,8 @@ import { redactError } from '../utils/redactSecrets.js';
 import { appEvents } from './appEvents.js';
 import { operationalMetrics } from './operationalMetrics.js';
 
+export const PRIORITY_FOLDER_NAME = 'Ưu tiên';
+
 export class UploadBatchError extends Error {
     constructor(code, message, status = 400) {
         super(message);
@@ -18,6 +20,10 @@ function normalizeFolderName(value) {
     return (typeof value === 'string' ? value : 'Mặc định').trim().slice(0, 120) || 'Mặc định';
 }
 
+function isPriorityFolderName(value) {
+    return value.localeCompare(PRIORITY_FOLDER_NAME, 'vi', { sensitivity: 'base' }) === 0;
+}
+
 export function validateUploadManifest(payload, { maxFiles, maxFileSizeBytes, maxBatchBytes }) {
     if (!payload || typeof payload !== 'object') {
         throw new UploadBatchError('INVALID_MANIFEST', 'Manifest upload không hợp lệ.');
@@ -25,6 +31,10 @@ export function validateUploadManifest(payload, { maxFiles, maxFileSizeBytes, ma
     const clientBatchId = typeof payload.clientBatchId === 'string' ? payload.clientBatchId.trim() : '';
     if (!clientBatchId || clientBatchId.length > 128) {
         throw new UploadBatchError('INVALID_CLIENT_BATCH_ID', 'clientBatchId không hợp lệ.');
+    }
+    const priority = typeof payload.priority === 'undefined' ? false : payload.priority;
+    if (typeof priority !== 'boolean') {
+        throw new UploadBatchError('INVALID_PRIORITY', 'priority phải là boolean.');
     }
     if (!Array.isArray(payload.files) || payload.files.length === 0 || payload.files.length > maxFiles) {
         throw new UploadBatchError('INVALID_FILE_COUNT', `Batch phải có từ 1 đến ${maxFiles} file.`);
@@ -56,9 +66,15 @@ export function validateUploadManifest(payload, { maxFiles, maxFileSizeBytes, ma
         return { clientUploadId, name, size, type: 'application/pdf' };
     });
 
+    const folderName = normalizeFolderName(payload.folderName);
+    if (!priority && isPriorityFolderName(folderName)) {
+        throw new UploadBatchError('RESERVED_FOLDER_NAME', `Tên thư mục ${PRIORITY_FOLDER_NAME} chỉ dùng cho hàng đợi ưu tiên.`);
+    }
+
     return {
         clientBatchId,
-        folderName: normalizeFolderName(payload.folderName),
+        folderName: priority ? PRIORITY_FOLDER_NAME : folderName,
+        priority,
         files,
         totalBytes,
     };
@@ -113,6 +129,7 @@ export class UploadBatchService {
                 clientUploadId: file.clientUploadId,
                 originalName: file.name,
                 folderName: manifest.folderName,
+                priority: manifest.priority ? 1 : 0,
                 filePath: null,
                 status: 'uploading',
                 storageProvider: 'r2',
@@ -134,6 +151,7 @@ export class UploadBatchService {
                 batchId,
                 clientBatchId: manifest.clientBatchId,
                 folderName: manifest.folderName,
+                priority: manifest.priority ? 1 : 0,
                 totalFiles: rows.length,
                 totalBytes: manifest.totalBytes,
             });
@@ -256,6 +274,7 @@ export class UploadBatchService {
         return {
             batchId,
             folderName: batch.folderName,
+            priority: batch.priority === 1,
             status: batch.status,
             totalFiles: batch.totalFiles,
             totalBytes: batch.totalBytes,
@@ -271,7 +290,7 @@ export class UploadBatchService {
     }
 
     async listRecentBatches(limit = 20) {
-        const batches = await this.UploadBatch.find({}, 'batchId clientBatchId folderName status totalFiles totalBytes confirmedFiles confirmedBytes failedFiles skippedFiles readyAt createdAt')
+        const batches = await this.UploadBatch.find({}, 'batchId clientBatchId folderName priority status totalFiles totalBytes confirmedFiles confirmedBytes failedFiles skippedFiles readyAt createdAt')
             .sort({ createdAt: -1 })
             .limit(Math.min(100, Math.max(1, limit)))
             .lean();

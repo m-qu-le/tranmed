@@ -26,6 +26,7 @@ Cập nhật khi đóng PROJECT 001–005 ngày 18-07-2026.
 - Không có authentication theo quyết định chủ dự án; endpoint công khai vẫn cần CORS, rate limit và validation chặt.
 - AbortSignal không bảo đảm Gemini ngừng tính usage cho request đã nhận.
 - Budget worker P005 dùng kích thước source làm proxy bảo thủ cho RAM; canary nhỏ không chứng minh hai PDF lớn có thể chạy song song.
+- P007 áp dụng ưu tiên tuyệt đối theo yêu cầu: nếu priority được đưa vào liên tục, job thường có thể chờ vô hạn. Chỉ thay bằng quota/công bằng khi mở dự án mới và có quyết định owner.
 - Thay đổi model, human-review workflow, translation memory hoặc monitoring dài hạn phải mở dự án mới, không tự nối lại P003.
 
 ## Nguồn sự thật

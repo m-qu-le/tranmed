@@ -6,6 +6,7 @@ const jobSchema = new mongoose.Schema({
     clientUploadId: { type: String },
     originalName: { type: String, required: true },
     folderName: { type: String, default: 'Mặc định' }, // [THÊM MỚI] Nhóm các file lại thành thư mục
+    priority: { type: Number, enum: [0, 1], default: 0 },
     filePath: { type: String, default: null },
     status: { 
         type: String, 
@@ -99,7 +100,7 @@ jobSchema.index({ createdAt: -1 });
 // 2. Index Phức hợp (Compound Index) #1: Tối ưu cho hàm startWorker()
 // Truy vấn: Job.findOne({ status: 'pending' }).sort({ createdAt: 1 })
 // Tránh Full Collection Scan khi hàng đợi có hàng ngàn file.
-jobSchema.index({ status: 1, createdAt: 1 });
+jobSchema.index({ status: 1, priority: -1, createdAt: 1, _id: 1 });
 
 // Claim job đến hạn và phục hồi processing lease đã hết hạn.
 jobSchema.index({ status: 1, nextRetryAt: 1, createdAt: 1 });

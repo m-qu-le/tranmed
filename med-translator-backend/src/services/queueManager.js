@@ -229,7 +229,7 @@ export class QueueManager extends EventEmitter {
         await this.startWorker();
     }
 
-    async addJob(file, folderName, clientUploadId = null) {
+    async addJob(file, folderName, clientUploadId = null, priority = false) {
         if (clientUploadId) {
             const existing = await Job.findOne({ clientUploadId });
             if (existing) {
@@ -258,7 +258,8 @@ export class QueueManager extends EventEmitter {
                 jobId: randomUUID(),
                 ...(clientUploadId ? { clientUploadId } : {}),
                 originalName: file.originalname,
-                folderName: folderName || 'Mặc định',
+                folderName: priority ? 'Ưu tiên' : (folderName || 'Mặc định'),
+                priority: priority ? 1 : 0,
                 filePath: file.path,
                 sourceSize: Number.isSafeInteger(file.size) && file.size > 0 ? file.size : null,
                 storageProvider: 'local',
@@ -286,7 +287,7 @@ export class QueueManager extends EventEmitter {
         const filter = cursor ? { _id: { $gt: cursor } } : {};
         const rows = await Job.find(
             filter,
-            'jobId originalName folderName status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
+            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
         )
             .sort({ _id: 1 })
             .limit(limit + 1)
@@ -403,7 +404,7 @@ export class QueueManager extends EventEmitter {
 
     async peekNextJob() {
         return Job.findOne(this.pendingJobFilter(), '_id sourceSize')
-            .sort({ createdAt: 1 })
+            .sort({ priority: -1, createdAt: 1, _id: 1 })
             .lean();
     }
 
@@ -424,7 +425,7 @@ export class QueueManager extends EventEmitter {
                 },
                 $inc: { attemptCount: 1 }
             },
-            { sort: { createdAt: 1 }, returnDocument: 'after' }
+            { sort: { priority: -1, createdAt: 1, _id: 1 }, returnDocument: 'after' }
         );
     }
 

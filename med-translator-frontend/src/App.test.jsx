@@ -299,6 +299,55 @@ describe('App Cloud Uploader', () => {
     expect(screen.getAllByText(/xác nhận 200\/200/i)).toHaveLength(2)
   })
 
+  it('uploads files dropped into the priority queue immediately and pins their group first', async () => {
+    uploadBatchToCloud.mockImplementation(async options => {
+      expect(options.priority).toBe(true)
+      expect(options.folderName).toBe('Ưu tiên')
+      options.onPrepared({
+        batchId: 'priority-batch',
+        items: [{
+          jobId: 'priority-job',
+          clientUploadId: options.entries[0].clientUploadId,
+          name: options.entries[0].file.name,
+          status: 'uploading',
+        }],
+      })
+      return { confirmedFiles: 1, confirmedBytes: 12, canCloseClient: true }
+    })
+
+    render(<App />)
+    await screen.findByText(/Chưa có tài liệu nào/i)
+    const zone = screen.getByText('⚡ Hàng đợi ưu tiên').closest('[aria-label="Hàng đợi ưu tiên"]')
+
+    const file = new File(['%PDF-priority'], 'priority.pdf', { type: 'application/pdf' })
+    fireEvent.drop(zone, { dataTransfer: { files: [file] } })
+
+    await waitFor(() => expect(uploadBatchToCloud).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText((_, node) => (
+      node?.tagName === 'STRONG' && node.textContent.includes('⚡ Ưu tiên')
+    ))).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /📌 Ưu tiên/i })).toBeInTheDocument()
+  })
+
+  it('renders the priority group before alphabetically earlier normal folders and hides it when absent', async () => {
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: { pending: 2, processing: 0, completed: 0, failed: 0 } })
+      return Promise.resolve({ data: { items: [
+        { jobId: 'normal-job', folderName: 'Alpha', originalName: 'normal.pdf', status: 'pending', priority: 0 },
+        { jobId: 'priority-job', folderName: 'Ưu tiên', originalName: 'priority.pdf', status: 'pending', priority: 1 },
+      ], nextCursor: null } })
+    })
+
+    render(<App />)
+    const toggles = await screen.findAllByRole('button', { name: /(📌 Ưu tiên|📁 Alpha)/ })
+    expect(toggles.map(node => node.textContent.replace(/\s+/g, ''))).toEqual([
+      '▼📌Ưutiên(1files)',
+      '▼📁Alpha(1files)',
+    ])
+  })
+
   it('restores a close-safe batch from MongoDB without local File objects', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })

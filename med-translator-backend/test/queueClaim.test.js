@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import Job from '../src/models/jobModel.js';
+import System from '../src/models/systemModel.js';
 import { QueueManager } from '../src/services/queueManager.js';
 
 test('claimNextJob relies on one atomic pending-to-processing update', async (context) => {
@@ -16,6 +17,7 @@ test('claimNextJob relies on one atomic pending-to-processing update', async (co
         assert.deepEqual(r2SourceGate.storageKey, { $type: 'string' });
         assert.equal(update.$set.status, 'processing');
         assert.equal(options.returnDocument, 'after');
+        assert.deepEqual(options.sort, { priority: -1, createdAt: 1, _id: 1 });
         if (!pendingJobAvailable) return null;
         pendingJobAvailable = false;
         claims += 1;
@@ -31,6 +33,55 @@ test('claimNextJob relies on one atomic pending-to-processing update', async (co
 
     assert.equal(claims, 1);
     assert.equal(results.filter(Boolean).length, 1);
+});
+
+test('priority jobs sort before normal jobs in both peek and atomic claim', async (context) => {
+    const originalFindOne = Job.findOne;
+    const originalFindOneAndUpdate = Job.findOneAndUpdate;
+    let peekSort;
+    Job.findOne = () => ({
+        sort(sort) { peekSort = sort; return this; },
+        lean: async () => ({ _id: 'priority-candidate', sourceSize: 1 }),
+    });
+    Job.findOneAndUpdate = async (_filter, _update, options) => ({ jobId: 'priority-job', options });
+    context.after(() => {
+        Job.findOne = originalFindOne;
+        Job.findOneAndUpdate = originalFindOneAndUpdate;
+    });
+
+    const queue = new QueueManager();
+    await queue.peekNextJob();
+    const claimed = await queue.claimNextJob();
+
+    assert.deepEqual(peekSort, { priority: -1, createdAt: 1, _id: 1 });
+    assert.deepEqual(claimed.options.sort, { priority: -1, createdAt: 1, _id: 1 });
+});
+
+test('priority work remains pending while hibernating and is claimed after wake-up', async (context) => {
+    const originalFindOneAndUpdate = System.findOneAndUpdate;
+    System.findOneAndUpdate = async () => null;
+    context.after(() => { System.findOneAndUpdate = originalFindOneAndUpdate; });
+
+    const queue = new QueueManager({ concurrency: 1 });
+    const claimed = [];
+    let priorityPending = true;
+    queue.isHibernating = true;
+    queue.recoverExpiredLeases = async () => 0;
+    queue.scheduleNextRetry = async () => {};
+    queue.createLeaseHeartbeat = () => null;
+    queue.claimAdmissibleJob = async () => {
+        if (!priorityPending) return null;
+        priorityPending = false;
+        claimed.push('priority-job');
+        return { jobId: 'priority-job', sourceSize: 1, processingToken: 'priority-token', attemptCount: 1, maxAttempts: 3 };
+    };
+    queue.processClaimedJob = async () => {};
+
+    await queue.startWorker();
+    assert.deepEqual(claimed, []);
+
+    await queue.wakeUp();
+    assert.deepEqual(claimed, ['priority-job']);
 });
 
 test('candidate claim keeps the peeked ID in the atomic update filter', async (context) => {
