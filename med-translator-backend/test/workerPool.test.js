@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import System from '../src/models/systemModel.js';
+import { PARALLEL_SOURCE_BUDGET_BYTES } from '../src/config/env.js';
 import {
     CIRCUIT_BREAKER_WAKEUP_POLICY,
     QueueManager,
-    PARALLEL_SOURCE_BUDGET_BYTES,
     nextCircuitBreakerWakeup,
 } from '../src/services/queueManager.js';
 
@@ -31,22 +31,22 @@ test('circuit breaker wakes at the next 15:00 in Vietnam instead of after four h
     );
 });
 
-test('admission allows two small FIFO jobs but blocks over-budget and unknown-size jobs', async () => {
-    const queue = new QueueManager({ concurrency: 2 });
-    queue.activeJobs.set('active', { sourceSize: 3 * MiB });
-    queue.activeSourceBytes = 3 * MiB;
+test('admission allows the 100 MiB budget but blocks the 101 MiB FIFO head and unknown-size jobs', async () => {
+    const queue = new QueueManager({ concurrency: 5 });
+    queue.activeJobs.set('active', { sourceSize: 80 * MiB });
+    queue.activeSourceBytes = 80 * MiB;
     let claims = 0;
-    queue.peekNextJob = async () => ({ _id: 'small', sourceSize: 4 * MiB });
+    queue.peekNextJob = async () => ({ _id: 'fits-exactly', sourceSize: 20 * MiB });
     queue.claimNextJob = async id => {
         claims += 1;
-        return { jobId: String(id), sourceSize: 4 * MiB };
+        return { jobId: String(id), sourceSize: 20 * MiB };
     };
 
-    assert.equal((await queue.claimAdmissibleJob()).jobId, 'small');
+    assert.equal((await queue.claimAdmissibleJob()).jobId, 'fits-exactly');
     assert.equal(claims, 1);
 
-    queue.activeSourceBytes = 6 * MiB;
-    queue.peekNextJob = async () => ({ _id: 'fifo-head', sourceSize: 5 * MiB });
+    queue.activeSourceBytes = 100 * MiB;
+    queue.peekNextJob = async () => ({ _id: 'fifo-head', sourceSize: MiB });
     assert.equal(await queue.claimAdmissibleJob(), null);
     assert.equal(claims, 1, 'the FIFO head must not be claimed or skipped when it does not fit');
 
@@ -55,7 +55,45 @@ test('admission allows two small FIFO jobs but blocks over-budget and unknown-si
     queue.peekNextJob = async () => { peeked = true; return { _id: 'behind-unknown', sourceSize: MiB }; };
     assert.equal(await queue.claimAdmissibleJob(), null);
     assert.equal(peeked, false, 'an unknown-size active job must run alone');
-    assert.equal(PARALLEL_SOURCE_BUDGET_BYTES, 10 * MiB);
+    assert.equal(PARALLEL_SOURCE_BUDGET_BYTES, 100 * MiB);
+});
+
+test('worker pool activates five valid-source jobs without claiming a sixth over budget job', async () => {
+    const queue = new QueueManager({ concurrency: 5 });
+    const gates = Array.from({ length: 5 }, deferred);
+    const jobs = Array.from({ length: 6 }, (_, index) => ({
+        _id: `job-${index + 1}`,
+        jobId: `job-${index + 1}`,
+        sourceSize: 20 * MiB,
+        processingToken: `token-${index + 1}`,
+        attemptCount: 1,
+        maxAttempts: 3,
+    }));
+    const claimedIds = [];
+    queue.recoverExpiredLeases = async () => 0;
+    queue.scheduleNextRetry = async () => {};
+    queue.createLeaseHeartbeat = () => null;
+    queue.peekNextJob = async () => jobs[0] || null;
+    queue.claimNextJob = async candidateId => {
+        const index = candidateId
+            ? jobs.findIndex(job => job._id === candidateId)
+            : 0;
+        const job = index < 0 ? null : jobs.splice(index, 1)[0];
+        if (job) claimedIds.push(job.jobId);
+        return job;
+    };
+    queue.processClaimedJob = async job => gates[Number(job.jobId.slice(-1)) - 1].promise;
+
+    await queue.startWorker();
+
+    assert.equal(queue.activeJobs.size, 5);
+    assert.equal(queue.activeSourceBytes, 100 * MiB);
+    assert.deepEqual(claimedIds, ['job-1', 'job-2', 'job-3', 'job-4', 'job-5']);
+    assert.equal(jobs[0].jobId, 'job-6');
+
+    queue.isMaintenancePaused = true;
+    gates.forEach(gate => gate.resolve());
+    await new Promise(resolve => setImmediate(resolve));
 });
 
 test('an empty lane claims a large or unknown-size FIFO head to run alone', async () => {
@@ -158,7 +196,7 @@ test('hibernation blocks refill while allowing in-flight work to finish', async 
 });
 
 test('redeploy pause stops refilling and is not carried into a new server instance', async () => {
-    const queue = new QueueManager();
+    const queue = new QueueManager({ concurrency: 1 });
     const first = deferred();
     const second = deferred();
     const jobs = [
@@ -228,7 +266,7 @@ test('worker status exposes only aggregate pool observations', () => {
         concurrency: 2,
         activeJobs: 1,
         activeSourceBytes: 3 * MiB,
-        parallelSourceBudgetBytes: 10 * MiB,
+        parallelSourceBudgetBytes: 100 * MiB,
     });
     assert.equal(JSON.stringify(queue.getSystemStatus()).includes('private-job-id'), false);
 });

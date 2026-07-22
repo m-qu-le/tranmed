@@ -12,6 +12,7 @@ import TranslationChunk from '../models/translationChunkModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
 import {
     MAX_JOB_ATTEMPTS,
+    PARALLEL_SOURCE_BUDGET_BYTES,
     TRANSLATION_PIPELINE_MODE,
     TRANSLATION_WORKER_CONCURRENCY
 } from '../config/env.js';
@@ -36,8 +37,6 @@ const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
-export const PARALLEL_SOURCE_BUDGET_BYTES = 10 * 1024 * 1024;
-
 export function nextCircuitBreakerWakeup(now = new Date()) {
     const wakeupTime = new Date(now.getTime());
     wakeupTime.setUTCHours(CIRCUIT_BREAKER_WAKEUP_UTC_HOUR, 0, 0, 0);
@@ -458,7 +457,7 @@ export class QueueManager extends EventEmitter {
             const candidate = await this.peekNextJob();
             if (!candidate) return null;
             const sourceSize = candidate.sourceSize;
-            // ponytail: 10 MiB source bytes là proxy bảo thủ; nâng cấp bằng admission theo RAM đo được nếu cần chạy song song PDF lớn.
+            // ponytail: source bytes là proxy bảo thủ; nâng cấp bằng admission theo RAM đo được nếu cần chạy song song PDF lớn.
             if (!Number.isSafeInteger(sourceSize)
                 || sourceSize <= 0
                 || this.activeSourceBytes + sourceSize > PARALLEL_SOURCE_BUDGET_BYTES) {

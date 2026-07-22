@@ -78,12 +78,23 @@ export function readP003Config(source = process.env) {
 
 export function readTranslationWorkerConcurrency(source = process.env) {
     const rawValue = source.TRANSLATION_WORKER_CONCURRENCY;
-    if (rawValue === undefined || rawValue === '') return 1;
+    if (rawValue === undefined || rawValue === '') return 5;
     const normalized = String(rawValue).trim();
-    if (!['1', '2'].includes(normalized)) {
-        throw new Error('TRANSLATION_WORKER_CONCURRENCY chỉ nhận 1 hoặc 2.');
+    if (!['1', '2', '3', '4', '5'].includes(normalized)) {
+        throw new Error('TRANSLATION_WORKER_CONCURRENCY chỉ nhận số nguyên từ 1 đến 5.');
     }
     return Number(normalized);
+}
+
+export function readParallelSourceBudgetMb(source = process.env) {
+    const rawValue = source.PARALLEL_SOURCE_BUDGET_MB;
+    if (rawValue === undefined || rawValue === '') return 100;
+    const normalized = String(rawValue).trim();
+    const value = Number(normalized);
+    if (!Number.isSafeInteger(value) || value < 10 || value > 100 || String(value) !== normalized) {
+        throw new Error('PARALLEL_SOURCE_BUDGET_MB chỉ nhận số nguyên từ 10 đến 100.');
+    }
+    return value;
 }
 
 const p003Config = readP003Config();
@@ -92,6 +103,7 @@ export const PDF_PAGES_PER_CHUNK = p003Config.pagesPerChunk;
 export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
 export const QUALITY_MAX_REPAIR_CYCLES = p003Config.maxRepairCycles;
 export const TRANSLATION_WORKER_CONCURRENCY = readTranslationWorkerConcurrency();
+export const PARALLEL_SOURCE_BUDGET_BYTES = readParallelSourceBudgetMb() * 1024 * 1024;
 
 function readRequiredString(name, missing) {
     const value = process.env[name]?.trim();

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readTranslationWorkerConcurrency, validateRuntimeEnv } from '../src/config/env.js';
+import {
+    readParallelSourceBudgetMb,
+    readTranslationWorkerConcurrency,
+    validateRuntimeEnv,
+} from '../src/config/env.js';
 
 const R2_VARIABLES = [
     'R2_ACCOUNT_ID',
@@ -31,14 +35,26 @@ test('runtime validation names every missing R2 variable without printing values
     }
 });
 
-test('translation worker concurrency defaults to one and accepts only one or two', () => {
-    assert.equal(readTranslationWorkerConcurrency({}), 1);
+test('translation worker concurrency defaults to five and accepts integers from one through five', () => {
+    assert.equal(readTranslationWorkerConcurrency({}), 5);
     assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: '1' }), 1);
-    assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: ' 2 ' }), 2);
-    for (const value of ['0', '3', '1.5', 'two']) {
+    assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: ' 5 ' }), 5);
+    for (const value of ['0', '6', '1.5', 'two']) {
         assert.throws(
             () => readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: value }),
-            /chỉ nhận 1 hoặc 2/
+            /chỉ nhận số nguyên từ 1 đến 5/
+        );
+    }
+});
+
+test('parallel source budget defaults to 100 MiB and accepts integers from 10 through 100', () => {
+    assert.equal(readParallelSourceBudgetMb({}), 100);
+    assert.equal(readParallelSourceBudgetMb({ PARALLEL_SOURCE_BUDGET_MB: '10' }), 10);
+    assert.equal(readParallelSourceBudgetMb({ PARALLEL_SOURCE_BUDGET_MB: ' 100 ' }), 100);
+    for (const value of ['9', '101', '10.5', 'many']) {
+        assert.throws(
+            () => readParallelSourceBudgetMb({ PARALLEL_SOURCE_BUDGET_MB: value }),
+            /chỉ nhận số nguyên từ 10 đến 100/
         );
     }
 });

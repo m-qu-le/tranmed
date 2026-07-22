@@ -17,7 +17,8 @@ Các giới hạn quan trọng:
 - `MAX_UPLOAD_STORAGE_MB`: ngân sách disk cho PDF tạm, mặc định 400 MB.
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
-- `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận `1` hoặc `2`, mặc định `1`. Rollback tải xử lý bằng cách đặt lại `1` và restart Render.
+- `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận số nguyên từ `1` đến `5`, mặc định `5`.
+- `PARALLEL_SOURCE_BUDGET_MB`: chỉ nhận số nguyên từ `10` đến `100`, mặc định `100`. Đây là tổng `sourceSize` của các job chạy song song, không phải RAM thực tế.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
 - `MAINTENANCE_CONTROL_TOKEN`: mã riêng để tạm dừng hàng đợi trước redeploy; đặt một chuỗi ngẫu nhiên dài trên Render, không đặt trong biến `VITE_*` hay commit vào Git.
 - `TRANSLATION_PIPELINE_MODE`: mặc định `quality` sau khi chủ dự án chốt B4; đặt rõ `legacy` để rollback.
@@ -29,13 +30,13 @@ Các giới hạn quan trọng:
 
 Sau khi mọi batch upload đã báo an toàn trên Cloud, chọn nút nhỏ **“Tạm dừng để redeploy”** ở góc trên trái, nhập `MAINTENANCE_CONTROL_TOKEN`, rồi chờ banner báo không còn job đang chạy. Khi đó có thể redeploy Render. Chế độ tạm dừng chỉ tồn tại trong instance cũ; server mới tự nhận queue và chạy bình thường, không cần bấm nút khởi động lại.
 
-## Thống kê và worker pool P005
+## Thống kê và worker pool P008
 
 - `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.
 - `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; không công khai ID hay tên file active.
-- Khi concurrency là `2`, lane thứ hai chỉ nhận đúng job FIFO kế tiếp nếu mọi job active có `sourceSize` hợp lệ và tổng không quá 10 MiB. Job lớn hoặc thiếu size chạy một mình.
-- Ngưỡng source bytes là proxy bảo thủ cho RAM, không phải phép đo bộ nhớ thực. Chỉ bật production `2` sau canary hai PDF nhỏ và giữ peak RAM dưới 80% giới hạn instance.
-- P005 không đổi schema và không cần migration. Rollback worker chỉ cần đặt `TRANSLATION_WORKER_CONCURRENCY=1` rồi restart.
+- Tối đa 5 lane có thể chạy đồng thời. Sau job đầu, lane tiếp theo chỉ nhận đúng job FIFO kế tiếp khi mọi job active có `sourceSize` hợp lệ và tổng không vượt `PARALLEL_SOURCE_BUDGET_MB`; job lớn hoặc thiếu size chạy một mình.
+- Ngưỡng source bytes là proxy, không phải phép đo RAM thực. Nếu cần rollback tải xử lý, đặt rõ `TRANSLATION_WORKER_CONCURRENCY=2` và `PARALLEL_SOURCE_BUDGET_MB=10` (hoặc `1` / `10`), rồi restart Render.
+- P008 không đổi schema và không cần migration.
 
 ## Kiểm tra và migration
 
