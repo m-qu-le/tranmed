@@ -7,6 +7,8 @@ import { rateLimit } from 'express-rate-limit';
 import { 
     uploadFiles, 
     getJobsSummary, 
+    getTerminalFailures,
+    retryTerminalFailures,
     getJobStats,
     getGeminiKeyStatus,
     getJobResult, 
@@ -61,6 +63,7 @@ router.get('/upload-batches/:batchId', getUploadBatchStatus);
 // 2. Các API lấy trạng thái và kết quả
 router.get('/jobs', getJobsSummary);
 router.get('/jobs/stats', getJobStats);
+router.get('/jobs/terminal-failures', getTerminalFailures);
 router.get('/gemini-keys/status', getGeminiKeyStatus);
 router.get('/status', getSystemStatus); // Route lấy trạng thái hệ thống
 router.get('/metrics', getOperationalMetrics);
@@ -73,6 +76,7 @@ router.get('/stream', streamLogs);
 // 4. API Xóa tiến trình hàng loạt 
 // Định tuyến POST /bulk-delete (Nhận mảng jobIds qua req.body)
 router.post('/bulk-delete', bulkDeleteJobs);
+router.post('/jobs/retry-terminal', retryTerminalFailures);
 
 // 5. API Xóa tiến trình đơn lẻ
 // Định tuyến DELETE /jobs/:jobId

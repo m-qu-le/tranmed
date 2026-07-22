@@ -77,3 +77,17 @@ test('cleanup retry sweeper resumes persisted pending work after restart', async
     assert.equal(rows[0].result.cleaned, true);
     assert.equal(deletes, 1);
 });
+
+test('retention sweeper deletes only expired failed R2 sources', async () => {
+    const jobs = [{
+        jobId: 'expired-failure', status: 'failed', storageProvider: 'r2', storageKey: 'incoming/expired.pdf',
+        sourceState: 'ready', sourceCleanupAttempts: 0, sourceRetentionUntil: new Date(Date.now() - 1),
+    }];
+    const Job = { find: () => query(jobs), async updateOne() {} };
+    let deletes = 0;
+    const service = new SourceCleanupService({ Job, r2: { async deleteObject() { deletes += 1; } } });
+    const rows = await service.sweepExpiredFailedSources();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].result.cleaned, true);
+    assert.equal(deletes, 1);
+});

@@ -88,4 +88,18 @@ export class SourceCleanupService {
         }
         return results;
     }
+
+    async sweepExpiredFailedSources({ limit = 50, now = new Date() } = {}) {
+        const jobs = await this.Job.find({
+            status: 'failed',
+            storageProvider: 'r2',
+            sourceState: 'ready',
+            sourceRetentionUntil: { $lte: now },
+        }).sort({ sourceRetentionUntil: 1 }).limit(limit).lean();
+        const results = [];
+        for (const job of jobs) {
+            results.push({ job, result: await this.cleanupSource(job, { reason: 'failed_source_retention_expired' }) });
+        }
+        return results;
+    }
 }

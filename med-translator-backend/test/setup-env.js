@@ -9,7 +9,7 @@ const defaults = {
     R2_REGION: 'auto',
     R2_PRESIGNED_URL_TTL_SECONDS: '1800',
     R2_UPLOAD_CONCURRENCY: '4',
-    R2_SOURCE_RETENTION_DAYS: '3',
+    R2_SOURCE_RETENTION_DAYS: '7',
 };
 
 for (const [name, value] of Object.entries(defaults)) {

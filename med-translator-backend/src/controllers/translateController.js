@@ -362,6 +362,26 @@ export const forceWakeUpSystem = async (req, res) => {
     }
 };
 
+export const getTerminalFailures = async (req, res) => {
+    try {
+        const requestedLimit = Number.parseInt(req.query.limit || '100', 10);
+        const limit = Math.min(200, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 100));
+        const cursor = req.query.cursor || null;
+        if (cursor && !mongoose.isValidObjectId(cursor)) return res.status(400).json({ error: 'Cursor không hợp lệ.' });
+        res.status(200).json(await translationQueue.getTerminalFailures({ limit, cursor }));
+    } catch {
+        res.status(500).json({ error: 'Không thể đọc danh sách file cần xử lý.' });
+    }
+};
+
+export const retryTerminalFailures = async (_req, res) => {
+    try {
+        res.status(200).json(await translationQueue.retryTerminalFailures());
+    } catch {
+        res.status(500).json({ error: 'Không thể thử lại các file có thể phục hồi.' });
+    }
+};
+
 export const pauseForRedeploy = (_req, res) => {
     const status = translationQueue.pauseForRedeploy();
     res.status(200).json({

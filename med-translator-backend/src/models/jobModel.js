@@ -39,7 +39,13 @@ const jobSchema = new mongoose.Schema({
     attemptCount: { type: Number, default: 0, min: 0 },
     maxAttempts: { type: Number, default: 3, min: 1 },
     quotaRetryCount: { type: Number, default: 0, min: 0 },
+    retryCount: { type: Number, default: 0, min: 0 },
+    retryStartedAt: { type: Date, default: null },
     nextRetryAt: { type: Date, default: null },
+    failureCategory: { type: String, enum: ['infrastructure', 'content', 'terminal'], default: null },
+    terminalAt: { type: Date, default: null },
+    sourceRetentionUntil: { type: Date, default: null },
+    failureAdvice: { type: String, default: null },
     cancelRequested: { type: Boolean, default: false },
     processingToken: { type: String, default: null },
     leaseExpiresAt: { type: Date, default: null },
@@ -120,5 +126,6 @@ jobSchema.index({ storageKey: 1 }, { unique: true, sparse: true });
 jobSchema.index({ uploadBatchId: 1, createdAt: 1 });
 jobSchema.index({ sourceState: 1, updatedAt: 1 });
 jobSchema.index({ sourceCleanupState: 1, sourceCleanupNextRetryAt: 1 });
+jobSchema.index({ status: 1, sourceRetentionUntil: 1 });
 
 export default mongoose.model('Job', jobSchema);

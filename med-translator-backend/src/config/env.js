@@ -115,6 +115,7 @@ export const MAX_UPLOAD_STORAGE_MB = readPositiveInteger('MAX_UPLOAD_STORAGE_MB'
 export const MAX_FILE_SIZE_MB = readPositiveInteger('MAX_FILE_SIZE_MB', 350);
 export const MAX_JOB_ATTEMPTS = readPositiveInteger('MAX_JOB_ATTEMPTS', 3);
 export const GEMINI_TIMEOUT_MS = readPositiveInteger('GEMINI_TIMEOUT_MS', 180000);
+export const R2_SOURCE_RETENTION_DAYS = readPositiveInteger('R2_SOURCE_RETENTION_DAYS', 7);
 
 export function validateRuntimeEnv() {
     const missing = [];
@@ -167,7 +168,7 @@ export function validateRuntimeEnv() {
             region: r2Region,
             presignedUrlTtlSeconds: readPositiveInteger('R2_PRESIGNED_URL_TTL_SECONDS'),
             uploadConcurrency: readPositiveInteger('R2_UPLOAD_CONCURRENCY'),
-            sourceRetentionDays: readPositiveInteger('R2_SOURCE_RETENTION_DAYS'),
+            sourceRetentionDays: R2_SOURCE_RETENTION_DAYS,
         }),
     });
 }

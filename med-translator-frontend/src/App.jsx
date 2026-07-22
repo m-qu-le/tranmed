@@ -282,6 +282,7 @@ function App() {
   const [activeUploadTaskId, setActiveUploadTaskId] = useState(null);
   
   const [jobs, setJobs] = useState([]); 
+  const [terminalFailures, setTerminalFailures] = useState([]);
   const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
   const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
@@ -320,17 +321,22 @@ function App() {
     const fetchInitialData = async () => {
       try {
         // Lấy trạng thái hệ thống
-        const [statusRes, jobsRes, statsRes] = await Promise.all([
+        const [statusRes, jobsRes, statsRes, terminalFailuresRes] = await Promise.all([
           api.get('/status'),
           api.get('/jobs'),
           api.get('/jobs/stats').catch(error => {
             console.error('Không thể tải thống kê job:', error);
             return null;
           }),
+          api.get('/jobs/terminal-failures').catch(error => {
+            console.error('Không thể tải danh sách file cần xử lý:', error);
+            return null;
+          }),
         ]);
         setSysStatus(statusRes.data);
         const initialStats = normalizeJobStats(statsRes?.data);
         if (initialStats) setJobStats(initialStats);
+        setTerminalFailures(Array.isArray(terminalFailuresRes?.data?.items) ? terminalFailuresRes.data.items : []);
         
         // Cầu chì bảo vệ: Chặn trường hợp Render trả về trang HTML 502 thay vì JSON
         const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
@@ -378,7 +384,7 @@ function App() {
 
     const resync = async () => {
       try {
-        const [statusRes, jobsRes, batchesRes, statsRes] = await Promise.all([
+        const [statusRes, jobsRes, batchesRes, statsRes, terminalFailuresRes] = await Promise.all([
           api.get('/status', { timeout: 30_000 }),
           api.get('/jobs', { timeout: 30_000 }),
           api.get('/upload-batches', { params: { limit: 20 }, timeout: 30_000 }),
@@ -386,6 +392,7 @@ function App() {
             console.error('Không thể đồng bộ thống kê job:', error);
             return null;
           }),
+          api.get('/jobs/terminal-failures', { timeout: 30_000 }).catch(() => null),
         ]);
         setSysStatus(statusRes.data);
         const jobItems = Array.isArray(jobsRes.data) ? jobsRes.data : jobsRes.data?.items;
@@ -397,6 +404,7 @@ function App() {
         }
         const refreshedStats = normalizeJobStats(statsRes?.data);
         if (refreshedStats) setJobStats(refreshedStats);
+        if (Array.isArray(terminalFailuresRes?.data?.items)) setTerminalFailures(terminalFailuresRes.data.items);
         const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
         setLocalQueue(previous => mergeServerBatches(previous, batches, hiddenUploadBatchIds.current));
       } catch (error) {
@@ -681,6 +689,7 @@ function App() {
     try {
       await api.delete(`/jobs/${encodeURIComponent(jobId)}`, { timeout: 30_000 });
       setJobs(prevJobs => prevJobs.filter(job => job.jobId !== jobId));
+      setTerminalFailures(previous => previous.filter(job => job.jobId !== jobId));
       jobStatusById.current.delete(jobId);
       void refreshJobStats();
     } catch (error) {
@@ -707,6 +716,7 @@ function App() {
       
       // Dọn dẹp State UI nội bộ
       setJobs(prevJobs => prevJobs.filter(job => !jobIds.includes(job.jobId)));
+      setTerminalFailures(previous => previous.filter(job => !jobIds.includes(job.jobId)));
       for (const jobId of jobIds) jobStatusById.current.delete(jobId);
       void refreshJobStats();
     } catch (error) {
@@ -725,6 +735,7 @@ function App() {
       
       // Lọc bỏ toàn bộ job thuộc thư mục này ra khỏi State để UI cập nhật ngay lập tức
       setJobs(prevJobs => prevJobs.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
+      setTerminalFailures(previous => previous.filter(job => (job.folderName || 'Mặc định') !== targetFolderName));
       for (const job of jobs) {
         if ((job.folderName || 'Mặc định') === targetFolderName) jobStatusById.current.delete(job.jobId);
       }
@@ -931,6 +942,21 @@ function App() {
       setIsCheckingGeminiKeys(false);
     }
   };
+
+  const handleRetryTerminalFailures = async () => {
+    try {
+      const response = await api.post('/jobs/retry-terminal', null, { timeout: 30_000 });
+      const { retried = 0, skipped = 0 } = response.data || {};
+      alert(retried > 0
+        ? `Đã đưa ${retried} file trở lại hàng chờ.${skipped ? ` ${skipped} file không có source để thử lại.` : ''}`
+        : `Không có file nào còn source để thử lại.${skipped ? ` ${skipped} file cần tải lại PDF gốc.` : ''}`);
+      const failures = await api.get('/jobs/terminal-failures', { timeout: 30_000 });
+      setTerminalFailures(Array.isArray(failures.data?.items) ? failures.data.items : []);
+      void refreshJobStats();
+    } catch (error) {
+      alert('Không thể thử lại: ' + (error.response?.data?.error || error.message));
+    }
+  };
   const dashboard = jobStats?.cloud ? {
     ...jobStats.cloud,
     uploadingBatches: Math.max(jobStats.cloud.uploadingBatches, localDashboard.uploadingBatches),
@@ -991,6 +1017,9 @@ function App() {
               {geminiKeyStatus.message}
             </aside>
           )}
+          <button className="gemini-key-status-control" onClick={handleRetryTerminalFailures} title="Chỉ thử lại các file lỗi còn source trên Cloud">
+            🔄 Thử lại lỗi có thể phục hồi
+          </button>
         </div>
         <h1>🩺 StudyMed Translator</h1>
         <p>Hệ thống tự động dịch sách và tài liệu Y khoa (Multi-Batch Mode)</p>
@@ -1023,6 +1052,27 @@ function App() {
             <small>Chờ {jobStats?.pending ?? '—'} · xử lý {jobStats?.processing ?? '—'} · lỗi {jobStats?.failed ?? '—'}</small>
           </article>
         </section>
+
+        {terminalFailures.length > 0 && (
+          <section className="terminal-failures" aria-label="File cần tải lại hoặc xử lý" style={{ marginBottom: '24px', border: '1px solid #e6a700', borderRadius: '10px', padding: '16px', background: '#fffaf0' }}>
+            <h2 style={{ marginTop: 0 }}>⚠️ Cần tải lại / Cần xử lý ({terminalFailures.length})</h2>
+            <p>Danh sách này được lưu trên máy chủ. Nếu file nguồn đã mất hoặc hết hạn, hãy tải lại PDF như một job mới.</p>
+            <div style={{ overflowX: 'auto' }}>
+              <table>
+                <thead><tr><th>Thư mục</th><th>File</th><th>Lỗi</th><th>Thời điểm</th><th>Hướng dẫn</th></tr></thead>
+                <tbody>{terminalFailures.map(job => (
+                  <tr key={job.jobId}>
+                    <td>{job.folderName || 'Mặc định'}</td>
+                    <td>{job.originalName}</td>
+                    <td>{job.errorCode || 'UNKNOWN'}{job.error ? ` — ${job.error}` : ''}</td>
+                    <td>{job.terminalAt ? formatVietnamDateTime(job.terminalAt) : '—'}</td>
+                    <td>{job.failureAdvice}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </section>
+        )}
         
         {/* Trạng thái bảo vệ API dùng cùng chiều rộng và nhịp card với dashboard. */}
         {sysStatus.isHibernating && sysStatus.stats && (

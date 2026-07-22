@@ -15,6 +15,7 @@ npm run dev
 Các giới hạn quan trọng:
 
 - `MAX_UPLOAD_STORAGE_MB`: ngân sách disk cho PDF tạm, mặc định 400 MB.
+- `R2_SOURCE_RETENTION_DAYS`: giữ source của job lỗi cuối trước khi app tự xóa, mặc định 7 ngày. Cấu hình Cloudflare R2 Lifecycle 8 ngày cho prefix source chỉ là hàng rào chống object mồ côi; app vẫn xóa source ngay khi hoàn thành hoặc khi người dùng dọn hàng đợi.
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
 - `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận số nguyên từ `1` đến `5`, mặc định `5`.

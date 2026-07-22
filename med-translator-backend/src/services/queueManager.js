@@ -28,13 +28,19 @@ import {
     ProcessingError,
     normalizeProcessingError
 } from '../utils/processingError.js';
+import {
+    CONTENT_MAX_ATTEMPTS,
+    CONTENT_RETRY_DELAYS_MS,
+    INFRASTRUCTURE_RETRY_WINDOW_MS,
+    SOURCE_RETENTION_MS,
+    classifyFailure,
+    failureAdvice,
+    isTerminalRetryable,
+} from './jobFailurePolicy.js';
 
 const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
 const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
-const QUOTA_RETRY_BASE_MS = 30 * 60 * 1000;
-const TRANSIENT_RETRY_BASE_MS = 60 * 1000;
-const MAX_QUOTA_RETRIES = 15;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
@@ -309,7 +315,7 @@ export class QueueManager extends EventEmitter {
         const filter = cursor ? { _id: { $gt: cursor } } : {};
         const rows = await Job.find(
             filter,
-            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount nextRetryAt chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
+            'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings'
         )
             .sort({ _id: 1 })
             .limit(limit + 1)
@@ -373,6 +379,55 @@ export class QueueManager extends EventEmitter {
         return Job.findOne({ jobId });
     }
 
+    async getTerminalFailures({ limit = 100, cursor = null } = {}) {
+        const filter = { status: 'failed', ...(cursor ? { _id: { $lt: cursor } } : {}) };
+        const rows = await Job.find(filter,
+            'jobId originalName folderName error errorCode failureCategory terminalAt sourceState storageProvider sourceRetentionUntil failureAdvice updatedAt'
+        ).sort({ _id: -1 }).limit(limit + 1).lean();
+        const hasMore = rows.length > limit;
+        const items = (hasMore ? rows.slice(0, limit) : rows).map(job => ({
+            ...job,
+            terminalAt: job.terminalAt || job.updatedAt,
+            failureCategory: job.failureCategory || classifyFailure(job.errorCode),
+            failureAdvice: job.failureAdvice || failureAdvice(job),
+            canRetry: isTerminalRetryable(job.errorCode)
+                && job.storageProvider === 'r2'
+                && job.sourceState === 'ready',
+        }));
+        return { items, nextCursor: hasMore ? String(items.at(-1)._id) : null };
+    }
+
+    async retryTerminalFailures() {
+        const jobs = await Job.find({ status: 'failed' }, 'jobId errorCode storageProvider storageKey sourceState').lean();
+        let retried = 0;
+        let skipped = 0;
+        const now = new Date();
+        for (const job of jobs) {
+            if (!isTerminalRetryable(job.errorCode)
+                || job.storageProvider !== 'r2'
+                || job.sourceState !== 'ready'
+                || !job.storageKey) {
+                skipped += 1;
+                continue;
+            }
+            const result = await Job.updateOne(
+                { jobId: job.jobId, status: 'failed', sourceState: 'ready' },
+                { $set: {
+                    status: 'pending', error: null, errorCode: null, nextRetryAt: now,
+                    attemptCount: 0, quotaRetryCount: 0, retryCount: 0, retryStartedAt: null, failureCategory: null,
+                    terminalAt: null, sourceRetentionUntil: null, failureAdvice: null,
+                    processingToken: null, leaseExpiresAt: null,
+                } }
+            );
+            if (result.modifiedCount > 0) {
+                retried += 1;
+                this.emitJobUpdate(job.jobId, 'pending', { nextRetryAt: now });
+            }
+        }
+        if (retried > 0) void this.startWorker();
+        return { retried, skipped };
+    }
+
     emitJobUpdate(jobId, status, fields = {}) {
         this.emit('jobUpdated', { jobId, status, ...fields });
     }
@@ -388,16 +443,14 @@ export class QueueManager extends EventEmitter {
         }, LEASE_HEARTBEAT_MS);
     }
 
-    calculateRetryAt(error, attemptCount) {
-        if (Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) {
-            if (error.poolExhausted) return new Date(Date.now() + error.retryAfterMs);
-            const jitter = Math.floor(Math.random() * Math.min(30_000, error.retryAfterMs / 4));
-            return new Date(Date.now() + error.retryAfterMs + jitter);
-        }
-        const baseDelay = error.quotaRelated ? QUOTA_RETRY_BASE_MS : TRANSIENT_RETRY_BASE_MS;
-        const exponentialDelay = baseDelay * (2 ** Math.max(0, attemptCount - 1));
-        const jitter = Math.floor(Math.random() * Math.min(30000, baseDelay / 4));
-        return new Date(Date.now() + exponentialDelay + jitter);
+    calculateRetryAt(error, job, category, now = Date.now()) {
+        const retryCount = Number.isSafeInteger(job.retryCount) ? job.retryCount : 0;
+        const configuredDelay = category === 'content'
+            ? CONTENT_RETRY_DELAYS_MS[Math.min(job.attemptCount - 1, CONTENT_RETRY_DELAYS_MS.length - 1)]
+            : Math.min(6 * 60 * 60 * 1000, 5 * 60 * 1000 * (2 ** retryCount));
+        const retryAfterMs = Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0 ? error.retryAfterMs : 0;
+        const delay = Math.max(configuredDelay, retryAfterMs);
+        return new Date(now + delay + Math.floor(Math.random() * delay * 0.2));
     }
 
     pendingJobFilter(now = new Date()) {
@@ -844,13 +897,17 @@ export class QueueManager extends EventEmitter {
             return;
         }
 
-        const quotaRetryCount = Number.isSafeInteger(job.quotaRetryCount) ? job.quotaRetryCount : 0;
-        const isPoolExhausted = error.poolExhausted;
-        const shouldRetry = isPoolExhausted
-            ? quotaRetryCount < MAX_QUOTA_RETRIES
-            : error.retryable && job.attemptCount < job.maxAttempts;
+        const category = classifyFailure(error.code);
+        const now = new Date();
+        const retryStartedAt = job.retryStartedAt ? new Date(job.retryStartedAt) : now;
+        const infrastructureDeadline = new Date(retryStartedAt.getTime() + INFRASTRUCTURE_RETRY_WINDOW_MS);
+        const shouldRetry = category === 'infrastructure'
+            ? now < infrastructureDeadline
+            : category === 'content' && job.attemptCount < CONTENT_MAX_ATTEMPTS;
         if (shouldRetry) {
-            const nextRetryAt = this.calculateRetryAt(error, job.attemptCount);
+            const calculatedRetryAt = this.calculateRetryAt(error, job, category, now.getTime());
+            const nextRetryAt = category === 'infrastructure' && calculatedRetryAt > infrastructureDeadline
+                ? infrastructureDeadline : calculatedRetryAt;
             await Job.updateOne(
                 { jobId: job.jobId, processingToken: job.processingToken },
                 {
@@ -859,25 +916,30 @@ export class QueueManager extends EventEmitter {
                         error: error.publicMessage,
                         errorCode: error.code,
                         nextRetryAt,
+                        retryStartedAt,
+                        failureCategory: category,
                         processingToken: null,
                         leaseExpiresAt: null
                     },
-                    ...(isPoolExhausted ? {
-                        $inc: { attemptCount: -1, quotaRetryCount: 1 }
-                    } : {})
+                    $inc: { retryCount: 1, ...(error.poolExhausted ? { quotaRetryCount: 1 } : {}) }
                 }
             );
             this.emitJobUpdate(job.jobId, 'pending', {
                 error: error.publicMessage,
                 errorCode: error.code,
-                attemptCount: isPoolExhausted ? Math.max(0, job.attemptCount - 1) : job.attemptCount,
-                maxAttempts: job.maxAttempts,
+                attemptCount: job.attemptCount,
+                maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : null,
                 nextRetryAt
             });
             if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
             return;
         }
 
+        const terminalAt = now;
+        const sourceRetentionUntil = job.storageProvider === 'r2' && job.sourceState === 'ready'
+            ? new Date(now.getTime() + SOURCE_RETENTION_MS) : null;
+        const terminalCategory = category;
+        const terminalAdvice = failureAdvice({ ...job, errorCode: error.code });
         await Job.updateOne(
             { jobId: job.jobId, processingToken: job.processingToken },
             {
@@ -886,22 +948,24 @@ export class QueueManager extends EventEmitter {
                     error: error.publicMessage,
                     errorCode: error.code,
                     nextRetryAt: null,
+                    failureCategory: terminalCategory,
+                    terminalAt,
+                    sourceRetentionUntil,
+                    failureAdvice: terminalAdvice,
                     processingToken: null,
                     leaseExpiresAt: null
                 }
             }
         );
-        await this.safeUnlink(job.filePath);
-        // FILE_MISSING cần giữ các chunk đã dịch để Local Feeder tải lại PDF và resume.
-        if (![ErrorCodes.FILE_MISSING, ErrorCodes.R2_SOURCE_MISSING].includes(error.code)) {
-            await TranslationChunk.deleteMany({ jobId: job.jobId });
-        }
-        await this.cleanupSourceSafely(job, 'permanent_failure');
         this.emitJobUpdate(job.jobId, 'failed', {
             error: error.publicMessage,
             errorCode: error.code,
             attemptCount: job.attemptCount,
-            maxAttempts: job.maxAttempts
+            maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : job.maxAttempts,
+            failureCategory: terminalCategory,
+            terminalAt,
+            sourceRetentionUntil,
+            failureAdvice: terminalAdvice,
         });
         if (error.poolExhausted) await this.triggerHibernation(error.retryAfterMs);
     }
@@ -1029,7 +1093,10 @@ export class QueueManager extends EventEmitter {
     }
 
     async runSourceCleanupSweep() {
-        const rows = await this.sourceCleanupService.sweepRetries();
+        const [rows, expiredRows] = await Promise.all([
+            this.sourceCleanupService.sweepRetries(),
+            this.sourceCleanupService.sweepExpiredFailedSources(),
+        ]);
         for (const { job, result } of rows) {
             if (result.cleaned && job.status === 'cancelled') {
                 await this.safeUnlink(job.filePath);
@@ -1041,7 +1108,7 @@ export class QueueManager extends EventEmitter {
                 }
             }
         }
-        return rows.length;
+        return rows.length + expiredRows.length;
     }
 
     startSourceCleanupSweeper(intervalMs = 60_000) {
