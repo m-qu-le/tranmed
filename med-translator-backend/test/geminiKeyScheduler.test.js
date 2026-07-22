@@ -143,7 +143,8 @@ test('all-key quota exhaustion returns one durable retry error without spinning'
 });
 
 test('all-key quota exhaustion wakes at the earliest key Retry-After', async () => {
-    const scheduler = new GeminiKeyScheduler({ keysProvider: () => sevenKeys });
+    const now = 1_000_000;
+    const scheduler = new GeminiKeyScheduler({ keysProvider: () => sevenKeys, clock: () => now });
     await assert.rejects(
         scheduler.execute(async ({ keyIndex }) => {
             const error = new Error('quota');

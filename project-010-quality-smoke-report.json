@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "outcome": "passed",
+  "fixture": "P010 synthetic medical PDF, page 1",
+  "gemini": {
+    "configuredModel": "gemini-3.5-flash-lite",
+    "modelVersions": [
+      "gemini-3.5-flash-lite"
+    ]
+  },
+  "isolation": {
+    "mongoDatabase": "random per run; dropped after verification",
+    "r2Prefix": "p003-smoke/<run-id>/; deleted after terminal processing"
+  },
+  "job": {
+    "status": "completed",
+    "translationMode": "quality",
+    "pipelineVersion": "p010-v1",
+    "chunkCount": 1,
+    "completedChunks": 1,
+    "passedChunks": 1,
+    "needsReviewChunks": 0,
+    "sourceState": "deleted",
+    "sourceCleanupState": "succeeded"
+  },
+  "chunk": {
+    "stage": "completed",
+    "qualityStatus": "passed",
+    "repairCount": 0,
+    "contentBytes": 302,
+    "pageStart": 1,
+    "pageEnd": 1,
+    "persistedUsageStages": [
+      "medical_audit",
+      "revise",
+      "translate",
+      "verify"
+    ],
+    "transientTextRemovedAfterPass": true
+  },
+  "api": {
+    "previewStatus": 200,
+    "downloadStatus": 200,
+    "previewDownloadMatch": true,
+    "publicQualitySummaryExcludesPrivateReports": true
+  },
+  "cleanup": {
+    "r2SourceDeleted": true,
+    "mongoDatabaseDropped": true
+  },
+  "elapsedMs": 43555
+}

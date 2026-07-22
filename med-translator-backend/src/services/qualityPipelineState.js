@@ -1,7 +1,7 @@
 import { QUALITY_MAX_REPAIR_CYCLES } from '../config/env.js';
 import { isQualityCoverageComplete } from './translationQuality.js';
 
-export const QUALITY_PIPELINE_VERSION = 'p003-v3';
+export const QUALITY_PIPELINE_VERSION = 'p010-v1';
 export const QUALITY_PROMPT_VERSION = 'p003-prompts-v3';
 
 export const QUALITY_STAGES = Object.freeze([

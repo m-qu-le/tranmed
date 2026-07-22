@@ -66,7 +66,7 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         'translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify',
     ]);
     for (const request of requests) {
-        assert.equal(request.config.temperature, 1);
+        assert.equal(Object.hasOwn(request.config, 'temperature'), false);
         assert.equal(request.config.thinkingConfig.thinkingLevel, 'HIGH');
         assert.equal(request.config.thinkingConfig.includeThoughts, false);
         assert.equal(request.validationMode, 'strict');
@@ -77,7 +77,9 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         assert.deepEqual(request.config.responseJsonSchema, QUALITY_REPORT_JSON_SCHEMA);
         assert.equal(typeof request.structuredValidator, 'function');
     }
-    assert.equal(requests.find(request => request.stage === 'translate').config.maxOutputTokens, 32768);
+    for (const request of requests.filter(request => request.responseType !== 'json')) {
+        assert.equal(request.config.maxOutputTokens, 65536);
+    }
     const secondRepairRequest = requests.find(request => request.stage === 'repair');
     const secondRepairPayload = JSON.stringify(secondRepairRequest.contents);
     assert.match(secondRepairPayload, /repaired/);

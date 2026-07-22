@@ -58,8 +58,7 @@ async function waitForGeminiFile(client, initialFile, signal) {
 function stageConfig(systemInstruction, responseType, jsonSchema = QUALITY_REPORT_JSON_SCHEMA) {
     const config = {
         systemInstruction,
-        temperature: 1,
-        maxOutputTokens: responseType === 'json' ? 16384 : 32768,
+        maxOutputTokens: responseType === 'json' ? 16384 : 65536,
         thinkingConfig: {
             thinkingLevel: ThinkingLevel.HIGH,
             includeThoughts: false,

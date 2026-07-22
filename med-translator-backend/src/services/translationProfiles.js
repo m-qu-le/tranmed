@@ -5,15 +5,14 @@ const PROFILES = Object.freeze({
         mode: 'legacy',
         stage: 'legacy_translate',
         validationMode: 'legacy',
-        generateConfig: Object.freeze({ temperature: 0.1 }),
+        generateConfig: Object.freeze({}),
     }),
     quality: Object.freeze({
         mode: 'quality',
         stage: 'quality_translate',
         validationMode: 'strict',
         generateConfig: Object.freeze({
-            temperature: 1,
-            maxOutputTokens: 32768,
+            maxOutputTokens: 65536,
             thinkingConfig: Object.freeze({
                 thinkingLevel: GEMINI_THINKING_LEVEL,
                 includeThoughts: false,

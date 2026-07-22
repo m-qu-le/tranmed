@@ -22,6 +22,7 @@
     "smoke:fixture": "node scripts/create-smoke-pdf.js",
     "smoke:r2": "node scripts/smoke-r2.js",
     "smoke:r2-presign": "node scripts/smoke-r2-presign.js",
+    "smoke:p010-gemini": "node scripts/smoke-project-010-gemini.js",
     "smoke:p003-quality": "node scripts/smoke-project-003-quality.js",
     "reconcile:r2": "node scripts/reconcile-r2.js"
   },
@@ -32,7 +33,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1087.0",
     "@aws-sdk/s3-request-presigner": "^3.1087.0",
-    "@google/genai": "^1.50.1",
+    "@google/genai": "2.13.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

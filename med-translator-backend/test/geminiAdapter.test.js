@@ -95,7 +95,7 @@ test('Gemini adapter sends PDF/config through the injected SDK client without ex
         keyIndex: 4,
         model: 'gemini-test',
         contents: createPdfContents(Buffer.alloc(100, 1), 'Dịch tài liệu.'),
-        config: { temperature: 1, thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: false } },
+        config: { thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: false } },
         validationMode: 'strict',
         clientFactory: apiKey => {
             assert.equal(apiKey, 'secret-test-key');
@@ -111,7 +111,7 @@ test('Gemini adapter sends PDF/config through the injected SDK client without ex
     });
 
     assert.equal(request.model, 'gemini-test');
-    assert.equal(request.config.temperature, 1);
+    assert.equal(Object.hasOwn(request.config, 'temperature'), false);
     assert.deepEqual(request.config.thinkingConfig, { thinkingLevel: 'HIGH', includeThoughts: false });
     assert.equal(result.metadata.keyIndex, 4);
     assert.doesNotMatch(JSON.stringify(result), /secret-test-key/);

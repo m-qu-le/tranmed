@@ -4,18 +4,22 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import Job from '../src/models/jobModel.js';
 import TranslationChunk from '../src/models/translationChunkModel.js';
 import { getJobResult, downloadJobResult } from '../src/controllers/translateController.js';
 import { runtimeConfig, r2Service } from '../src/services/runtimeServices.js';
 import { QueueManager } from '../src/services/queueManager.js';
 import { QUALITY_PIPELINE_VERSION } from '../src/services/qualityPipelineState.js';
+import { GEMINI_MODEL } from '../src/config/env.js';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '../..');
-const fixturePath = path.join(repositoryRoot, 'samplepdf', '77 Allergy Assessment.pdf');
-const reportPath = path.join(repositoryRoot, 'archive', 'project-003', 'project-003-quality-smoke-report.json');
+const defaultFixturePath = path.join(repositoryRoot, 'samplepdf', '77 Allergy Assessment.pdf');
+const fixturePath = process.argv[3] ? path.resolve(process.argv[3]) : defaultFixturePath;
+const reportPath = process.argv[2]
+    ? path.resolve(process.argv[2])
+    : path.join(repositoryRoot, 'archive', 'project-003', 'project-003-quality-smoke-report.json');
 const runId = randomUUID();
 const databaseName = `p003smk_${runId.replaceAll('-', '').slice(0, 20)}`;
 const storageKey = `p003-smoke/${runId}/allergy-assessment-page-1.pdf`;
@@ -28,6 +32,29 @@ async function firstPagePdf(sourcePath) {
     const [page] = await output.copyPages(source, [0]);
     output.addPage(page);
     return Buffer.from(await output.save());
+}
+
+async function syntheticMedicalPdf() {
+    const output = await PDFDocument.create();
+    const page = output.addPage([595, 842]);
+    const font = await output.embedFont(StandardFonts.Helvetica);
+    const lines = [
+        'Clinical note: acute asthma exacerbation.',
+        'Oxygen saturation: 92% on room air.',
+        'Medication: salbutamol 100 mcg, two puffs every 4-6 hours as needed.',
+        'Preserve every dosage, unit, abbreviation, and clinical qualifier in translation.',
+    ];
+    lines.forEach((line, index) => page.drawText(line, { x: 50, y: 760 - (index * 28), size: 11, font }));
+    return Buffer.from(await output.save());
+}
+
+async function smokeInput() {
+    try {
+        return { input: await firstPagePdf(fixturePath), fixture: path.basename(fixturePath) };
+    } catch (error) {
+        if (error?.code !== 'ENOENT' || process.argv[3]) throw error;
+        return { input: await syntheticMedicalPdf(), fixture: 'P010 synthetic medical PDF, page 1' };
+    }
 }
 
 function createResponseCapture() {
@@ -77,7 +104,7 @@ const startedAt = Date.now();
 let report;
 
 try {
-    const input = await firstPagePdf(fixturePath);
+    const { input, fixture } = await smokeInput();
     await r2Service.putObject({ key: storageKey, body: input, contentType: 'application/pdf' });
     const uploaded = await r2Service.headObject(storageKey);
     assert.equal(uploaded.contentLength, input.length);
@@ -156,7 +183,13 @@ try {
     report = {
         schemaVersion: 1,
         outcome: 'passed',
-        fixture: '77 Allergy Assessment.pdf, page 1',
+        fixture,
+        gemini: {
+            configuredModel: GEMINI_MODEL,
+            modelVersions: [...new Set(Object.values(chunks[0].usageByStage || {})
+                .map(metadata => metadata?.modelVersion)
+                .filter(Boolean))],
+        },
         isolation: {
             mongoDatabase: 'random per run; dropped after verification',
             r2Prefix: 'p003-smoke/<run-id>/; deleted after terminal processing',

@@ -7,7 +7,7 @@ const backendRoot = path.resolve(configDir, '../..');
 
 dotenv.config({ path: path.join(backendRoot, '.env'), quiet: true });
 
-export const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.1-flash-lite';
+export const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash-lite';
 export const UPLOAD_DIR = path.join(backendRoot, 'uploads');
 
 export function getGeminiApiKeys() {

@@ -28,15 +28,14 @@ test('translation profiles isolate rollback behavior from strict quality behavio
         mode: 'legacy',
         stage: 'legacy_translate',
         validationMode: 'legacy',
-        generateConfig: { temperature: 0.1 },
+        generateConfig: {},
     });
     assert.deepEqual(getTranslationProfile('quality'), {
         mode: 'quality',
         stage: 'quality_translate',
         validationMode: 'strict',
         generateConfig: {
-            temperature: 1,
-            maxOutputTokens: 32768,
+            maxOutputTokens: 65536,
             thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: false },
         },
     });

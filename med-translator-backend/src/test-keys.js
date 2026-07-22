@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { GEMINI_MODEL, getGeminiApiKeys } from './config/env.js';
 
 async function testGeminiKeys() {
@@ -10,12 +10,10 @@ async function testGeminiKeys() {
         return;
     }
     console.log(`🔍 Bắt đầu kiểm tra ${keys.length} API Keys...\n`);
+    let compatibleKeys = 0;
 
     for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
-        // Che key khi in ra log để bảo mật
-        const maskedKey = `${key.substring(0, 8)}...${key.substring(key.length - 4)}`;
-        
         try {
             // Khởi tạo client với key hiện tại
             const ai = new GoogleGenAI({ apiKey: key });
@@ -24,23 +22,37 @@ async function testGeminiKeys() {
             const response = await ai.models.generateContent({
                 model: GEMINI_MODEL,
                 contents: 'Reply strictly with the word "OK"',
+                config: {
+                    systemInstruction: 'Return only the requested token.',
+                    maxOutputTokens: 65536,
+                    thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH, includeThoughts: false },
+                },
             });
-            
-            console.log(`✅ Key ${i + 1} (${maskedKey}): HOẠT ĐỘNG TỐT - Phản hồi: ${response.text}`);
+
+            const finishReason = response.candidates?.[0]?.finishReason || null;
+            if (response.text?.trim() !== 'OK' || finishReason !== 'STOP') {
+                throw new Error('Gemini trả response không hoàn chỉnh.');
+            }
+            compatibleKeys += 1;
+            console.log(`✅ Key ${i + 1}: TƯƠNG THÍCH - model=${response.modelVersion || GEMINI_MODEL}, finish=${finishReason}`);
         } catch (error) {
-            console.log(`❌ Key ${i + 1} (${maskedKey}): LỖI`);
+            console.log(`❌ Key ${i + 1}: LỖI`);
             
-            // Trích xuất thông báo lỗi từ đối tượng GoogleGenAI Error
-            if (error.status === 400 || (error.message && error.message.includes('location is not supported'))) {
+            const message = error?.message || '';
+            if (/location is not supported/i.test(message)) {
                 console.log(`   👉 Mã lỗi: 400 - Bị chặn địa lý (Location not supported)`);
+            } else if (error.status === 400) {
+                console.log('   👉 Mã lỗi: 400 - Gemini từ chối model hoặc cấu hình request.');
             } else if (error.status === 429) {
                 console.log(`   👉 Mã lỗi: 429 - Hết Quota (Rate limit exceeded)`);
             } else {
-                console.log(`   👉 Chi tiết: ${error.message}`);
+                console.log(`   👉 Mã lỗi: ${error.status || 'không xác định'}`);
             }
         }
     }
-    console.log("\n🏁 Hoàn thành kiểm tra.");
+    const failedKeys = keys.length - compatibleKeys;
+    console.log(`\n🏁 Hoàn thành: ${compatibleKeys}/${keys.length} key tương thích, ${failedKeys} key lỗi.`);
+    if (failedKeys > 0) process.exitCode = 1;
 }
 
 testGeminiKeys();
