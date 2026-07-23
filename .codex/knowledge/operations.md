@@ -1,37 +1,38 @@
-# Vận hành, cấu hình và Git
+# Vận hành, cấu hình, kiểm tra và deploy
 
-## Biến môi trường chính
+## Nguyên tắc an toàn
 
-Backend xem `.env.example`:
+- Không đọc/in/commit `.env`, API key, Mongo URI, R2 credential, maintenance token, presigned URL, PDF hay nội dung dịch. Dùng endpoint đã redacted để chẩn đoán khi có thể.
+- Không chạy migration, backup, reconcile R2, smoke Gemini hay thay env Render chỉ để kiểm tra thông thường. Đây là thao tác chủ động có tác động dữ liệu/chi phí.
+- `/api/health` là heartbeat Mongo. `/api/readiness` là readiness Mongo + R2. Cả hai đều cần thành công trước và sau deploy; health không chứng minh R2 usable.
+- Runtime production có thể khác fallback mã nguồn. Xem `/api/translate/status` để biết worker/budget/hibernate/maintenance/storage backlog và `/api/translate/gemini-keys/status` để biết số/trạng thái key, không suy luận từ `.env` local.
 
-- `MONGODB_URI`, `GEMINI_API_KEYS` và nhóm `R2_*` bắt buộc khi chạy server.
-- `GEMINI_MODEL` mặc định `gemini-3.1-flash-lite`.
-- `TRANSLATION_PIPELINE_MODE` mặc định `quality`; đặt `legacy` để rollback job mới.
-- `PDF_PAGES_PER_CHUNK=2`, `GEMINI_THINKING_LEVEL=HIGH`, `QUALITY_MAX_REPAIR_CYCLES=2`.
-- `MAX_JOB_ATTEMPTS` mặc định 3; `GEMINI_TIMEOUT_MS` mặc định 180000.
-- `TRANSLATION_WORKER_CONCURRENCY` chỉ nhận `1|2`, mặc định 1; lane hai có budget source cố định 10 MiB.
-- `MAX_UPLOAD_STORAGE_MB` mặc định 400; `MAX_FILE_SIZE_MB` mặc định 350.
+## Biến môi trường backend
 
-Frontend: `VITE_API_URL` là base `/api/translate`, production hiện dùng `https://tranmed.onrender.com/api/translate`.
+Tạo `.env` từ `.env.example` khi chạy local. `validateRuntimeEnv()` yêu cầu các biến sau khi server thật khởi động:
 
-## Kiểm tra Gemini API key pool
+| Nhóm | Biến | Ghi chú |
+| --- | --- | --- |
+| Server | `PORT`, `FRONTEND_URL` | PORT fallback 8080; FRONTEND_URL bổ sung CORS allow-list |
+| Mongo/Gemini | `MONGODB_URI`, `GEMINI_API_KEYS`, `GEMINI_MODEL` | keys phân tách dấu phẩy, không có phần tử rỗng; model fallback 3.5 Flash-Lite |
+| R2 required | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`, `R2_ENDPOINT`, `R2_REGION` | endpoint bắt buộc HTTPS |
+| R2 behavior | `R2_PRESIGNED_URL_TTL_SECONDS`, `R2_UPLOAD_CONCURRENCY`, `R2_SOURCE_RETENTION_DAYS` | ba biến này bắt buộc ở runtime; retention failed source mặc định code là 7 ngày nhưng vẫn phải cấu hình rõ |
+| Upload/retry | `MAX_UPLOAD_STORAGE_MB`, `MAX_FILE_SIZE_MB`, `MAX_JOB_ATTEMPTS`, `GEMINI_TIMEOUT_MS` | defaults code 400, 350, 3, 180000 ms; file size phải nhỏ hơn storage budget |
+| Worker | `TRANSLATION_WORKER_CONCURRENCY`, `PARALLEL_SOURCE_BUDGET_MB` | nhận strict 1–5 và 10–100; fallback code 5/100, không mặc định đó là cấu hình Render an toàn |
+| Pipeline | `TRANSLATION_PIPELINE_MODE`, `PDF_PAGES_PER_CHUNK`, `GEMINI_THINKING_LEVEL`, `QUALITY_MAX_REPAIR_CYCLES` | mode `quality|legacy`; thinking phải `HIGH`; repair 0–2 |
+| Maintenance | `MAINTENANCE_CONTROL_TOKEN` | token riêng cho pause/cancel redeploy; nếu không có, endpoint trả 503 và UI vô hiệu hóa control |
 
-Khi người dùng yêu cầu kiểm tra số lượng hoặc trạng thái `GEMINI_API_KEYS` trên web/Render, luôn kiểm tra runtime qua endpoint production trước; không đọc, in, mask, hoặc yêu cầu giá trị key.
+`GEMINI_MODEL` nên được đặt rõ trong Render dù mã có fallback để truy vết model. `GEMINI_THINKING_LEVEL=HIGH` là yêu cầu của parser hiện tại, không hạ xuống để giảm chi phí. P010 bỏ `temperature`; không thêm sampling field cũ vào request config.
+
+### Kiểm tra key pool không lộ secret
 
 ```powershell
 Invoke-RestMethod https://tranmed.onrender.com/api/translate/gemini-keys/status
 ```
 
-Response chỉ gồm `keyCount` và `keys[]` với `index` (bắt đầu từ 1), `status`, `cooldownUntil`:
+Response chỉ có `keyCount` và các key index/status/cooldown time. `untested` là chưa có request thành công sau startup; `available` là có thể dùng; `cooldown` có `cooldownUntil`; `disabled` là 401/403 cho đến restart/reconfigure. Endpoint unreachable/404 chỉ có nghĩa không xác minh được hoặc deployment chưa có diagnostics, không phải bằng chứng số key bằng 0.
 
-- `untested`: key đã nạp nhưng chưa có request thành công qua quality scheduler kể từ lúc server khởi động.
-- `available`: key đã có request thành công và hiện có thể được dùng.
-- `cooldown`: Gemini vừa trả quota/rate-limit; `cooldownUntil` là thời điểm ISO 8601 được thử lại.
-- `disabled`: Gemini trả 401/403; key bị bỏ qua đến khi server restart hoặc cấu hình được thay đổi/redeploy.
-
-Sau thay đổi `GEMINI_API_KEYS`, xác nhận Render đã deploy/restart rồi gọi endpoint; đối chiếu `keyCount` với số key tách bằng dấu phẩy, bỏ khoảng trắng và phần tử rỗng. Nếu endpoint trả 404, deployment chưa chứa backend version có diagnostics này; nếu không kết nối được, báo trạng thái không xác minh được thay vì suy đoán từ `.env` local. Log khởi động Render phải có dạng `🔑 [GEMINI] Key pool: N keys loaded.`; log này không chứa key.
-
-## Lệnh kiểm tra local
+## Kiểm tra local thay đổi mã
 
 ```powershell
 cd med-translator-backend
@@ -43,43 +44,74 @@ npm test
 npm run lint
 npm run build
 npm audit
+
+cd ..
+git diff --check
 ```
 
-Không chạy benchmark/PDF thật chỉ để kiểm regression. P003 đã đóng; workload Gemini mới cần một dự án hoặc quyết định mới. P007 được đóng bằng mock/unit/component test, không gọi Gemini, R2/Mongo production hay deployment smoke.
+Không chạy benchmark/PDF thật để làm regression thông thường. P003 benchmark raw đã được dọn. Sau thay đổi Gemini SDK/model/payload, chỉ chạy smoke thực khi đã được giao việc và có môi trường/key được cấp:
 
-## Migration và deploy
+```powershell
+cd med-translator-backend
+npm run test:keys
+npm run smoke:p010-gemini
+npm run smoke:p003-quality
+```
 
-- Migration P001–P003 là additive/idempotent; production P003 đã backup, dry-run, migrate và verify index. Field P004 nullable nên không cần migration bắt buộc. P007 thêm `priority` nullable/default-compatible và index claim additive; deploy backend trước frontend, không migration destructive.
-- Mốc commit đóng hồ sơ P003 trước lượt dọn cuối: `5edce7a`; đã có trên `main` và `feature/project-003-translation-quality`.
-- Render restart sau deploy v3 tại `2026-07-16T15:41:03.348Z`; health/readiness đạt, Mongo/R2 available, backlog 0.
-- Frontend tương thích legacy và quality; P004 công khai header đã escape chỉ khi job quality hoàn thành còn chunk cần review.
-- P005 đã deploy additive và production đang giữ `TRANSLATION_WORKER_CONCURRENCY=2`. Canary hai PDF tổng hợp đạt `activeJobs=2`, completed ngay attempt đầu, output tách biệt và cleanup/backlog trở về 0; phép đo peak RAM Render được chủ dự án miễn khi đóng.
+Các smoke Gemini có thể phát sinh request/chi phí; P010 smoke tạo tài nguyên tạm và có cleanup, nhưng vẫn cần xác nhận kết quả/cleanup thay vì coi script chạy là thành công.
 
-Checklist cho thay đổi tương lai:
+## Migration, backup và R2 maintenance
 
-1. Backend test; frontend test/lint/build; `git diff --check`.
-2. Nếu đổi schema/index production: dry-run, backup khi có dữ liệu, rồi hậu kiểm. Với P007, xác nhận index `{ status: 1, priority: -1, createdAt: 1, _id: 1 }` tồn tại trước khi xem hiệu năng priority là production-ready.
-3. Deploy backend trước frontend khi API contract thay đổi.
-4. Smoke chỉ ở mức tương xứng với rủi ro; không dùng dữ liệu sách trong log/commit.
+Migration P001–P003 là additive/idempotent nhưng vẫn làm trên dữ liệu thật, không phải lệnh bootstrap vô hại. Trước P002/P003, chọn một thư mục backup **ngoài repository** và chạy dry-run trước migration.
+
+```powershell
+cd med-translator-backend
+
+# P001 (nếu lịch sử/database của môi trường cần nó)
+npm run migrate:p001:dry
+npm run migrate:p001
+npm run verify:p001
+
+# P002
+$env:P002_BACKUP_DIR='D:\backup\studymed-p002'
+npm run backup:p002
+npm run migrate:p002:dry
+npm run migrate:p002
+
+# P003
+$env:P003_BACKUP_DIR='D:\backup\studymed-p003'
+npm run backup:p003
+npm run migrate:p003:dry
+npm run migrate:p003
+```
+
+Không có migration bắt buộc riêng cho P004–P010 trong mã hiện tại. P009/P010 thay đổi hành vi/API/version nhưng không phải lý do để rewrite kết quả cũ. `npm run reconcile:r2` là công cụ chủ động để kiểm object R2 mồ côi, không chạy trong server và không chạy trên production nếu chưa hiểu phạm vi/cleanup của script.
+
+## Redeploy an toàn
+
+1. Kiểm tra batch upload: người dùng phải đã thấy `canCloseClient=true`; đừng redeploy giữa một upload browser chưa được confirm.
+2. Kiểm tra `/api/translate/status`. Dùng UI hoặc `POST /maintenance/pause` với `X-Maintenance-Token` để ngừng claim mới.
+3. Đợi `worker.activeJobs=0` và không còn Job `processing`. Pause không giết active job; nó chỉ là cửa sổ an toàn để tránh job lai model/code.
+4. Deploy backend trước frontend nếu API contract thay đổi. Khi đổi model, đặt rõ `GEMINI_MODEL`; khi đổi worker/budget, đặt rõ cả hai biến, không xóa biến để rơi vào fallback 5/100.
+5. Sau restart, gọi `/api/readiness`, `/api/translate/status`, `/api/translate/metrics`, và kiểm key status. Xác nhận maintenance không còn paused, storage available, cleanup/upload backlog hợp lý, worker config đúng ý định.
+6. Chỉ chạy canary/smoke production nếu được phê duyệt; không thêm PDF canary khi backlog thật đang tồn tại.
+
+Nếu maintenance instance cũ bị redeploy, pause state chỉ sống trong instance đó; instance mới recovery queue/lease và bắt đầu worker bình thường. Sau crash/restart, kiểm `processing`, `nextRetryAt`, cleanup state và stderr/log; không mặc định job thành công chỉ vì server đã lên.
 
 ## Rollback
 
-- Đặt `TRANSLATION_PIPELINE_MODE=legacy` và restart để job mới dùng pipeline cũ.
-- Không migration ngược hoặc xóa field/artifact additive.
-- Job terminal vẫn đọc từ `content`; job quality dở giữ artifact để resume sau.
-- Live rollback drill và theo dõi 24 giờ được chủ dự án miễn khi đóng P003; không ghi chúng như bằng chứng đã thực hiện.
+| Tình huống | Rollback tối thiểu |
+| --- | --- |
+| Quality regression | pause an toàn, đặt `TRANSLATION_PIPELINE_MODE=legacy` cho job mới, restart/deploy; không rewrite quality artifact terminal |
+| Gemini model/SDK regression | pause, đặt model baseline rõ ràng (P010 lịch sử là 3.1), redeploy artifact/SDK cần thiết; không chuyển model giữa job active |
+| Worker memory/throughput xấu | đặt concurrency/budget bảo thủ rõ ràng, ví dụ 2/10 hoặc 1/10, restart; P008 cho thấy 5/100 không an toàn trên Render Free |
+| API/code regression | tạo commit revert và deploy lại; không `git reset --hard` lịch sử đã push |
+| Cleanup/retry backlog | giữ metadata/source state, kiểm R2/Mongo và sweeper; không xóa Job/chunk/object hàng loạt để “làm sạch” trước khi xác định scope |
 
-## Git an toàn
+Rollback schema không cần thiết cho migration additive. Job terminal vẫn phải đọc được từ `TranslationChunk.content` hoặc legacy `Job.result`.
 
-- Không stage các deletion/untracked root ngoài phạm vi đã có sẵn trong worktree.
-- Không dùng `git add -A`; không commit `.env`, PDF, secret, signed URL, `.p003-local/` hoặc `dist/`.
-- Nhánh P003: `feature/project-003-translation-quality`; production theo `main`.
-- P004/P005 được hoàn thiện trên cùng nhánh lịch sử này; cả `main` và nhánh feature phải fast-forward cùng commit đóng P005.
-- Không dùng `git reset --hard` để xử lý worktree của người dùng.
+## Git và dữ liệu workspace
 
-## Chính sách giữ/xóa artifact
-
-- Giữ test của `src/`, migration, backup, reconcile và smoke có cleanup vì còn dùng cho regression/vận hành.
-- Giữ `archive/project-003/project-003-*`, `archive/project-004/project-004.md` và `archive/project-005/project-005.md` làm bằng chứng nhỏ đã lọc; không tái tạo raw artifact chỉ để làm đẹp báo cáo.
-- Có thể xóa `dist/`, `uploads/` rỗng, `.p003-local/` và `.p005-local/` sau khi chắc chắn không có runner; chúng đều tái tạo được hoặc chỉ là dữ liệu tạm.
-- Không tự xóa `samplepdf/`, `.env`, `node_modules/` hoặc file người dùng dù chúng bị ignore. Asset/code chỉ được xóa sau khi kiểm tra không có import/tham chiếu runtime.
+- Worktree hiện có thay đổi archive do người dùng tạo; không stage/đảo ngược/xóa các thay đổi ngoài phạm vi.
+- Không dùng `git add -A`, `git reset --hard` hoặc commit `.env`, `samplepdf/`, PDF, `uploads/`, `node_modules/`, `dist/`, signed URL hay raw benchmark artifact.
+- Trước commit: review `git status`, diff đúng file, `git diff --check`, và test tương xứng với thay đổi. Tài liệu `.codex/knowledge` phải thay đổi cùng contract/semantics mà nó mô tả.

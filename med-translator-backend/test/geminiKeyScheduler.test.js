@@ -78,7 +78,10 @@ test('429 rotates immediately to the next project and respects Retry-After', asy
             throw error;
         }
         return { value: 'ok', metadata: { usage: { promptTokenCount: 50 } } };
-    }, { estimatedInputTokens: 50, onEvent: event => events.push(event) });
+    }, {
+        estimatedInputTokens: 50,
+        onEvent: event => events.push(event),
+    });
 
     assert.equal(result.value, 'ok');
     assert.deepEqual(calls, [0, 1]);
