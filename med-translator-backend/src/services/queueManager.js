@@ -42,20 +42,12 @@ const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
 const PRIORITY_FOLDER_NAME = 'Ưu tiên';
 const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
-export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 // Khi toàn bộ key Gemini đang cooldown, không thay job vừa dừng bằng PDF mới.
 // Retry của job cũ phải được ưu tiên sau khi pool hồi phục.
-export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 1;
+export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 10;
 // Limiter Gemini toàn cục quyết định số request; mỗi PDF được phép có hai chunk chờ xử lý.
 const QUALITY_CHUNK_CONCURRENCY = 2;
-const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
-export function nextCircuitBreakerWakeup(now = new Date()) {
-    const wakeupTime = new Date(now.getTime());
-    wakeupTime.setUTCHours(CIRCUIT_BREAKER_WAKEUP_UTC_HOUR, 0, 0, 0);
-    if (wakeupTime <= now) wakeupTime.setUTCDate(wakeupTime.getUTCDate() + 1);
-    return wakeupTime;
-}
 
 const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings';
 
@@ -130,26 +122,9 @@ export class QueueManager extends EventEmitter {
 
         const sysState = await System.findOne({ key: CIRCUIT_BREAKER_KEY });
         if (sysState?.isHibernating && sysState.stats?.wakeupTime) {
-            let stats = sysState.stats.toObject?.() || sysState.stats;
-            if (![CIRCUIT_BREAKER_WAKEUP_POLICY, POOL_EXHAUSTION_WAKEUP_POLICY].includes(stats.wakeupPolicy)) {
-                const storedStartTime = new Date(stats.startTime);
-                const policyStartTime = Number.isNaN(storedStartTime.getTime()) ? now : storedStartTime;
-                const legacyStats = { ...stats };
-                delete legacyStats.sleepHours;
-                stats = {
-                    ...legacyStats,
-                    wakeupTime: nextCircuitBreakerWakeup(policyStartTime).toISOString(),
-                    wakeupPolicy: CIRCUIT_BREAKER_WAKEUP_POLICY,
-                };
-                await System.findOneAndUpdate(
-                    { key: CIRCUIT_BREAKER_KEY },
-                    { $set: { stats } },
-                    { upsert: true }
-                );
-            }
-
+            const stats = sysState.stats.toObject?.() || sysState.stats;
             const wakeupTime = new Date(stats.wakeupTime);
-            if (wakeupTime > now) {
+            if (stats.wakeupPolicy === POOL_EXHAUSTION_WAKEUP_POLICY && wakeupTime > now) {
                 this.isHibernating = true;
                 this.hibernationStats = stats;
                 this.hibernationCount = stats.hibernationCount || 0;
@@ -224,16 +199,14 @@ export class QueueManager extends EventEmitter {
 
     async triggerHibernation(retryAfterMs = null) {
         if (this.isHibernating) return;
+        if (!Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return;
 
         const startTime = new Date();
-        const hasRetryAfter = Number.isFinite(retryAfterMs) && retryAfterMs > 0;
-        const wakeupTime = hasRetryAfter
-            ? new Date(startTime.getTime() + retryAfterMs)
-            : nextCircuitBreakerWakeup(startTime);
+        const wakeupTime = new Date(startTime.getTime() + retryAfterMs);
         const stats = {
             startTime: startTime.toISOString(),
             wakeupTime: wakeupTime.toISOString(),
-            wakeupPolicy: hasRetryAfter ? POOL_EXHAUSTION_WAKEUP_POLICY : CIRCUIT_BREAKER_WAKEUP_POLICY,
+            wakeupPolicy: POOL_EXHAUSTION_WAKEUP_POLICY,
             hibernationCount: this.hibernationCount + 1
         };
 
@@ -973,7 +946,7 @@ export class QueueManager extends EventEmitter {
                 nextRetryAt
             });
             if (shouldHibernate && !this.isHibernating) {
-                await this.triggerHibernation(Math.max(1000, nextRetryAt.getTime() - now.getTime()));
+                await this.triggerHibernation(error.retryAfterMs);
             }
             return;
         }

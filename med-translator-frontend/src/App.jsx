@@ -1106,9 +1106,7 @@ function App() {
                   <dt>Tự động thức dậy</dt>
                   <dd>
                     {formatVietnamDateTime(sysStatus.stats.wakeupTime)}
-                    {sysStatus.stats.wakeupPolicy === 'daily_15_asia_ho_chi_minh'
-                      ? ' · mốc 15:00 mỗi ngày'
-                      : ' · khi pool key hết thời gian chờ'}
+                    {' · theo cooldown sớm nhất'}
                   </dd>
                 </div>
                 <div>

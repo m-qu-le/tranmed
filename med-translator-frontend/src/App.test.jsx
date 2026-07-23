@@ -59,7 +59,7 @@ describe('App Cloud Uploader', () => {
     expect(screen.getByRole('region', { name: 'Tổng quan tiến độ' })).toBeInTheDocument()
   })
 
-  it('shows the daily 15:00 Vietnam wake-up policy while hibernating', async () => {
+  it('shows the earliest cooldown wake-up policy while hibernating', async () => {
     api.get.mockImplementation((url) => {
       if (url.endsWith('/status')) return Promise.resolve({ data: {
         isHibernating: true,
@@ -77,7 +77,7 @@ describe('App Cloud Uploader', () => {
 
     render(<App />)
 
-    expect(await screen.findByText(/mốc 15:00 mỗi ngày/i)).toBeInTheDocument()
+    expect(await screen.findByText(/theo cooldown sớm nhất/i)).toBeInTheDocument()
     expect(screen.getByText('Số lần ngủ đông')).toBeInTheDocument()
   })
 
@@ -99,8 +99,7 @@ describe('App Cloud Uploader', () => {
 
     render(<App />)
 
-    expect(await screen.findByText(/khi pool key hết thời gian chờ/i)).toBeInTheDocument()
-    expect(screen.queryByText(/mốc 15:00 mỗi ngày/i)).not.toBeInTheDocument()
+    expect(await screen.findByText(/theo cooldown sớm nhất/i)).toBeInTheDocument()
   })
 
   it('pauses new job claims for redeploy from the subtle header control', async () => {
