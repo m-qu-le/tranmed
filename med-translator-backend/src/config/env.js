@@ -124,6 +124,15 @@ function readRatio(name, fallback, source = process.env) {
     return value;
 }
 
+function readBoolean(name, fallback, source = process.env) {
+    const rawValue = source[name];
+    if (rawValue === undefined || rawValue === '') return fallback;
+    const normalized = String(rawValue).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+    throw new Error(`${name} chỉ nhận true hoặc false.`);
+}
+
 function readEnum(name, accepted, fallback, source = process.env) {
     const normalized = source[name]?.trim().toLowerCase() || fallback;
     if (!accepted.includes(normalized)) {
@@ -160,16 +169,37 @@ export const GEMINI_PROJECT_TPM = readPositiveInteger('GEMINI_PROJECT_TPM', 250_
 export const GEMINI_PROJECT_RPD = readPositiveInteger('GEMINI_PROJECT_RPD', 500);
 export const GEMINI_PROJECT_HEADROOM = readRatio('GEMINI_PROJECT_HEADROOM', 0.9);
 export const GEMINI_ACTIVE_PROJECT_LIMIT = readPositiveInteger('GEMINI_ACTIVE_PROJECT_LIMIT', 5);
+// GEMINI_ACTIVE_PROJECT_LIMIT remains a backwards-compatible alias for the
+// number of eligible projects. New deployments should use the explicit fields.
+export const GEMINI_ELIGIBLE_PROJECT_LIMIT = readPositiveInteger(
+    'GEMINI_ELIGIBLE_PROJECT_LIMIT',
+    GEMINI_ACTIVE_PROJECT_LIMIT
+);
+export const GEMINI_PROJECT_GROUP_SIZE = readPositiveInteger(
+    'GEMINI_PROJECT_GROUP_SIZE',
+    Math.min(5, GEMINI_ELIGIBLE_PROJECT_LIMIT)
+);
+export const GEMINI_INITIAL_CONCURRENCY = readPositiveInteger(
+    'GEMINI_INITIAL_CONCURRENCY',
+    Math.min(5, GEMINI_PROJECT_GROUP_SIZE)
+);
+export const GEMINI_MAX_CONCURRENCY = readPositiveInteger(
+    'GEMINI_MAX_CONCURRENCY',
+    // Backwards-compatible deploys stay at the initial concurrency until
+    // phase 2 explicitly opts into growth (production phase 2 sets this to 10).
+    GEMINI_INITIAL_CONCURRENCY
+);
+export const GEMINI_PROJECT_GROUP_ROTATION_ENABLED = readBoolean(
+    'GEMINI_PROJECT_GROUP_ROTATION_ENABLED',
+    false
+);
 export const GEMINI_PROJECT_MAX_IN_FLIGHT = readPositiveInteger('GEMINI_PROJECT_MAX_IN_FLIGHT', 2);
 
 export const GEMINI_PROJECT_LIMITS = Object.freeze({
     rpm: Math.max(1, Math.round(GEMINI_PROJECT_RPM * GEMINI_PROJECT_HEADROOM)),
     tpm: Math.max(1, Math.floor(GEMINI_PROJECT_TPM * GEMINI_PROJECT_HEADROOM)),
-    normalRpd: Math.max(1, Math.floor(GEMINI_PROJECT_RPD * GEMINI_PROJECT_HEADROOM)),
-    retryRpd: Math.max(
-        0,
-        GEMINI_PROJECT_RPD - Math.floor(GEMINI_PROJECT_RPD * GEMINI_PROJECT_HEADROOM)
-    ),
+    // Normal and retry share the same RPD pool. The separate counters remain
+    // telemetry only; neither kind has its own hard cap.
     totalRpd: GEMINI_PROJECT_RPD,
     maxInFlight: GEMINI_PROJECT_MAX_IN_FLIGHT,
 });
@@ -195,8 +225,17 @@ export function validateRuntimeEnv() {
         if (projectIds.length === 0) missing.push('GEMINI_PROJECT_IDS');
         if (getGeminiApiKeys().length > 0 && projectIds.length > 0) {
             const projects = getGeminiProjects();
-            if (GEMINI_ACTIVE_PROJECT_LIMIT > projects.length) {
-                throw new Error('GEMINI_ACTIVE_PROJECT_LIMIT không được vượt quá số Gemini project đã cấu hình.');
+            if (GEMINI_ELIGIBLE_PROJECT_LIMIT > projects.length) {
+                throw new Error('GEMINI_ELIGIBLE_PROJECT_LIMIT không được vượt quá số Gemini project đã cấu hình.');
+            }
+            if (GEMINI_PROJECT_GROUP_SIZE > GEMINI_ELIGIBLE_PROJECT_LIMIT) {
+                throw new Error('GEMINI_PROJECT_GROUP_SIZE không được vượt quá số Gemini project eligible.');
+            }
+            if (GEMINI_INITIAL_CONCURRENCY > GEMINI_MAX_CONCURRENCY) {
+                throw new Error('GEMINI_INITIAL_CONCURRENCY không được vượt quá GEMINI_MAX_CONCURRENCY.');
+            }
+            if (GEMINI_MAX_CONCURRENCY > 100) {
+                throw new Error('GEMINI_MAX_CONCURRENCY không được vượt quá 100.');
             }
             if (GEMINI_PROJECT_MAX_IN_FLIGHT > 2) {
                 throw new Error('GEMINI_PROJECT_MAX_IN_FLIGHT không được vượt quá 2 trên Render miễn phí.');
@@ -242,7 +281,12 @@ export function validateRuntimeEnv() {
         geminiTimeoutMs: GEMINI_TIMEOUT_MS,
         gemini: Object.freeze({
             schedulerMode: GEMINI_SCHEDULER_MODE,
-            activeProjectLimit: GEMINI_ACTIVE_PROJECT_LIMIT,
+            activeProjectLimit: GEMINI_ELIGIBLE_PROJECT_LIMIT,
+            eligibleProjectLimit: GEMINI_ELIGIBLE_PROJECT_LIMIT,
+            projectGroupSize: GEMINI_PROJECT_GROUP_SIZE,
+            initialConcurrency: GEMINI_INITIAL_CONCURRENCY,
+            maxConcurrency: GEMINI_MAX_CONCURRENCY,
+            groupRotationEnabled: GEMINI_PROJECT_GROUP_ROTATION_ENABLED,
             projectLimits: GEMINI_PROJECT_LIMITS,
         }),
         translation: p003Config,

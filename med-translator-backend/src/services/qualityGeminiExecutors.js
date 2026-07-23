@@ -1,7 +1,11 @@
 import { ThinkingLevel } from '@google/genai';
 import {
-    GEMINI_ACTIVE_PROJECT_LIMIT,
+    GEMINI_ELIGIBLE_PROJECT_LIMIT,
+    GEMINI_INITIAL_CONCURRENCY,
+    GEMINI_MAX_CONCURRENCY,
     GEMINI_MODEL,
+    GEMINI_PROJECT_GROUP_ROTATION_ENABLED,
+    GEMINI_PROJECT_GROUP_SIZE,
     GEMINI_PROJECT_LIMITS,
     GEMINI_SCHEDULER_MODE,
     GEMINI_TIMEOUT_MS,
@@ -12,6 +16,7 @@ import { createGeminiFileContents, createPdfContents, generateGeminiContent } fr
 import { GeminiKeyScheduler } from './geminiKeyScheduler.js';
 import { AdaptiveGeminiLimiter } from './adaptiveGeminiLimiter.js';
 import GeminiQuotaState from '../models/geminiQuotaStateModel.js';
+import GeminiSchedulerState from '../models/geminiSchedulerStateModel.js';
 import { operationalMetrics } from './operationalMetrics.js';
 import { runtimeResourceSnapshot } from './runtimeResourceMonitor.js';
 import {
@@ -49,15 +54,13 @@ const projectProvider = GEMINI_SCHEDULER_MODE === 'legacy'
     ? legacyProjectsProvider
     : getGeminiProjects;
 const configuredProjectCount = projectProvider().length;
-const activeProjectCount = GEMINI_SCHEDULER_MODE === 'legacy'
+const eligibleProjectCount = GEMINI_SCHEDULER_MODE === 'legacy'
     ? configuredProjectCount
-    : Math.min(GEMINI_ACTIVE_PROJECT_LIMIT, configuredProjectCount);
+    : Math.min(GEMINI_ELIGIBLE_PROJECT_LIMIT, configuredProjectCount);
 const schedulerLimits = GEMINI_SCHEDULER_MODE === 'legacy'
     ? {
         rpm: 12,
         tpm: 200_000,
-        normalRpd: 400,
-        retryRpd: 400,
         totalRpd: 400,
         maxInFlight: Number.MAX_SAFE_INTEGER,
     }
@@ -66,19 +69,28 @@ const schedulerLimits = GEMINI_SCHEDULER_MODE === 'legacy'
 export const qualityKeyScheduler = new GeminiKeyScheduler({
     projectsProvider: projectProvider,
     StateModel: GEMINI_SCHEDULER_MODE === 'project_pool' ? GeminiQuotaState : null,
+    SchedulerStateModel: GEMINI_SCHEDULER_MODE === 'project_pool'
+        ? GeminiSchedulerState
+        : null,
     limits: schedulerLimits,
-    activeProjectLimit: activeProjectCount,
+    activeProjectLimit: eligibleProjectCount,
+    eligibleProjectLimit: eligibleProjectCount,
+    projectGroupSize: GEMINI_SCHEDULER_MODE === 'legacy'
+        ? eligibleProjectCount
+        : GEMINI_PROJECT_GROUP_SIZE,
+    groupRotationEnabled: GEMINI_SCHEDULER_MODE === 'project_pool'
+        && GEMINI_PROJECT_GROUP_ROTATION_ENABLED,
     maxPhysicalAttempts: GEMINI_SCHEDULER_MODE === 'legacy'
         ? Math.max(1, configuredProjectCount)
         : 3,
     maxInlineWaitMs: 60_000,
 });
 export const qualityGeminiLimiter = new AdaptiveGeminiLimiter({
-    initialLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : Math.max(1, activeProjectCount),
-    minLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : Math.max(1, activeProjectCount),
+    initialLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : GEMINI_INITIAL_CONCURRENCY,
+    minLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : 1,
     maxLimit: GEMINI_SCHEDULER_MODE === 'legacy'
         ? 6
-        : Math.max(1, Math.min(100, activeProjectCount * 2)),
+        : GEMINI_MAX_CONCURRENCY,
     successesPerIncrease: 30,
     resourceProvider: runtimeResourceSnapshot,
 });
@@ -144,30 +156,39 @@ export function createQualityGeminiExecutors({
 } = {}) {
     const schedule = async (requestFactory, options) => {
         operationalMetrics.increment('gemini.logical_stages');
+        operationalMetrics.increment('gemini.logical_stages.scheduled');
         if (options.metricStage) {
             operationalMetrics.increment(`gemini.${options.metricStage}.logical_stages`);
+            operationalMetrics.increment(`gemini.${options.metricStage}.logical_stages.scheduled`);
         }
         let physicalAttempts = 0;
         let lastProjectIndex = null;
+        let logicalIssued = false;
+        let lastIssuedAt = null;
         try {
             const result = await scheduler.execute(
-                credentials => limiter.run(
-                    () => {
-                        credentials.markPhysicalStart?.();
-                        return requestFactory(credentials);
-                    },
-                    {
-                        signal: options.signal,
-                        priority: schedulingContext.priority || 0,
-                        jobId: schedulingContext.jobId || null,
-                    }
-                ),
+                credentials => requestFactory(credentials),
                 {
                     ...options,
-                    deferPhysicalStart: true,
                     jobId: schedulingContext.jobId || null,
+                    admitPhysical: task => limiter.run(task, {
+                        signal: options.signal,
+                        priority: schedulingContext.priority || 0,
+                        retryPriority: options.attemptKind === 'retry' ? 1 : 0,
+                        jobId: schedulingContext.jobId || null,
+                    }),
                     onEvent: event => {
                         if (event.type === 'reserved') {
+                            if (!logicalIssued) {
+                                logicalIssued = true;
+                                lastIssuedAt = new Date();
+                                operationalMetrics.increment('gemini.logical_stages.issued');
+                                if (options.metricStage) {
+                                    operationalMetrics.increment(
+                                        `gemini.${options.metricStage}.logical_stages.issued`
+                                    );
+                                }
+                            }
                             physicalAttempts = Math.max(
                                 physicalAttempts,
                                 Number(event.physicalAttempt) || physicalAttempts + 1
@@ -217,16 +238,26 @@ export function createQualityGeminiExecutors({
             return result;
         } catch (error) {
             if (error?.poolExhausted) limiter.onPoolExhausted();
+            if (physicalAttempts === 0 && error?.code === ErrorCodes.GEMINI_RATE_LIMIT) {
+                if (options.metricStage) {
+                    operationalMetrics.increment(
+                        `gemini.${options.metricStage}.logical_stages.deferred_before_issue`
+                    );
+                }
+            }
             error.schedulerMetadata = {
                 physicalAttempts,
                 projectIndex: lastProjectIndex,
+                issuedAt: lastIssuedAt,
             };
             throw error;
         }
     };
 
     const attemptKindFor = (chunk, stage) => (
-        Number(chunk?.stageAttempts?.[qualityStageAttemptKey(stage, chunk)] || 0) > 1
+        chunk?.lastStageErrorCode
+        || chunk?.deferredUntil
+        || Number(chunk?.stageAttempts?.[qualityStageAttemptKey(stage, chunk)] || 0) > 1
             ? 'retry'
             : 'normal'
     );

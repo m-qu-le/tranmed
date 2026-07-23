@@ -31,6 +31,9 @@ function matches(row, filter) {
     if (!row) return false;
     return Object.entries(filter).every(([path, expected]) => {
         const actual = getPath(row, path);
+        if (expected && typeof expected === 'object' && '$gt' in expected) {
+            return actual > expected.$gt;
+        }
         return expected === null ? actual == null : actual === expected;
     });
 }
@@ -57,6 +60,16 @@ class MemoryChunkModel {
         }
         for (const path of Object.keys(update.$unset || {})) unsetPath(this.row, path);
         return clone(this.row);
+    }
+
+    async updateOne(filter, update) {
+        if (!matches(this.row, filter)) return { matchedCount: 0, modifiedCount: 0 };
+        for (const [path, value] of Object.entries(update.$set || {})) setPath(this.row, path, value);
+        for (const [path, value] of Object.entries(update.$inc || {})) {
+            setPath(this.row, path, Number(getPath(this.row, path) || 0) + value);
+        }
+        for (const path of Object.keys(update.$unset || {})) unsetPath(this.row, path);
+        return { matchedCount: 1, modifiedCount: 1 };
     }
 }
 
@@ -215,6 +228,60 @@ test('quality pipeline resumes after every persisted stage without repeating com
         await run(service);
         assert.deepEqual(calls, expectedCalls, `resume từ ${stage}`);
     }
+});
+
+test('runOneStage persists exactly one transition before returning to the dispatcher', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls),
+    });
+    const chunk = await service.runOneStage({
+        jobId: 'job-1',
+        chunkIndex: 0,
+        pageStart: 1,
+        pageEnd: 2,
+        totalPages: 2,
+        pdfBuffer: Buffer.alloc(100),
+    });
+    assert.deepEqual(calls, ['translate']);
+    assert.equal(chunk.stage, 'translated');
+});
+
+test('zero-physical quota deferral rolls back the stage attempt but persists its wake time', async () => {
+    const model = new MemoryChunkModel();
+    const nextAvailableAt = new Date(Date.now() + 60_000);
+    const quotaError = new ProcessingError(
+        ErrorCodes.GEMINI_RATE_LIMIT,
+        'pool exhausted',
+        { retryable: true, quotaRelated: true, poolExhausted: true }
+    );
+    quotaError.nextAvailableAt = nextAvailableAt;
+    quotaError.deferredReason = 'rpd';
+    quotaError.schedulerMetadata = { physicalAttempts: 0, projectIndex: null };
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: {
+            translate: async () => { throw quotaError; },
+        },
+    });
+    await assert.rejects(
+        service.runOneStage({
+            jobId: 'job-1',
+            chunkIndex: 0,
+            pageStart: 1,
+            pageEnd: 2,
+            totalPages: 2,
+            pdfBuffer: Buffer.alloc(100),
+        }),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+    );
+    assert.equal(model.row.stage, 'pending');
+    assert.equal(model.row.stageAttempts.translate, 0);
+    assert.equal(model.row.physicalAttemptCount, 0);
+    assert.equal(model.row.lastStageErrorCode, ErrorCodes.GEMINI_RATE_LIMIT);
+    assert.equal(new Date(model.row.deferredUntil).getTime(), nextAvailableAt.getTime());
 });
 
 test('priority suspension happens only after the running stage artifact is persisted', async () => {

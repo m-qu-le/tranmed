@@ -26,8 +26,10 @@ test('quality executors use high thinking, bounded output and structured JSON wi
     const limiter = { run: async task => { limiterCalls += 1; return task(); }, onPoolExhausted: () => {} };
     const scheduler = {
         async execute(factory, options) {
-            options.onEvent({ type: 'reserved', keyIndex: 3 });
-            return factory({ apiKey: 'secret-key', keyIndex: 3 });
+            return options.admitPhysical(() => {
+                options.onEvent({ type: 'reserved', keyIndex: 3 });
+                return factory({ apiKey: 'secret-key', keyIndex: 3 });
+            });
         },
     };
     const generate = async request => {
@@ -151,7 +153,11 @@ test('only all-key quota exhaustion lowers the shared Gemini limit', async () =>
 
 test('document context uses an ephemeral Gemini File API PDF and deletes it after generation', async () => {
     const deleted = [];
-    const scheduler = { async execute(factory) { return factory({ apiKey: 'key-0', keyIndex: 0 }); } };
+    const scheduler = {
+        async execute(factory, options) {
+            return options.admitPhysical(() => factory({ apiKey: 'key-0', keyIndex: 0 }));
+        },
+    };
     const client = { files: { delete: async ({ name }) => deleted.push(name) } };
     const requests = [];
     let limiterCalls = 0;

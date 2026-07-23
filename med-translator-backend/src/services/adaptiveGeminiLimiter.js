@@ -81,6 +81,10 @@ export class AdaptiveGeminiLimiter {
         return suspended;
     }
 
+    forgetJob(jobId) {
+        if (jobId) this.jobLastServed.delete(jobId);
+    }
+
     onPoolExhausted() {
         this.limit = Math.max(this.minLimit, Math.floor(this.limit / 2));
         this.onKeyRateLimit();
@@ -94,7 +98,12 @@ export class AdaptiveGeminiLimiter {
         if (this.rateLimitWindow.length > 100) this.rateLimitWindow.shift();
     }
 
-    async run(task, { signal, priority = 0, jobId = null } = {}) {
+    async run(task, {
+        signal,
+        priority = 0,
+        retryPriority = 0,
+        jobId = null,
+    } = {}) {
         if (signal?.aborted) throw cancelledError();
         return new Promise((resolve, reject) => {
             const entry = {
@@ -103,6 +112,7 @@ export class AdaptiveGeminiLimiter {
                 reject,
                 signal,
                 priority: Number(priority) || 0,
+                retryPriority: Number(retryPriority) || 0,
                 jobId,
                 sequence: ++this.sequence,
                 onAbort: null,
@@ -156,9 +166,18 @@ export class AdaptiveGeminiLimiter {
             -Infinity
         );
         if (this.priorityGate && highestPriority < 1) return null;
+        const highestRetryPriority = this.waiting
+            .filter(entry => entry.priority === highestPriority)
+            .reduce(
+                (highest, entry) => Math.max(highest, entry.retryPriority || 0),
+                -Infinity
+            );
         const eligible = this.waiting
             .map((entry, index) => ({ entry, index }))
-            .filter(candidate => candidate.entry.priority === highestPriority)
+            .filter(candidate => (
+                candidate.entry.priority === highestPriority
+                && (candidate.entry.retryPriority || 0) === highestRetryPriority
+            ))
             .sort((left, right) => (
                 (this.jobLastServed.get(left.entry.jobId) || 0)
                     - (this.jobLastServed.get(right.entry.jobId) || 0)
@@ -197,6 +216,8 @@ export class AdaptiveGeminiLimiter {
     }
 
     recordSuccess() {
+        this.rateLimitWindow.push(0);
+        if (this.rateLimitWindow.length > 100) this.rateLimitWindow.shift();
         if (this.limit >= this.maxLimit) return;
         const resource = this.applyResourceGuard();
         if (resource.constrained || resource.severe) return;
@@ -204,8 +225,6 @@ export class AdaptiveGeminiLimiter {
             && (resource?.eventLoopP95Ms == null || resource.eventLoopP95Ms < 100)
             && (resource?.mongoP95Ms == null || resource.mongoP95Ms < 200);
         if (!canGrow) return;
-        this.rateLimitWindow.push(0);
-        if (this.rateLimitWindow.length > 100) this.rateLimitWindow.shift();
         this.consecutiveSuccesses += 1;
         if (this.consecutiveSuccesses < this.successesPerIncrease) return;
         const rateLimitRatio = this.rateLimitWindow.length

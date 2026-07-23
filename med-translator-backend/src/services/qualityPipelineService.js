@@ -1,4 +1,5 @@
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
+import { PROJECT_POOL_EXECUTION_VERSION } from './geminiKeyScheduler.js';
 import {
     getNextQualityAction,
     isTerminalQualityStage,
@@ -21,12 +22,14 @@ function assertNotCancelled(signal) {
     }
 }
 
-async function observeMongo(operation) {
+async function observeMongo(operation, metricName = null) {
     const startedAt = performance.now();
     try {
         return await operation();
     } finally {
-        operationalMetrics.observe('mongodb.operation.latency', performance.now() - startedAt);
+        const duration = performance.now() - startedAt;
+        operationalMetrics.observe('mongodb.operation.latency', duration);
+        if (metricName) operationalMetrics.observe(metricName, duration);
     }
 }
 
@@ -36,28 +39,6 @@ const INVALID_CONTENT_CODES = new Set([
     ErrorCodes.GEMINI_RESPONSE_INVALID,
     ErrorCodes.GEMINI_SCHEMA_INVALID,
 ]);
-const MAX_INLINE_STAGE_RETRY_WAIT_MS = 65_000;
-
-async function waitForPersistedStageRetry(nextAvailableAt, signal, assertCanStartStage) {
-    const target = new Date(nextAvailableAt).getTime();
-    while (Date.now() < target) {
-        assertNotCancelled(signal);
-        await assertCanStartStage();
-        const delay = Math.min(500, Math.max(1, target - Date.now()));
-        await new Promise((resolve, reject) => {
-            const done = () => {
-                signal?.removeEventListener('abort', onAbort);
-                resolve();
-            };
-            const timer = setTimeout(done, delay);
-            const onAbort = () => {
-                clearTimeout(timer);
-                reject(new ProcessingError(ErrorCodes.CANCELLED, 'Đã hủy khi chờ stage retry.'));
-            };
-            signal?.addEventListener('abort', onAbort, { once: true });
-        });
-    }
-}
 
 export class QualityPipelineService {
     constructor({ ChunkModel, executors, pipelineVersion = QUALITY_PIPELINE_VERSION }) {
@@ -147,6 +128,13 @@ export class QualityPipelineService {
         }
         update.$set.lastStageErrorCode = null;
         update.$set.nextStageRetryAt = null;
+        update.$set.deferredUntil = null;
+        update.$set.deferredReason = null;
+        update.$set.schedulerExecutionVersion = PROJECT_POOL_EXECUTION_VERSION;
+        update.$set.lastStagePhysicalAttempts = Number.isSafeInteger(scheduler?.physicalAttempts)
+            ? scheduler.physicalAttempts
+            : 0;
+        update.$set.lastStageIssuedAt = scheduler?.issuedAt || null;
         if (Number.isSafeInteger(scheduler?.physicalAttempts) && scheduler.physicalAttempts > 0) {
             update.$inc = { physicalAttemptCount: scheduler.physicalAttempts };
         }
@@ -162,7 +150,7 @@ export class QualityPipelineService {
             },
             update,
             { returnDocument: 'after' }
-        )));
+        ), 'mongodb.chunk_transition.latency'));
         if (updated) return updated;
 
         const current = plain(await this.ChunkModel.findOne({ jobId: chunk.jobId, chunkIndex: chunk.chunkIndex }));
@@ -188,8 +176,7 @@ export class QualityPipelineService {
             {
                 $inc: { [`stageAttempts.${attemptKey}`]: 1 },
                 $set: {
-                    lastStageErrorCode: null,
-                    nextStageRetryAt: null,
+                    schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
                     stageUpdatedAt: new Date(),
                 },
             },
@@ -208,6 +195,14 @@ export class QualityPipelineService {
         const set = {
             lastStageErrorCode: error?.code || ErrorCodes.UNKNOWN_PROCESSING_ERROR,
             nextStageRetryAt: error?.nextAvailableAt || null,
+            deferredUntil: error?.nextAvailableAt || null,
+            deferredReason: error?.deferredReason
+                || (error?.poolExhausted ? 'quota' : null),
+            lastStagePhysicalAttempts: Number.isSafeInteger(scheduler.physicalAttempts)
+                ? scheduler.physicalAttempts
+                : 0,
+            lastStageIssuedAt: scheduler.issuedAt || null,
+            schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
             stageUpdatedAt: new Date(),
         };
         if (Number.isSafeInteger(scheduler.projectIndex)) {
@@ -243,13 +238,18 @@ export class QualityPipelineService {
                 $set: {
                     lastStageErrorCode: null,
                     nextStageRetryAt: null,
+                    deferredUntil: null,
+                    deferredReason: null,
+                    lastStagePhysicalAttempts: 0,
+                    lastStageIssuedAt: null,
+                    schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
                     stageUpdatedAt: new Date(),
                 },
             }
         ));
     }
 
-    async runChunk(options) {
+    async runOneStage(options) {
         const {
             jobId,
             chunkIndex,
@@ -265,56 +265,66 @@ export class QualityPipelineService {
         let chunk = await this.prepareChunk({ jobId, chunkIndex, pageStart, pageEnd, totalPages });
         if (chunk.content && (!chunk.stage || isTerminalQualityStage(chunk.stage))) return chunk;
 
-        while (!isTerminalQualityStage(chunk.stage)) {
-            assertNotCancelled(signal);
-            await assertCanStartStage();
-            const action = getNextQualityAction(chunk);
-            const executor = this.executors[action];
-            let result = {};
-            if (action !== 'complete_needs_review') {
-                if (!executor) throw new Error(`Thiếu executor cho quality action: ${action}`);
-                chunk = await this.markStageAttempt(chunk, action);
-                await onStage({ phase: 'started', action, chunk });
-                try {
-                    result = await executor({ pdfBuffer, chunk, documentContext: options.documentContext || null, signal });
-                } catch (error) {
-                    if (error?.code === ErrorCodes.SCHEDULER_SUSPENDED
-                        && Number(error?.schedulerMetadata?.physicalAttempts || 0) === 0) {
-                        await this.rollbackUnissuedStageAttempt(chunk, action);
-                        throw error;
-                    }
-                    if (action !== 'repair' || !INVALID_CONTENT_CODES.has(error?.code)) {
-                        await this.recordStageFailure(chunk, error);
-                        const retryAt = error?.nextAvailableAt
-                            ? new Date(error.nextAvailableAt).getTime()
-                            : NaN;
-                        if (error?.poolExhausted
-                            && Number.isFinite(retryAt)
-                            && retryAt > Date.now()
-                            && retryAt - Date.now() <= MAX_INLINE_STAGE_RETRY_WAIT_MS) {
-                            await waitForPersistedStageRetry(
-                                error.nextAvailableAt,
-                                signal,
-                                assertCanStartStage
-                            );
-                            continue;
-                        }
-                        throw error;
-                    }
-                    result = {
-                        invalid: true,
-                        errorCode: error.code,
-                        metadata: {
-                            ...(error.geminiMetadata || {}),
-                            scheduler: error.schedulerMetadata || {},
-                        },
-                    };
+        assertNotCancelled(signal);
+        await assertCanStartStage();
+        const action = getNextQualityAction(chunk);
+        const executor = this.executors[action];
+        let result = {};
+        if (action !== 'complete_needs_review') {
+            if (!executor) throw new Error(`Thiếu executor cho quality action ${action}`);
+            chunk = await this.markStageAttempt(chunk, action);
+            await onStage({ phase: 'started', action, chunk });
+            try {
+                result = await executor({
+                    pdfBuffer,
+                    chunk,
+                    documentContext: options.documentContext || null,
+                    signal,
+                });
+            } catch (error) {
+                const physicalAttempts = Number(error?.schedulerMetadata?.physicalAttempts || 0);
+                if (physicalAttempts === 0) {
+                    await this.rollbackUnissuedStageAttempt(chunk, action);
                 }
-                assertNotCancelled(signal);
-                await assertActive();
+                if (error?.code === ErrorCodes.SCHEDULER_SUSPENDED
+                    && physicalAttempts === 0) {
+                    throw error;
+                }
+                if (action !== 'repair' || !INVALID_CONTENT_CODES.has(error?.code)) {
+                    await this.recordStageFailure(chunk, error);
+                    throw error;
+                }
+                result = {
+                    invalid: true,
+                    errorCode: error.code,
+                    metadata: {
+                        ...(error.geminiMetadata || {}),
+                        scheduler: error.schedulerMetadata || {},
+                    },
+                };
             }
-            chunk = await this.persistTransition(chunk, action, result);
-            await onStage({ phase: 'completed', action, chunk });
+            assertNotCancelled(signal);
+            await assertActive();
+        }
+        chunk = await this.persistTransition(chunk, action, result);
+        await onStage({ phase: 'completed', action, chunk });
+        return chunk;
+    }
+
+    async runChunk(options) {
+        let chunk = await this.prepareChunk(options);
+        if (chunk.content && (!chunk.stage || isTerminalQualityStage(chunk.stage))) return chunk;
+        let transitions = 0;
+        while (!isTerminalQualityStage(chunk.stage)) {
+            transitions += 1;
+            if (transitions > 16) {
+                throw new ProcessingError(
+                    ErrorCodes.DATABASE_UNAVAILABLE,
+                    `Quality pipeline vượt quá giới hạn transition an toàn tại stage ${chunk.stage}.`,
+                    { retryable: true }
+                );
+            }
+            chunk = await this.runOneStage(options);
         }
         return chunk;
     }

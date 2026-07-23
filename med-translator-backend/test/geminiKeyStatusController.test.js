@@ -9,8 +9,20 @@ test('Gemini key status payload contains only the public key pool fields', () =>
 
     assert.equal(payload.keyCount, 2);
     assert.deepEqual(payload.keys, [
-        { index: 1, status: 'untested', cooldownUntil: null },
-        { index: 2, status: 'untested', cooldownUntil: null },
+        {
+            index: 1,
+            group: 1,
+            status: 'active',
+            credentialStatus: 'untested',
+            cooldownUntil: null,
+        },
+        {
+            index: 2,
+            group: 1,
+            status: 'active',
+            credentialStatus: 'untested',
+            cooldownUntil: null,
+        },
     ]);
     assert.equal(payload.quota.configuredProjects, 2);
     assert.equal(payload.quota.activeProjectLimit, 2);

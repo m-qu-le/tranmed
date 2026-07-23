@@ -84,6 +84,34 @@ test('equal-priority stages are dispatched round-robin by source job', async () 
     assert.deepEqual(order, ['a1', 'b1', 'c1', 'a2']);
 });
 
+test('due retry stages overtake normal stages only inside the same folder priority', async () => {
+    const limiter = new AdaptiveGeminiLimiter({ initialLimit: 1, minLimit: 1, maxLimit: 1 });
+    const blocker = deferred();
+    const order = [];
+    const running = limiter.run(async () => blocker.promise, {
+        priority: 1,
+        jobId: 'priority-running',
+    });
+    const normalPriority = limiter.run(async () => order.push('priority-normal'), {
+        priority: 1,
+        retryPriority: 0,
+        jobId: 'priority-normal',
+    });
+    const retryNormal = limiter.run(async () => order.push('normal-retry'), {
+        priority: 0,
+        retryPriority: 1,
+        jobId: 'normal-retry',
+    });
+    const retryPriority = limiter.run(async () => order.push('priority-retry'), {
+        priority: 1,
+        retryPriority: 1,
+        jobId: 'priority-retry',
+    });
+    blocker.resolve();
+    await Promise.all([running, normalPriority, retryNormal, retryPriority]);
+    assert.deepEqual(order, ['priority-retry', 'priority-normal', 'normal-retry']);
+});
+
 test('resource pressure reduces concurrency once per pressure transition', () => {
     let resource = { memoryRatio: 0.75, eventLoopP95Ms: 20, mongoP95Ms: 20 };
     const limiter = new AdaptiveGeminiLimiter({

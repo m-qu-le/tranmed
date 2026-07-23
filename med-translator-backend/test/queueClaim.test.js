@@ -132,6 +132,49 @@ test('scheduler suspension persists pending state without retry or attempt ampli
     assert.equal(claimUpdate.$set.schedulerSuspended, false);
 });
 
+test('quota-deferred resume does not increment job attempt or retry counters', async context => {
+    const originalUpdateOne = Job.updateOne;
+    const originalFindOneAndUpdate = Job.findOneAndUpdate;
+    let deferUpdate;
+    let claimFilter;
+    let claimUpdate;
+    Job.updateOne = async (_filter, update) => {
+        deferUpdate = update;
+        return { modifiedCount: 1 };
+    };
+    Job.findOneAndUpdate = async (filter, update) => {
+        claimFilter = filter;
+        claimUpdate = update;
+        return { jobId: 'deferred-job', attemptCount: 4 };
+    };
+    context.after(() => {
+        Job.updateOne = originalUpdateOne;
+        Job.findOneAndUpdate = originalFindOneAndUpdate;
+    });
+
+    const queue = new QueueManager();
+    const deferred = new ProcessingError(
+        ErrorCodes.STAGE_DEFERRED,
+        'release source cache',
+        { retryable: true, poolExhausted: true }
+    );
+    deferred.nextAvailableAt = new Date(Date.now() + 60_000);
+    await queue.handleProcessingFailure(
+        { jobId: 'deferred-job', processingToken: 'token', attemptCount: 4 },
+        deferred
+    );
+    assert.equal(deferUpdate.$set.schedulerDeferred, true);
+    assert.equal(deferUpdate.$inc, undefined);
+
+    await queue.claimNextJob('deferred-id', {
+        resumeDeferred: true,
+        processingStartedAt: new Date(),
+    });
+    assert.equal(claimFilter.schedulerDeferred, true);
+    assert.equal(claimUpdate.$inc, undefined);
+    assert.equal(claimUpdate.$set.schedulerDeferred, false);
+});
+
 test('an idle worker stops after one empty claim instead of polling in a microtask loop', async () => {
     const queue = new QueueManager();
     let claims = 0;

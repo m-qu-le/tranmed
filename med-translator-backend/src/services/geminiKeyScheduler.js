@@ -13,11 +13,11 @@ const SERVICE_STATUSES = new Set([500, 502, 503, 504]);
 export const DEFAULT_GEMINI_HEADROOM = Object.freeze({
     rpm: 14,
     tpm: 225_000,
-    normalRpd: 450,
-    retryRpd: 50,
     totalRpd: 500,
     maxInFlight: 2,
 });
+export const PROJECT_POOL_EXECUTION_VERSION = 'project-pool-v2';
+const SCHEDULER_STATE_ID = 'gemini-project-pool';
 
 function statusOf(error) {
     return error?.status || error?.response?.status || error?.$metadata?.httpStatusCode || null;
@@ -75,6 +75,12 @@ function cancellationError() {
     return new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã bị hủy khi chờ Gemini project.');
 }
 
+function noProjectCapacityError() {
+    const error = new Error('Không có project capacity trong working set.');
+    error.noProjectCapacity = true;
+    return error;
+}
+
 function schedulerSuspensionError() {
     return new ProcessingError(
         ErrorCodes.SCHEDULER_SUSPENDED,
@@ -90,19 +96,25 @@ function databaseError(error) {
     );
 }
 
-function rateLimitError(message, retryMs, now) {
+function rateLimitError(message, retryMs, now, {
+    poolExhausted = true,
+    deferredReason = 'quota',
+} = {}) {
     const error = new ProcessingError(
         ErrorCodes.GEMINI_RATE_LIMIT,
         message,
         {
             retryable: true,
             quotaRelated: true,
-            poolExhausted: true,
-            publicMessage: 'Toàn bộ Gemini project đang chờ quota, hệ thống sẽ thử lại.'
+            poolExhausted,
+            publicMessage: poolExhausted
+                ? 'Toàn bộ Gemini project đang chờ quota, hệ thống sẽ thử lại.'
+                : 'Stage đang chờ một Gemini project khác khả dụng.'
         }
     );
     error.retryAfterMs = retryMs;
     error.nextAvailableAt = Number.isFinite(retryMs) ? new Date(now + retryMs) : null;
+    error.deferredReason = deferredReason;
     return error;
 }
 
@@ -146,8 +158,13 @@ export class GeminiKeyScheduler {
         projectsProvider,
         keysProvider,
         StateModel = null,
+        SchedulerStateModel = null,
         limits = DEFAULT_GEMINI_HEADROOM,
         activeProjectLimit = Infinity,
+        eligibleProjectLimit = activeProjectLimit,
+        projectGroupSize = activeProjectLimit,
+        groupRotationEnabled = false,
+        executionVersion = PROJECT_POOL_EXECUTION_VERSION,
         clock = () => Date.now(),
         random = Math.random,
         maxPhysicalAttempts = 3,
@@ -163,16 +180,23 @@ export class GeminiKeyScheduler {
             index,
         })));
         this.StateModel = StateModel;
+        this.SchedulerStateModel = SchedulerStateModel;
         const legacyRpd = limits.rpd;
         this.limits = {
             ...DEFAULT_GEMINI_HEADROOM,
             ...limits,
-            normalRpd: limits.normalRpd ?? legacyRpd ?? DEFAULT_GEMINI_HEADROOM.normalRpd,
-            retryRpd: limits.retryRpd
-                ?? (legacyRpd != null ? 0 : DEFAULT_GEMINI_HEADROOM.retryRpd),
             totalRpd: limits.totalRpd ?? legacyRpd ?? DEFAULT_GEMINI_HEADROOM.totalRpd,
         };
-        this.activeProjectLimit = activeProjectLimit;
+        this.eligibleProjectLimit = eligibleProjectLimit;
+        // Kept as a public compatibility property. It now represents the
+        // eligible pool, not concurrency or the current working group.
+        this.activeProjectLimit = eligibleProjectLimit;
+        this.projectGroupSize = projectGroupSize;
+        this.groupRotationEnabled = Boolean(groupRotationEnabled);
+        this.executionVersion = executionVersion;
+        this.currentGroupIndex = 0;
+        this.lastRotatedAt = 0;
+        this.rotationReason = null;
         this.clock = clock;
         this.random = random;
         this.maxPhysicalAttempts = maxPhysicalAttempts;
@@ -181,6 +205,7 @@ export class GeminiKeyScheduler {
         this.states = new Map();
         this.reservationId = 0;
         this.persistChains = new Map();
+        this.schedulerPersistChain = Promise.resolve();
         this.hydrationPromise = null;
         this.hydrated = false;
         this.globalGateUntil = 0;
@@ -188,11 +213,14 @@ export class GeminiKeyScheduler {
         this.suspendedJobs = new Set();
         this.metrics = {
             logicalRequests: 0,
+            logicalIssuedRequests: 0,
             activeLogicalRequests: 0,
             physicalAttempts: 0,
+            deferredBeforeIssue: 0,
             rateLimitResponses: 0,
             contentFailures: 0,
             serviceFailures: 0,
+            groupRotations: 0,
         };
     }
 
@@ -234,12 +262,19 @@ export class GeminiKeyScheduler {
     }
 
     async hydrate() {
-        if (this.hydrated || !this.StateModel) return;
+        if (this.hydrated || (!this.StateModel && !this.SchedulerStateModel)) return;
         if (this.hydrationPromise) return this.hydrationPromise;
         this.hydrationPromise = (async () => {
             const projects = this.ensureStates();
             const ids = projects.map(project => project.id);
-            const rows = await this.StateModel.find({ projectId: { $in: ids } }).lean();
+            const [rows, schedulerRow] = await Promise.all([
+                this.StateModel
+                    ? this.StateModel.find({ projectId: { $in: ids } }).lean()
+                    : [],
+                this.SchedulerStateModel
+                    ? this.SchedulerStateModel.findOne({ schedulerId: SCHEDULER_STATE_ID }).lean()
+                    : null,
+            ]);
             const now = this.clock();
             for (const row of rows) {
                 const state = this.states.get(row.projectId);
@@ -250,6 +285,11 @@ export class GeminiKeyScheduler {
                     count: event.count,
                     kind: event.kind,
                 }));
+                for (const event of state.requestEvents) {
+                    if (Number.isSafeInteger(event.id)) {
+                        this.reservationId = Math.max(this.reservationId, event.id);
+                    }
+                }
                 state.quotaDay = row.quotaDay;
                 state.dailyNormalCount = row.dailyNormalCount || 0;
                 state.dailyRetryCount = row.dailyRetryCount || 0;
@@ -259,6 +299,16 @@ export class GeminiKeyScheduler {
                 state.lastSuccessAt = row.lastSuccessAt ? new Date(row.lastSuccessAt).getTime() : 0;
                 state.lastReservedAt = row.lastReservedAt ? new Date(row.lastReservedAt).getTime() : 0;
                 this.prune(state, now);
+            }
+            if (schedulerRow) {
+                const groupCount = this.groupCount(projects);
+                this.currentGroupIndex = this.groupRotationEnabled && groupCount > 0
+                    ? Math.max(0, Number(schedulerRow.currentGroupIndex) || 0) % groupCount
+                    : 0;
+                this.lastRotatedAt = schedulerRow.lastRotatedAt
+                    ? new Date(schedulerRow.lastRotatedAt).getTime()
+                    : 0;
+                this.rotationReason = schedulerRow.rotationReason || null;
             }
             this.hydrated = true;
         })().catch(error => {
@@ -283,27 +333,117 @@ export class GeminiKeyScheduler {
         this.prune(state, now);
         const rollingTokens = state.requestEvents.reduce((sum, event) => sum + event.count, 0);
         const dailyTotal = state.dailyNormalCount + state.dailyRetryCount;
-        if (state.disabled) return { available: false, retryAt: Infinity };
-        if (state.cooldownUntil > now) return { available: false, retryAt: state.cooldownUntil };
-        if (state.activeCount >= this.limits.maxInFlight) return { available: false, retryAt: null };
+        if (state.disabled) return { available: false, retryAt: Infinity, reason: 'disabled' };
+        if (state.cooldownUntil > now) {
+            return { available: false, retryAt: state.cooldownUntil, reason: 'cooldown' };
+        }
+        if (state.activeCount >= this.limits.maxInFlight) {
+            return { available: false, retryAt: null, reason: 'in_flight' };
+        }
         if (state.requestEvents.length >= this.limits.rpm) {
-            return { available: false, retryAt: state.requestEvents[0].at + 60_000 };
+            return {
+                available: false,
+                retryAt: state.requestEvents[0].at + 60_000,
+                reason: 'rpm',
+            };
         }
         if (rollingTokens + estimatedInputTokens > this.limits.tpm) {
-            return { available: false, retryAt: state.requestEvents[0]?.at + 60_000 || now + 60_000 };
+            return {
+                available: false,
+                retryAt: state.requestEvents[0]?.at + 60_000 || now + 60_000,
+                reason: 'tpm',
+            };
         }
-        if (dailyTotal >= this.limits.totalRpd
-            || (attemptKind === 'normal' && state.dailyNormalCount >= this.limits.normalRpd)
-            || (attemptKind === 'retry' && state.dailyRetryCount >= this.limits.retryRpd)) {
-            return { available: false, retryAt: nextPacificResetMs(now) };
+        if (dailyTotal >= this.limits.totalRpd) {
+            return {
+                available: false,
+                retryAt: nextPacificResetMs(now),
+                reason: 'rpd',
+            };
         }
-        return { available: true, retryAt: now };
+        return { available: true, retryAt: now, reason: null };
     }
 
-    reserve(projects, excluded, estimatedInputTokens, attemptKind) {
+    eligibleProjects(projects = this.ensureStates()) {
+        return projects.slice(0, Math.min(projects.length, this.eligibleProjectLimit));
+    }
+
+    groupCount(projects = this.ensureStates()) {
+        const eligibleCount = this.eligibleProjects(projects).length;
+        if (eligibleCount === 0) return 0;
+        const size = Math.max(1, Math.min(this.projectGroupSize, eligibleCount));
+        return Math.ceil(eligibleCount / size);
+    }
+
+    projectsInGroup(projects, groupIndex = this.currentGroupIndex) {
+        const eligible = this.eligibleProjects(projects);
+        if (!eligible.length) return [];
+        const size = Math.max(1, Math.min(this.projectGroupSize, eligible.length));
+        const count = Math.ceil(eligible.length / size);
+        const normalized = Math.max(0, groupIndex) % count;
+        return eligible.slice(normalized * size, (normalized + 1) * size);
+    }
+
+    groupIndexForProject(projects, projectId) {
+        const eligible = this.eligibleProjects(projects);
+        const position = eligible.findIndex(project => project.id === projectId);
+        if (position < 0) return null;
+        const size = Math.max(1, Math.min(this.projectGroupSize, eligible.length));
+        return Math.floor(position / size);
+    }
+
+    async persistSchedulerState() {
+        if (!this.SchedulerStateModel) return;
+        const snapshot = {
+            schedulerId: SCHEDULER_STATE_ID,
+            currentGroupIndex: this.currentGroupIndex,
+            lastRotatedAt: this.lastRotatedAt ? new Date(this.lastRotatedAt) : null,
+            rotationReason: this.rotationReason,
+            executionVersion: this.executionVersion,
+        };
+        const operation = this.schedulerPersistChain
+            .catch(() => {})
+            .then(async () => {
+                const startedAt = performance.now();
+                try {
+                    return await this.SchedulerStateModel.findOneAndUpdate(
+                        { schedulerId: SCHEDULER_STATE_ID },
+                        { $set: snapshot },
+                        { upsert: true, returnDocument: 'after' }
+                    );
+                } finally {
+                    const duration = performance.now() - startedAt;
+                    operationalMetrics.observe('mongodb.operation.latency', duration);
+                    operationalMetrics.observe('mongodb.scheduler_state.latency', duration);
+                }
+            });
+        this.schedulerPersistChain = operation;
+        try {
+            await operation;
+        } catch (error) {
+            throw databaseError(error);
+        }
+    }
+
+    async rotateTo(groupIndex, reason, projects = this.ensureStates()) {
+        const count = this.groupCount(projects);
+        if (!this.groupRotationEnabled || count <= 1) return false;
+        const normalized = ((groupIndex % count) + count) % count;
+        if (normalized === this.currentGroupIndex) return false;
+        const previous = this.currentGroupIndex;
+        this.currentGroupIndex = normalized;
+        this.lastRotatedAt = this.clock();
+        this.rotationReason = reason || 'capacity';
+        this.metrics.groupRotations += 1;
+        operationalMetrics.increment('gemini.group_rotations');
+        await this.persistSchedulerState();
+        this.notifyCapacity();
+        return { previous, current: normalized };
+    }
+
+    reserveFromGroup(groupProjects, excluded, estimatedInputTokens, attemptKind) {
         const now = this.clock();
-        const candidates = projects
-            .slice(0, Math.min(projects.length, this.activeProjectLimit))
+        const candidates = groupProjects
             .filter(project => !excluded.has(project.id))
             .map(project => ({
                 project,
@@ -343,10 +483,30 @@ export class GeminiKeyScheduler {
         return { project, state, event, attemptKind };
     }
 
+    async reserve(projects, excluded, estimatedInputTokens, attemptKind) {
+        const count = this.groupCount(projects);
+        if (count === 0) return null;
+        const groupsToTry = this.groupRotationEnabled ? count : 1;
+        for (let offset = 0; offset < groupsToTry; offset += 1) {
+            const groupIndex = (this.currentGroupIndex + offset) % count;
+            const reservation = this.reserveFromGroup(
+                this.projectsInGroup(projects, groupIndex),
+                excluded,
+                estimatedInputTokens,
+                attemptKind
+            );
+            if (!reservation) continue;
+            if (groupIndex !== this.currentGroupIndex) {
+                await this.rotateTo(groupIndex, 'capacity', projects);
+            }
+            return reservation;
+        }
+        return null;
+    }
+
     earliestRetryAt(projects, excluded, estimatedInputTokens, attemptKind) {
         const now = this.clock();
-        const retryTimes = projects
-            .slice(0, Math.min(projects.length, this.activeProjectLimit))
+        const retryTimes = this.eligibleProjects(projects)
             .filter(project => !excluded.has(project.id))
             .map(project => this.projectCapacity(
                 this.states.get(project.id),
@@ -358,7 +518,25 @@ export class GeminiKeyScheduler {
         return retryTimes.length ? Math.min(...retryTimes) : null;
     }
 
-    async persist(state) {
+    hasAnyCapacity(projects, estimatedInputTokens, attemptKind, excluded = new Set()) {
+        const now = this.clock();
+        return this.eligibleProjects(projects)
+            .filter(project => !excluded.has(project.id))
+            .some(project => this.projectCapacity(
+                this.states.get(project.id),
+                estimatedInputTokens,
+                attemptKind,
+                now
+            ).available);
+    }
+
+    capacityScope(projects = this.ensureStates()) {
+        return this.groupRotationEnabled
+            ? this.eligibleProjects(projects)
+            : this.projectsInGroup(projects, this.currentGroupIndex);
+    }
+
+    async persist(state, metricName = 'mongodb.quota_state.latency') {
         if (!this.StateModel) return;
         const snapshot = clonePersistedState(state);
         const previous = this.persistChains.get(state.projectId) || Promise.resolve();
@@ -373,10 +551,12 @@ export class GeminiKeyScheduler {
                         { upsert: true, returnDocument: 'after' }
                     );
                 } finally {
-                    operationalMetrics.observe(
-                        'mongodb.operation.latency',
-                        performance.now() - startedAt
-                    );
+                    const duration = performance.now() - startedAt;
+                    operationalMetrics.observe('mongodb.operation.latency', duration);
+                    operationalMetrics.observe('mongodb.quota_state.latency', duration);
+                    if (metricName !== 'mongodb.quota_state.latency') {
+                        operationalMetrics.observe(metricName, duration);
+                    }
                 }
             })
             .catch(error => {
@@ -451,7 +631,7 @@ export class GeminiKeyScheduler {
         if (Number.isFinite(updates.cooldownUntil)) {
             state.cooldownUntil = Math.max(state.cooldownUntil, updates.cooldownUntil);
         }
-        await this.persist(state);
+        await this.persist(state, 'mongodb.quota_release.latency');
         this.notifyCapacity();
     }
 
@@ -474,14 +654,18 @@ export class GeminiKeyScheduler {
         return projects.map(project => {
             const state = this.states.get(project.id);
             this.prune(state, now);
+            const groupIndex = this.groupIndexForProject(projects, project.id);
             return {
                 keyIndex: project.index,
+                groupIndex,
+                groupStatus: groupIndex === this.currentGroupIndex ? 'active' : 'standby',
                 disabled: state.disabled,
                 cooldownUntil: state.cooldownUntil || null,
                 rpm: state.requestEvents.length,
                 rollingInputTokens: state.requestEvents.reduce((sum, event) => sum + event.count, 0),
                 normalRpd: state.dailyNormalCount,
                 retryRpd: state.dailyRetryCount,
+                totalRpd: state.dailyNormalCount + state.dailyRetryCount,
                 activeCount: state.activeCount,
             };
         });
@@ -493,15 +677,21 @@ export class GeminiKeyScheduler {
         return projects.map(project => {
             const state = this.states.get(project.id);
             this.prune(state, now);
+            const groupIndex = this.groupIndexForProject(projects, project.id);
+            const dailyTotal = state.dailyNormalCount + state.dailyRetryCount;
             return {
                 index: project.index + 1,
+                group: groupIndex == null ? null : groupIndex + 1,
                 status: state.disabled
                     ? 'disabled'
                     : state.cooldownUntil > now
                         ? 'cooldown'
-                        : state.hasSucceeded
-                            ? 'available'
-                            : 'untested',
+                        : dailyTotal >= this.limits.totalRpd
+                            ? 'quota_exhausted'
+                            : groupIndex === this.currentGroupIndex
+                                ? 'active'
+                                : 'standby',
+                credentialStatus: state.hasSucceeded ? 'validated' : 'untested',
                 cooldownUntil: state.cooldownUntil > now
                     ? new Date(state.cooldownUntil).toISOString()
                     : null,
@@ -512,7 +702,12 @@ export class GeminiKeyScheduler {
     quotaAggregate() {
         const rows = this.snapshot();
         return {
-            activeProjectLimit: Math.min(this.activeProjectLimit, rows.length),
+            activeProjectLimit: this.projectsInGroup(this.ensureStates()).length,
+            eligibleProjectLimit: Math.min(this.eligibleProjectLimit, rows.length),
+            projectGroupSize: Math.min(this.projectGroupSize, rows.length),
+            groupCount: this.groupCount(),
+            currentGroup: this.groupCount() ? this.currentGroupIndex + 1 : null,
+            groupRotationEnabled: this.groupRotationEnabled,
             configuredProjects: rows.length,
             rollingRequests: rows.reduce((sum, row) => sum + row.rpm, 0),
             rollingInputTokens: rows.reduce((sum, row) => sum + row.rollingInputTokens, 0),
@@ -523,14 +718,54 @@ export class GeminiKeyScheduler {
         };
     }
 
+    groupUtilizationSnapshot() {
+        const projects = this.ensureStates();
+        const rows = this.snapshot();
+        const count = this.groupCount(projects);
+        return Array.from({ length: count }, (_, groupIndex) => {
+            const groupRows = rows.filter(row => row.groupIndex === groupIndex);
+            const dailyRequests = groupRows.reduce((sum, row) => sum + row.totalRpd, 0);
+            const dailyCapacity = groupRows.length * this.limits.totalRpd;
+            return {
+                group: groupIndex + 1,
+                status: groupIndex === this.currentGroupIndex ? 'active' : 'standby',
+                projectCount: groupRows.length,
+                rollingRequests: groupRows.reduce((sum, row) => sum + row.rpm, 0),
+                rollingInputTokens: groupRows.reduce(
+                    (sum, row) => sum + row.rollingInputTokens,
+                    0
+                ),
+                dailyRequests,
+                dailyCapacity,
+                utilization: dailyCapacity > 0 ? dailyRequests / dailyCapacity : 0,
+                inFlightRequests: groupRows.reduce((sum, row) => sum + row.activeCount, 0),
+                disabledProjects: groupRows.filter(row => row.disabled).length,
+            };
+        });
+    }
+
     metricsSnapshot() {
-        const logical = this.metrics.logicalRequests;
+        const logicalIssued = this.metrics.logicalIssuedRequests;
         return {
             ...this.metrics,
-            amplificationRatio: logical ? this.metrics.physicalAttempts / logical : 0,
-            activeProjectLimit: Math.min(this.activeProjectLimit, this.resolveProjects().length),
+            amplificationRatio: logicalIssued ? this.metrics.physicalAttempts / logicalIssued : 0,
+            activeProjectLimit: this.projectsInGroup(this.ensureStates()).length,
+            eligibleProjectLimit: Math.min(
+                this.eligibleProjectLimit,
+                this.resolveProjects().length
+            ),
+            projectGroupSize: Math.min(
+                this.projectGroupSize,
+                this.resolveProjects().length
+            ),
+            groupCount: this.groupCount(),
+            currentGroup: this.groupCount() ? this.currentGroupIndex + 1 : null,
+            lastRotatedAt: this.lastRotatedAt ? new Date(this.lastRotatedAt) : null,
+            rotationReason: this.rotationReason,
+            groupRotationEnabled: this.groupRotationEnabled,
             configuredProjects: this.resolveProjects().length,
             limits: { ...this.limits },
+            groupUtilization: this.groupUtilizationSnapshot(),
             nextAvailableAt: this.globalGateUntil > this.clock()
                 ? new Date(this.globalGateUntil)
                 : null,
@@ -539,11 +774,35 @@ export class GeminiKeyScheduler {
 
     availabilitySnapshot() {
         const now = this.clock();
+        const projects = this.ensureStates();
+        const capacityProjects = this.capacityScope(projects);
+        const anyCapacity = this.hasAnyCapacity(capacityProjects, 10_000, 'normal');
+        const nextCapacityAt = this.earliestRetryAt(
+            capacityProjects,
+            new Set(),
+            10_000,
+            'normal'
+        );
+        const currentGroupCapacity = this.projectsInGroup(projects).some(project => (
+            this.projectCapacity(
+                this.states.get(project.id),
+                10_000,
+                'normal',
+                now
+            ).available
+        ));
         return {
             gated: this.globalGateUntil > now,
             nextAvailableAt: this.globalGateUntil > now
                 ? new Date(this.globalGateUntil)
-                : null,
+                : Number.isFinite(nextCapacityAt) && nextCapacityAt > now
+                    ? new Date(nextCapacityAt)
+                    : null,
+            anyCapacity,
+            currentGroupCapacity,
+            currentGroup: this.groupCount() ? this.currentGroupIndex + 1 : null,
+            groupCount: this.groupCount(),
+            rotationReason: this.rotationReason,
         };
     }
 
@@ -551,6 +810,60 @@ export class GeminiKeyScheduler {
         const delay = Number.isFinite(retryMs) && retryMs > 0 ? retryMs : 60_000;
         this.globalGateUntil = Math.max(this.globalGateUntil, now + delay);
         return delay;
+    }
+
+    clearGlobalGate(reason = 'capacity_available') {
+        const wasGated = this.globalGateUntil > this.clock();
+        this.globalGateUntil = 0;
+        if (wasGated) {
+            operationalMetrics.increment('gemini.global_gate_recoveries');
+            this.rotationReason = reason;
+        }
+        this.notifyCapacity();
+        return wasGated;
+    }
+
+    clearStaleGate({ estimatedInputTokens = 10_000, attemptKind = 'normal' } = {}) {
+        const projects = this.ensureStates();
+        if (!this.hasAnyCapacity(
+            this.capacityScope(projects),
+            estimatedInputTokens,
+            attemptKind
+        )) return false;
+        return this.clearGlobalGate('watchdog_capacity');
+    }
+
+    async recoverWorkingGroup({
+        estimatedInputTokens = 10_000,
+        attemptKind = 'normal',
+    } = {}) {
+        await this.hydrate();
+        const projects = this.ensureStates();
+        const count = this.groupCount(projects);
+        if (!this.groupRotationEnabled || count <= 1) return false;
+        const now = this.clock();
+        const currentHasCapacity = this.projectsInGroup(projects).some(project => (
+            this.projectCapacity(
+                this.states.get(project.id),
+                estimatedInputTokens,
+                attemptKind,
+                now
+            ).available
+        ));
+        if (currentHasCapacity) return false;
+        for (let offset = 1; offset < count; offset += 1) {
+            const groupIndex = (this.currentGroupIndex + offset) % count;
+            const hasCapacity = this.projectsInGroup(projects, groupIndex).some(project => (
+                this.projectCapacity(
+                    this.states.get(project.id),
+                    estimatedInputTokens,
+                    attemptKind,
+                    now
+                ).available
+            ));
+            if (hasCapacity) return this.rotateTo(groupIndex, 'watchdog_capacity', projects);
+        }
+        return false;
     }
 
     async execute(requestFactory, options = {}) {
@@ -573,13 +886,16 @@ export class GeminiKeyScheduler {
             onEvent = () => {},
             attemptKind = 'normal',
             maxPhysicalAttempts = this.maxPhysicalAttempts,
+            admitPhysical = task => task(),
             deferPhysicalStart = false,
             jobId = null,
         } = options;
         if (jobId && this.suspendedJobs.has(jobId)) throw schedulerSuspensionError();
         await this.hydrate();
         const projects = this.ensureStates();
-        if (!projects.length) {
+        const eligibleProjects = this.eligibleProjects(projects);
+        const capacityProjects = this.capacityScope(projects);
+        if (!eligibleProjects.length) {
             throw new ProcessingError(
                 ErrorCodes.GEMINI_CONFIG,
                 'Không có Gemini project hợp lệ.',
@@ -590,107 +906,211 @@ export class GeminiKeyScheduler {
         const excluded = new Set();
         const errors = [];
         let physicalAttempts = 0;
+        let logicalIssued = false;
+        let deferredRecorded = false;
+
+        const recordDeferredBeforeIssue = () => {
+            if (logicalIssued || deferredRecorded) return;
+            deferredRecorded = true;
+            this.metrics.deferredBeforeIssue += 1;
+            operationalMetrics.increment('gemini.logical_stages.deferred_before_issue');
+        };
+
+        const throwCapacityError = async (kind, {
+            projectsToInspect = capacityProjects,
+            excludedProjects = new Set(),
+            message = 'Không Gemini project nào có quota khả dụng.',
+        } = {}) => {
+            const now = this.clock();
+            const hasCapacity = this.hasAnyCapacity(
+                capacityProjects,
+                estimatedInputTokens,
+                kind,
+                excludedProjects
+            );
+            if (hasCapacity) {
+                this.clearGlobalGate('capacity_available');
+                return false;
+            }
+            const retryAt = this.earliestRetryAt(
+                projectsToInspect,
+                excludedProjects,
+                estimatedInputTokens,
+                kind
+            );
+            const waitMs = Number.isFinite(retryAt) ? Math.max(1, retryAt - now) : 1000;
+            if (excludedProjects.size === 0 && waitMs <= this.maxInlineWaitMs) {
+                await this.waitForCapacity(waitMs, signal);
+                return true;
+            }
+
+            const poolExhausted = !this.hasAnyCapacity(
+                capacityProjects,
+                estimatedInputTokens,
+                kind
+            );
+            if (poolExhausted) this.openGlobalGate(waitMs, now);
+            recordDeferredBeforeIssue();
+            const reasonRows = capacityProjects.map(project => (
+                this.projectCapacity(
+                    this.states.get(project.id),
+                    estimatedInputTokens,
+                    kind,
+                    now
+                ).reason
+            ));
+            const deferredReason = reasonRows.every(reason => reason === 'rpd')
+                ? 'rpd'
+                : reasonRows.every(reason => reason === 'disabled')
+                    ? 'disabled'
+                    : reasonRows.includes('cooldown')
+                        ? 'cooldown'
+                        : 'quota';
+            throw rateLimitError(message, waitMs, now, { poolExhausted, deferredReason });
+        };
 
         while (physicalAttempts < maxPhysicalAttempts) {
             if (signal?.aborted) throw cancellationError();
             if (jobId && this.suspendedJobs.has(jobId)) throw schedulerSuspensionError();
             const gateWaitMs = this.globalGateUntil - this.clock();
             if (gateWaitMs > 0) {
-                if (gateWaitMs <= this.maxInlineWaitMs) {
-                    await this.waitForCapacity(gateWaitMs, signal);
-                    continue;
-                }
-                throw rateLimitError(
-                    'Gemini project pool đang tạm đóng quota gate.',
-                    gateWaitMs,
-                    this.clock()
-                );
-            }
-            const kind = physicalAttempts === 0 ? attemptKind : 'retry';
-            const reservation = this.reserve(projects, excluded, estimatedInputTokens, kind);
-            if (!reservation) {
-                const activeProjects = projects.slice(
-                    0,
-                    Math.min(projects.length, this.activeProjectLimit)
-                );
-                if (activeProjects.length > 0
-                    && activeProjects.every(project => this.states.get(project.id)?.disabled)) {
-                    throw new ProcessingError(
-                        ErrorCodes.GEMINI_AUTH,
-                        'Toàn bộ Gemini project đang active đã bị disable.',
-                        { publicMessage: 'Gemini API key không hợp lệ.' }
+                if (this.hasAnyCapacity(
+                    capacityProjects,
+                    estimatedInputTokens,
+                    attemptKind
+                )) {
+                    this.clearGlobalGate('capacity_available');
+                } else {
+                    if (gateWaitMs <= this.maxInlineWaitMs) {
+                        await this.waitForCapacity(gateWaitMs, signal);
+                        continue;
+                    }
+                    recordDeferredBeforeIssue();
+                    throw rateLimitError(
+                        'Gemini project pool đang tạm đóng quota gate.',
+                        gateWaitMs,
+                        this.clock(),
+                        { poolExhausted: true, deferredReason: 'quota' }
                     );
                 }
-                const hasUntriedProject = activeProjects.some(project => !excluded.has(project.id));
-                // Do not mask the cause collected from the projects already tried. This is
-                // especially important for a single invalid credential or content failure:
-                // "no untried project" is not the same thing as pool quota exhaustion.
-                if (errors.length > 0 && !hasUntriedProject) break;
-
-                const retryAt = this.earliestRetryAt(projects, excluded, estimatedInputTokens, kind);
-                const now = this.clock();
-                const waitMs = Number.isFinite(retryAt) ? Math.max(1, retryAt - now) : 1000;
-                if (excluded.size === 0 && waitMs <= this.maxInlineWaitMs) {
-                    await this.waitForCapacity(waitMs, signal);
-                    continue;
-                }
-                if (excluded.size === 0) this.openGlobalGate(waitMs, now);
-                throw rateLimitError(
-                    'Không Gemini project nào có quota khả dụng.',
-                    waitMs,
-                    now
-                );
             }
 
-            const { project, state } = reservation;
-            excluded.add(project.id);
+            const kind = physicalAttempts === 0 ? attemptKind : 'retry';
+            let reservation = null;
+            let project = null;
+            let state = null;
             let physicalStarted = false;
-            const markPhysicalStart = () => {
-                if (physicalStarted) return;
-                physicalStarted = true;
-                physicalAttempts += 1;
-                this.metrics.physicalAttempts += 1;
-                onEvent({
-                    type: 'reserved',
-                    keyIndex: project.index,
-                    physicalAttempt: physicalAttempts,
-                    attemptKind: reservation.attemptKind,
-                });
-            };
 
             try {
-                await this.persist(state);
-                if (!deferPhysicalStart) markPhysicalStart();
-                const result = await requestFactory({
-                    apiKey: project.apiKey,
-                    keyIndex: project.index,
-                    projectIndex: project.index,
-                    markPhysicalStart,
+                const admittedResult = await admitPhysical(async () => {
+                    if (signal?.aborted) throw cancellationError();
+                    if (jobId && this.suspendedJobs.has(jobId)) {
+                        throw schedulerSuspensionError();
+                    }
+                    reservation = await this.reserve(
+                        projects,
+                        excluded,
+                        estimatedInputTokens,
+                        kind
+                    );
+                    if (!reservation) throw noProjectCapacityError();
+
+                    ({ project, state } = reservation);
+                    excluded.add(project.id);
+                    await this.persist(state, 'mongodb.quota_reserve.latency');
+                    if (signal?.aborted) {
+                        this.rollbackReservation(reservation);
+                        await this.persist(state, 'mongodb.quota_reservation_rollback.latency');
+                        throw cancellationError();
+                    }
+                    if (jobId && this.suspendedJobs.has(jobId)) {
+                        this.rollbackReservation(reservation);
+                        await this.persist(state, 'mongodb.quota_reservation_rollback.latency');
+                        throw schedulerSuspensionError();
+                    }
+
+                    const markPhysicalStart = () => {
+                        if (physicalStarted) return;
+                        physicalStarted = true;
+                        physicalAttempts += 1;
+                        this.metrics.physicalAttempts += 1;
+                        if (!logicalIssued) {
+                            logicalIssued = true;
+                            this.metrics.logicalIssuedRequests += 1;
+                        }
+                        onEvent({
+                            type: 'reserved',
+                            keyIndex: project.index,
+                            physicalAttempt: physicalAttempts,
+                            attemptKind: reservation.attemptKind,
+                            groupIndex: this.currentGroupIndex,
+                        });
+                    };
+                    if (!deferPhysicalStart) markPhysicalStart();
+                    const result = await requestFactory({
+                        apiKey: project.apiKey,
+                        keyIndex: project.index,
+                        projectIndex: project.index,
+                        markPhysicalStart,
+                    });
+                    if (!physicalStarted) markPhysicalStart();
+                    return result;
                 });
-                // Defensive fallback for custom deferred factories.
-                if (!physicalStarted) markPhysicalStart();
+
                 await this.release(reservation, {
                     success: true,
-                    actualInputTokens: result?.metadata?.usage?.promptTokenCount,
+                    actualInputTokens: admittedResult?.metadata?.usage?.promptTokenCount,
                 });
-                this.globalGateUntil = 0;
+                this.clearGlobalGate('request_succeeded');
                 onEvent({
                     type: 'succeeded',
                     keyIndex: project.index,
                     physicalAttempt: physicalAttempts,
-                    usage: result?.metadata?.usage || null,
+                    usage: admittedResult?.metadata?.usage || null,
                 });
                 return {
-                    ...result,
+                    ...admittedResult,
                     metadata: {
-                        ...(result?.metadata || {}),
+                        ...(admittedResult?.metadata || {}),
                         scheduler: {
                             projectIndex: project.index,
                             physicalAttempts,
+                            issuedAt: new Date(this.clock()),
+                            groupIndex: this.currentGroupIndex,
                         },
                     },
                 };
             } catch (error) {
+                if (error?.noProjectCapacity) {
+                    const allDisabled = capacityProjects.every(
+                        candidate => this.states.get(candidate.id)?.disabled
+                    );
+                    if (allDisabled) {
+                        throw new ProcessingError(
+                            ErrorCodes.GEMINI_AUTH,
+                            'Toàn bộ Gemini project eligible đã bị disable.',
+                            { publicMessage: 'Gemini API key không hợp lệ.' }
+                        );
+                    }
+                    const hasUntriedCapacity = this.hasAnyCapacity(
+                        capacityProjects,
+                        estimatedInputTokens,
+                        kind,
+                        excluded
+                    );
+                    if (errors.length > 0 && !hasUntriedCapacity) break;
+                    await throwCapacityError(kind, { excludedProjects: excluded });
+                    continue;
+                }
+                if (!reservation) {
+                    if (error?.code === ErrorCodes.SCHEDULER_SUSPENDED) throw error;
+                    if (signal?.aborted
+                        || error?.code === ErrorCodes.CANCELLED
+                        || error?.name === 'AbortError') {
+                        throw cancellationError();
+                    }
+                    throw error;
+                }
                 if (error?.code === ErrorCodes.DATABASE_UNAVAILABLE) {
                     if (!reservation.released) this.rollbackReservation(reservation);
                     throw error;
@@ -698,7 +1118,7 @@ export class GeminiKeyScheduler {
                 if (error?.code === ErrorCodes.SCHEDULER_SUSPENDED) {
                     if (!physicalStarted) {
                         if (!reservation.released) this.rollbackReservation(reservation);
-                        await this.persist(state);
+                        await this.persist(state, 'mongodb.quota_reservation_rollback.latency');
                     } else if (!reservation.released) {
                         await this.release(reservation);
                     }
@@ -707,7 +1127,7 @@ export class GeminiKeyScheduler {
                 if (signal?.aborted || error?.code === ErrorCodes.CANCELLED || error?.name === 'AbortError') {
                     if (!physicalStarted) {
                         if (!reservation.released) this.rollbackReservation(reservation);
-                        await this.persist(state);
+                        await this.persist(state, 'mongodb.quota_reservation_rollback.latency');
                     } else if (!reservation.released) {
                         await this.release(reservation);
                     }
@@ -722,7 +1142,12 @@ export class GeminiKeyScheduler {
                 if (status === 401 || status === 403) {
                     await this.release(reservation, { disabled: true });
                     errors.push({ scope: 'auth', error });
-                    onEvent({ type: 'disabled', keyIndex: project.index, status });
+                    onEvent({
+                        type: 'disabled',
+                        keyIndex: project.index,
+                        status,
+                        groupIndex: this.currentGroupIndex,
+                    });
                     continue;
                 }
                 if (status === 429) {
@@ -735,6 +1160,7 @@ export class GeminiKeyScheduler {
                         keyIndex: project.index,
                         status,
                         retryAfterMs: waitMs,
+                        groupIndex: this.currentGroupIndex,
                     });
                     continue;
                 }
@@ -795,19 +1221,26 @@ export class GeminiKeyScheduler {
         }
 
         const now = this.clock();
-        const attemptedProjects = projects.filter(project => excluded.has(project.id));
+        const attemptedProjects = eligibleProjects.filter(project => excluded.has(project.id));
         const retryAt = this.earliestRetryAt(
-            attemptedProjects.length > 0 ? attemptedProjects : projects,
+            attemptedProjects.length > 0 ? attemptedProjects : eligibleProjects,
             new Set(),
             estimatedInputTokens,
             'retry'
         );
         const waitMs = Number.isFinite(retryAt) ? Math.max(1, retryAt - now) : 60_000;
-        this.openGlobalGate(waitMs, now);
+        const poolExhausted = !this.hasAnyCapacity(
+            capacityProjects,
+            estimatedInputTokens,
+            'retry'
+        );
+        if (poolExhausted) this.openGlobalGate(waitMs, now);
+        recordDeferredBeforeIssue();
         throw rateLimitError(
             'Các Gemini project được thử đều đang chờ quota.',
             waitMs,
-            now
+            now,
+            { poolExhausted, deferredReason: 'cooldown' }
         );
     }
 }

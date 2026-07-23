@@ -21,7 +21,7 @@ test('infrastructure retries back off from one minute and cap at ten minutes', (
     assert.ok(queue.calculateRetryAt(error, { retryCount: 9 }, 'infrastructure', now).getTime() - now >= 900_000);
 });
 
-test('error policy retries quota errors but permanently fails invalid PDFs', async (context) => {
+test('error policy defers quota without retry amplification but permanently fails invalid PDFs', async (context) => {
     const originalUpdateOne = Job.updateOne;
     const originalExists = Job.exists;
     const originalDeleteMany = TranslationChunk.deleteMany;
@@ -71,6 +71,8 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
     );
     assert.equal(updates.at(-1).update.$set.status, 'pending');
     assert.equal(updates.at(-1).update.$set.errorCode, ErrorCodes.GEMINI_RATE_LIMIT);
+    assert.equal(updates.at(-1).update.$set.schedulerDeferred, true);
+    assert.equal(updates.at(-1).update.$inc, undefined);
     assert.deepEqual(hibernationCalls, []);
 
     const poolError = new ProcessingError(ErrorCodes.GEMINI_RATE_LIMIT, 'all keys cooling down', {
@@ -83,14 +85,13 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
     for (let attempt = 0; attempt < 10; attempt += 1) {
         await queue.handleProcessingFailure(job, poolError);
     }
-    assert.equal(hibernationCalls.length, 1);
-    assert.equal(hibernationCalls[0], 60_000);
-    assert.equal(updates.at(-1).update.$inc.retryCount, 1);
-    assert.equal(updates.at(-1).update.$inc.quotaRetryCount, 1);
+    assert.equal(hibernationCalls.length, 0);
+    assert.equal(updates.at(-1).update.$inc, undefined);
+    assert.equal(updates.at(-1).update.$set.schedulerDeferred, true);
     assert.equal(updates.at(-1).update.$set.status, 'pending');
 });
 
-test('pool exhaustion keeps retrying within the forty-eight-hour recovery window', async context => {
+test('pool exhaustion ignores legacy quota retry counts and persists one scheduler deferral', async context => {
     const originalUpdateOne = Job.updateOne;
     const originalExists = Job.exists;
     const originalDeleteMany = TranslationChunk.deleteMany;
@@ -122,14 +123,16 @@ test('pool exhaustion keeps retrying within the forty-eight-hour recovery window
         attemptCount: 3, maxAttempts: 3, quotaRetryCount: 14,
     }, poolError);
     assert.equal(updates.at(-1).update.$set.status, 'pending');
-    assert.deepEqual(updates.at(-1).update.$inc, { retryCount: 1, quotaRetryCount: 1 });
+    assert.equal(updates.at(-1).update.$set.schedulerDeferred, true);
+    assert.equal(updates.at(-1).update.$inc, undefined);
 
     await queue.handleProcessingFailure({
         jobId: 'quota-16', filePath: 'fixture.pdf', processingToken: 'token',
         attemptCount: 3, maxAttempts: 3, quotaRetryCount: 15,
     }, poolError);
     assert.equal(updates.at(-1).update.$set.status, 'pending');
-    assert.deepEqual(updates.at(-1).update.$inc, { retryCount: 1, quotaRetryCount: 1 });
+    assert.equal(updates.at(-1).update.$set.schedulerDeferred, true);
+    assert.equal(updates.at(-1).update.$inc, undefined);
 });
 
 test('content errors stop after seven processing attempts and retain the R2 source', async context => {

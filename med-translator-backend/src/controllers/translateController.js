@@ -372,6 +372,7 @@ export const getOperationalMetrics = async (req, res) => {
             (Date.now() - new Date(metrics.startedAt).getTime()) / 3_600_000
         );
         const pagesCompleted = metrics.counters['translation.pages_completed'] || 0;
+        const queueStatus = translationQueue.getSystemStatus();
         res.status(200).json({
             ...metrics,
             gauges: {
@@ -380,7 +381,10 @@ export const getOperationalMetrics = async (req, res) => {
                 pagesPerHour: pagesCompleted / elapsedHours,
             },
             gemini: qualityKeyScheduler.metricsSnapshot(),
-            dispatcher: qualityGeminiLimiter.snapshot(),
+            dispatcher: {
+                ...qualityGeminiLimiter.snapshot(),
+                ...queueStatus.dispatcher,
+            },
             geminiKeyPool: qualityKeyScheduler.snapshot(),
         });
     } catch (error) {

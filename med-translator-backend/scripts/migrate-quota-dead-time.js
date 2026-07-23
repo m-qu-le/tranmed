@@ -1,11 +1,8 @@
+import 'dotenv/config';
 import mongoose from 'mongoose';
-import '../src/config/env.js';
-import { getGeminiProjectIds } from '../src/config/env.js';
 import Job from '../src/models/jobModel.js';
 import TranslationChunk from '../src/models/translationChunkModel.js';
-import GeminiQuotaState from '../src/models/geminiQuotaStateModel.js';
-import GeminiSchedulerState from '../src/models/geminiSchedulerStateModel.js';
-import { runProjectPoolMigration } from '../src/migrations/projectPoolMigration.js';
+import { runQuotaDeadTimeMigration } from '../src/migrations/quotaDeadTimeMigration.js';
 import { redactError } from '../src/utils/redactSecrets.js';
 
 const mongodbUri = process.env.MONGODB_URI?.trim();
@@ -17,17 +14,14 @@ if (!mongodbUri) {
 
 try {
     await mongoose.connect(mongodbUri, { serverSelectionTimeoutMS: 5000 });
-    const result = await runProjectPoolMigration({
+    const result = await runQuotaDeadTimeMigration({
         Job,
         TranslationChunk,
-        GeminiQuotaState,
-        GeminiSchedulerState,
-        projectIds: getGeminiProjectIds(),
         dryRun,
     });
-    console.log(`Project-pool migration ${dryRun ? 'dry-run' : 'hoàn thành'}:`, result);
+    console.log(`Quota dead-time migration ${dryRun ? 'dry-run' : 'hoàn thành'}:`, result);
 } catch (error) {
-    console.error('Project-pool migration thất bại:', redactError(error));
+    console.error('Quota dead-time migration thất bại:', redactError(error));
     process.exitCode = 1;
 } finally {
     await mongoose.disconnect();

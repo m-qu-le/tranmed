@@ -102,6 +102,33 @@ describe('App Cloud Uploader', () => {
     expect(await screen.findByText(/theo cooldown sớm nhất/i)).toBeInTheDocument()
   })
 
+  it('shows a live quota wait state instead of looking like a dead application', async () => {
+    const nextWakeTime = new Date(Date.now() + 60_000).toISOString()
+    api.get.mockImplementation((url) => {
+      if (url.endsWith('/status')) return Promise.resolve({ data: {
+        isHibernating: false,
+        dispatcher: {
+          blockedReason: 'all_projects_no_capacity',
+          nextWakeTime,
+          currentProjectGroup: 4,
+          projectGroupCount: 10,
+          runnableStageDepth: 0,
+          deferredStageDepth: 12,
+        },
+      } })
+      if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
+      if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: jobStats() })
+      return Promise.resolve({ data: { items: [], nextCursor: null } })
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText(/ứng dụng vẫn hoạt động/i)).toBeInTheDocument()
+    expect(screen.getByText(/Nhóm 4\/10/i)).toBeInTheDocument()
+    expect(screen.getByText(/deferred 12/i)).toBeInTheDocument()
+    expect(screen.getByText(/Tự thử lại sau/i)).toBeInTheDocument()
+  })
+
   it('pauses new job claims for redeploy from the subtle header control', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     vi.stubGlobal('prompt', vi.fn(() => 'redeploy-secret'))
@@ -126,8 +153,8 @@ describe('App Cloud Uploader', () => {
       if (url.endsWith('/gemini-keys/status')) return Promise.resolve({ data: {
         keyCount: 2,
         keys: [
-          { index: 1, status: 'available', cooldownUntil: null },
-          { index: 2, status: 'cooldown', cooldownUntil: '2026-07-22T08:00:00.000Z' },
+          { index: 1, group: 1, status: 'active', credentialStatus: 'validated', cooldownUntil: null },
+          { index: 2, group: 1, status: 'cooldown', credentialStatus: 'untested', cooldownUntil: '2026-07-22T08:00:00.000Z' },
         ],
       } })
       if (url.endsWith('/status')) return Promise.resolve({ data: { isHibernating: false, stats: null } })
@@ -141,8 +168,8 @@ describe('App Cloud Uploader', () => {
 
     await waitFor(() => expect(api.get).toHaveBeenCalledWith('/gemini-keys/status', { timeout: 30_000 }))
     expect(screen.getByText('Đã nạp 2 API key')).toBeInTheDocument()
-    expect(screen.getByText(/Key 1: Sẵn sàng/i)).toBeInTheDocument()
-    expect(screen.getByText(/Key 2: Đang chờ quota/i)).toBeInTheDocument()
+    expect(screen.getByText(/Key 1 · nhóm 1: Đang trong nhóm hoạt động/i)).toBeInTheDocument()
+    expect(screen.getByText(/Key 2 · nhóm 1: Đang chờ quota/i)).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('secret-key')
 
     fireEvent.click(screen.getByRole('button', { name: /kiểm tra api key/i }))

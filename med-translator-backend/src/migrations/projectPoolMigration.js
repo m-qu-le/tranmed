@@ -1,4 +1,4 @@
-export const PROJECT_POOL_EXECUTION_VERSION = 'project-pool-v1';
+export const PROJECT_POOL_EXECUTION_VERSION = 'project-pool-v2';
 
 async function addMissingField(Model, field, value, dryRun) {
     const filter = { [field]: { $exists: false } };
@@ -13,6 +13,7 @@ export async function runProjectPoolMigration({
     Job,
     TranslationChunk,
     GeminiQuotaState,
+    GeminiSchedulerState = null,
     projectIds = [],
     dryRun = true,
 }) {
@@ -22,6 +23,7 @@ export async function runProjectPoolMigration({
     const jobs = {};
     for (const [field, value] of Object.entries({
         schedulerSuspended: false,
+        schedulerDeferred: false,
         schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
         processingStartedAt: null,
         completedAt: null,
@@ -46,6 +48,11 @@ export async function runProjectPoolMigration({
         nextStageRetryAt: null,
         lastStageErrorCode: null,
         lastProjectIndex: null,
+        lastStagePhysicalAttempts: 0,
+        lastStageIssuedAt: null,
+        deferredUntil: null,
+        deferredReason: null,
+        schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
     })) {
         chunks[field] = await addMissingField(TranslationChunk, field, value, dryRun);
     }
@@ -78,6 +85,7 @@ export async function runProjectPoolMigration({
             Job.createIndexes(),
             TranslationChunk.createIndexes(),
             GeminiQuotaState.createIndexes(),
+            GeminiSchedulerState?.createIndexes?.(),
         ]);
     }
 

@@ -20,20 +20,26 @@ const formatVietnamDateTime = value => new Intl.DateTimeFormat('vi-VN', {
 const GEMINI_KEY_STATUS_LABELS = Object.freeze({
   untested: 'Chưa có lượt dùng',
   available: 'Sẵn sàng',
+  active: 'Đang trong nhóm hoạt động',
+  standby: 'Đang chờ xoay nhóm',
   cooldown: 'Đang chờ quota',
   disabled: 'Bị Gemini từ chối',
+  quota_exhausted: 'Đã hết quota ngày',
 });
 
 const normalizeGeminiKeyStatus = value => {
   if (!Number.isSafeInteger(value?.keyCount) || value.keyCount < 0 || !Array.isArray(value.keys)) return null;
   const keys = value.keys.map(key => ({
     index: key?.index,
+    group: key?.group ?? null,
     status: key?.status,
+    credentialStatus: key?.credentialStatus ?? null,
     cooldownUntil: key?.cooldownUntil ?? null,
   }));
   if (keys.length !== value.keyCount
     || keys.some(key => !Number.isSafeInteger(key.index) || key.index < 1
       || !Object.hasOwn(GEMINI_KEY_STATUS_LABELS, key.status)
+      || (key.group !== null && (!Number.isSafeInteger(key.group) || key.group < 1))
       || (key.cooldownUntil !== null && typeof key.cooldownUntil !== 'string'))) return null;
   return { keyCount: value.keyCount, keys };
 };
@@ -72,6 +78,15 @@ const normalizeJobStats = value => {
 
 const folderNameForJob = job => job.priority === 1 ? PRIORITY_FOLDER_NAME : (job.folderName || 'Mặc định');
 const folderCacheKey = folder => `${folder.priority ? 'priority' : 'folder'}:${folder.name}`;
+const formatCountdown = (target, now = Date.now()) => {
+  const remainingSeconds = Math.max(0, Math.ceil((new Date(target).getTime() - now) / 1000));
+  const hours = Math.floor(remainingSeconds / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  const seconds = remainingSeconds % 60;
+  return hours > 0
+    ? `${hours}g ${String(minutes).padStart(2, '0')}p ${String(seconds).padStart(2, '0')}s`
+    : `${minutes}p ${String(seconds).padStart(2, '0')}s`;
+};
 
 const serverBatchToTask = batch => ({
   id: `server-${batch.batchId}`,
@@ -290,6 +305,7 @@ function App() {
   const [showTerminalFailures, setShowTerminalFailures] = useState(false);
   const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
+  const [statusClock, setStatusClock] = useState(Date.now());
   const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
   const [isCheckingGeminiKeys, setIsCheckingGeminiKeys] = useState(false);
   const [collapsedFolders, setCollapsedFolders] = useState({});
@@ -352,6 +368,14 @@ function App() {
     };
     fetchInitialData();
   }, []);
+
+  useEffect(() => {
+    const nextWakeTime = sysStatus.dispatcher?.nextWakeTime;
+    if (!sysStatus.dispatcher?.blockedReason || !nextWakeTime) return undefined;
+    setStatusClock(Date.now());
+    const timer = setInterval(() => setStatusClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [sysStatus.dispatcher?.blockedReason, sysStatus.dispatcher?.nextWakeTime]);
 
   useEffect(() => {
     const hasUnsafeUpload = localQueue.some(task => !task.canCloseClient && task.status !== 'hidden');
@@ -1020,7 +1044,7 @@ function App() {
               <aside className="gemini-key-status-result" role="status">
                 <button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>
                 <strong>Đã nạp {geminiKeyStatus.keyCount} API key</strong>
-                <ul>{geminiKeyStatus.keys.map(key => <li key={key.index}>Key {key.index}: {GEMINI_KEY_STATUS_LABELS[key.status]}{key.status === 'cooldown' && key.cooldownUntil ? ` · thử lại sau ${formatVietnamDateTime(key.cooldownUntil)}` : ''}</li>)}</ul>
+                <ul>{geminiKeyStatus.keys.map(key => <li key={key.index}>Key {key.index}{key.group ? ` · nhóm ${key.group}` : ''}: {GEMINI_KEY_STATUS_LABELS[key.status]}{key.status === 'cooldown' && key.cooldownUntil ? ` · thử lại sau ${formatVietnamDateTime(key.cooldownUntil)}` : ''}</li>)}</ul>
               </aside>
             )}
             {geminiKeyStatus?.type === 'error' && <aside className="gemini-key-status-result error" role="alert"><button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>{geminiKeyStatus.message}</aside>}
@@ -1118,6 +1142,34 @@ function App() {
             <button className="wake-up-btn" onClick={handleForceWakeUp}>
               ⚡ Đánh thức ngay
             </button>
+          </aside>
+        )}
+
+        {!sysStatus.isHibernating && sysStatus.dispatcher?.blockedReason && (
+          <aside className="quota-wait-banner" role="status" aria-live="polite">
+            <div>
+              <strong>⏳ Hàng dịch đang chờ tài nguyên Gemini, ứng dụng vẫn hoạt động.</strong>
+              <p>
+                Lý do: {sysStatus.dispatcher.blockedReason === 'all_projects_no_capacity'
+                  || sysStatus.dispatcher.blockedReason === 'quota_pool_exhausted'
+                  ? 'toàn bộ project hiện chưa cấp được quota'
+                  : sysStatus.dispatcher.blockedReason === 'watchdog_error'
+                    ? 'watchdog chưa đọc được trạng thái hàng đợi'
+                    : sysStatus.dispatcher.blockedReason}.
+              </p>
+              <small>
+                Nhóm {sysStatus.dispatcher.currentProjectGroup ?? '—'}/{sysStatus.dispatcher.projectGroupCount ?? '—'}
+                {' · '}ready {sysStatus.dispatcher.runnableStageDepth ?? 0}
+                {' · '}deferred {sysStatus.dispatcher.deferredStageDepth ?? 0}
+              </small>
+            </div>
+            {sysStatus.dispatcher.nextWakeTime && (
+              <div className="quota-wait-countdown">
+                <span>Tự thử lại sau</span>
+                <strong>{formatCountdown(sysStatus.dispatcher.nextWakeTime, statusClock)}</strong>
+                <small>{formatVietnamDateTime(sysStatus.dispatcher.nextWakeTime)}</small>
+              </div>
+            )}
           </aside>
         )}
 

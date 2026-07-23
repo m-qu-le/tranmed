@@ -52,6 +52,7 @@ const jobSchema = new mongoose.Schema({
     processingStartedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
     schedulerSuspended: { type: Boolean, default: false },
+    schedulerDeferred: { type: Boolean, default: false },
     schedulerExecutionVersion: { type: String, default: null },
     chunkCount: { type: Number, default: 0, min: 0 },
     completedChunks: { type: Number, default: 0, min: 0 },

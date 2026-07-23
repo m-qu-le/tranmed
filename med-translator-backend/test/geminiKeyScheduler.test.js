@@ -27,7 +27,9 @@ test('public status initializes all keys without exposing values and tracks pass
 
     assert.deepEqual(scheduler.publicStatus(), sevenKeys.map((_, index) => ({
         index: index + 1,
-        status: 'untested',
+        group: 1,
+        status: 'active',
+        credentialStatus: 'untested',
         cooldownUntil: null,
     })));
 
@@ -42,13 +44,35 @@ test('public status initializes all keys without exposing values and tracks pass
     }, { estimatedInputTokens: 1 });
 
     const status = scheduler.publicStatus();
-    assert.deepEqual(status[0], { index: 1, status: 'cooldown', cooldownUntil: new Date(now + 2000).toISOString() });
-    assert.deepEqual(status[1], { index: 2, status: 'available', cooldownUntil: null });
-    assert.equal(status.slice(2).every(key => key.status === 'untested' && key.cooldownUntil === null), true);
+    assert.deepEqual(status[0], {
+        index: 1,
+        group: 1,
+        status: 'cooldown',
+        credentialStatus: 'untested',
+        cooldownUntil: new Date(now + 2000).toISOString(),
+    });
+    assert.deepEqual(status[1], {
+        index: 2,
+        group: 1,
+        status: 'active',
+        credentialStatus: 'validated',
+        cooldownUntil: null,
+    });
+    assert.equal(status.slice(2).every(key => (
+        key.status === 'active'
+        && key.credentialStatus === 'untested'
+        && key.cooldownUntil === null
+    )), true);
     assert.doesNotMatch(JSON.stringify(status), /secret-key/);
 
     now += 2001;
-    assert.deepEqual(scheduler.publicStatus()[0], { index: 1, status: 'untested', cooldownUntil: null });
+    assert.deepEqual(scheduler.publicStatus()[0], {
+        index: 1,
+        group: 1,
+        status: 'active',
+        credentialStatus: 'untested',
+        cooldownUntil: null,
+    });
 });
 
 test('public status reports disabled keys without exposing internal scheduler details', async () => {
@@ -61,7 +85,13 @@ test('public status reports disabled keys without exposing internal scheduler de
         }),
         error => error.code === ErrorCodes.GEMINI_AUTH
     );
-    assert.deepEqual(scheduler.publicStatus(), [{ index: 1, status: 'disabled', cooldownUntil: null }]);
+    assert.deepEqual(scheduler.publicStatus(), [{
+        index: 1,
+        group: 1,
+        status: 'disabled',
+        credentialStatus: 'untested',
+        cooldownUntil: null,
+    }]);
 });
 
 test('429 rotates immediately to the next project and respects Retry-After', async () => {
@@ -112,7 +142,7 @@ test('auth failure disables one key while other keys and later requests continue
     assert.deepEqual(next, [2]);
 });
 
-test('all-key quota exhaustion returns one durable retry error without spinning', async () => {
+test('three 429 responses defer the stage without globally gating untried projects', async () => {
     let now = 1_000_000;
     const scheduler = new GeminiKeyScheduler({
         keysProvider: () => sevenKeys,
@@ -129,10 +159,11 @@ test('all-key quota exhaustion returns one durable retry error without spinning'
         }),
         error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
             && error.quotaRelated
-            && error.poolExhausted
+            && !error.poolExhausted
             && error.retryAfterMs === 60_000
     );
     assert.equal(calls.length, 3);
+    assert.equal(scheduler.availabilitySnapshot().gated, false);
 
     now += 60_001;
     await assert.rejects(

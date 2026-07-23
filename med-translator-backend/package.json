@@ -21,6 +21,8 @@
     "backup:p003": "node scripts/backup-project-003.js",
     "migrate:project-pool:dry": "node scripts/migrate-project-pool.js --dry-run",
     "migrate:project-pool": "node scripts/migrate-project-pool.js",
+    "migrate:quota-dead-time:dry": "node scripts/migrate-quota-dead-time.js --dry-run",
+    "migrate:quota-dead-time": "node scripts/migrate-quota-dead-time.js",
     "smoke:fixture": "node scripts/create-smoke-pdf.js",
     "smoke:r2": "node scripts/smoke-r2.js",
     "smoke:r2-presign": "node scripts/smoke-r2-presign.js",
