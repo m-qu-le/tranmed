@@ -42,6 +42,8 @@ const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
 const PRIORITY_FOLDER_NAME = 'Ưu tiên';
 const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
+const INFRASTRUCTURE_RETRY_BASE_DELAY_MS = 60 * 1000;
+const INFRASTRUCTURE_RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 // Khi toàn bộ key Gemini đang cooldown, không thay job vừa dừng bằng PDF mới.
 // Retry của job cũ phải được ưu tiên sau khi pool hồi phục.
@@ -455,10 +457,13 @@ export class QueueManager extends EventEmitter {
         const retryCount = Number.isSafeInteger(job.retryCount) ? job.retryCount : 0;
         const configuredDelay = category === 'content'
             ? CONTENT_RETRY_DELAYS_MS[Math.min(job.attemptCount - 1, CONTENT_RETRY_DELAYS_MS.length - 1)]
-            : Math.min(6 * 60 * 60 * 1000, 5 * 60 * 1000 * (2 ** retryCount));
+            : Math.min(INFRASTRUCTURE_RETRY_MAX_DELAY_MS, INFRASTRUCTURE_RETRY_BASE_DELAY_MS * (2 ** retryCount));
         const retryAfterMs = Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0 ? error.retryAfterMs : 0;
         const delay = Math.max(configuredDelay, retryAfterMs);
-        return new Date(now + delay + Math.floor(Math.random() * delay * 0.2));
+        const jitter = retryAfterMs > configuredDelay
+            ? Math.floor(Math.random() * delay * 0.2)
+            : Math.floor(Math.random() * Math.min(delay * 0.2, INFRASTRUCTURE_RETRY_MAX_DELAY_MS - delay));
+        return new Date(now + delay + jitter);
     }
 
     pendingJobFilter(now = new Date()) {

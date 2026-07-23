@@ -5,6 +5,22 @@ import TranslationChunk from '../src/models/translationChunkModel.js';
 import { QueueManager } from '../src/services/queueManager.js';
 import { ErrorCodes, ProcessingError } from '../src/utils/processingError.js';
 
+test('infrastructure retries back off from one minute and cap at ten minutes', () => {
+    const queue = new QueueManager();
+    const now = Date.UTC(2026, 6, 23);
+    const error = new ProcessingError(ErrorCodes.GEMINI_RATE_LIMIT, 'quota', { retryable: true });
+
+    for (const [retryCount, expectedDelay] of [[0, 60], [1, 120], [2, 240], [3, 480], [4, 600], [9, 600]]) {
+        const retryAt = queue.calculateRetryAt(error, { retryCount }, 'infrastructure', now);
+        const delayMs = retryAt.getTime() - now;
+        assert.ok(delayMs >= expectedDelay * 1000);
+        assert.ok(delayMs <= 600_000);
+    }
+
+    error.retryAfterMs = 900_000;
+    assert.ok(queue.calculateRetryAt(error, { retryCount: 9 }, 'infrastructure', now).getTime() - now >= 900_000);
+});
+
 test('error policy retries quota errors but permanently fails invalid PDFs', async (context) => {
     const originalUpdateOne = Job.updateOne;
     const originalExists = Job.exists;
