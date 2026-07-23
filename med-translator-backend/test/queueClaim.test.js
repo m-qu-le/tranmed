@@ -3,6 +3,7 @@ import test from 'node:test';
 import Job from '../src/models/jobModel.js';
 import System from '../src/models/systemModel.js';
 import { QueueManager } from '../src/services/queueManager.js';
+import { ErrorCodes, ProcessingError } from '../src/utils/processingError.js';
 
 test('claimNextJob relies on one atomic pending-to-processing update', async (context) => {
     const originalFindOneAndUpdate = Job.findOneAndUpdate;
@@ -96,13 +97,48 @@ test('candidate claim keeps the peeked ID in the atomic update filter', async (c
     assert.equal(claimed.jobId, 'candidate-job');
 });
 
+test('scheduler suspension persists pending state without retry or attempt amplification', async context => {
+    const originalUpdateOne = Job.updateOne;
+    const originalFindOneAndUpdate = Job.findOneAndUpdate;
+    let suspensionUpdate;
+    Job.updateOne = async (_filter, update) => {
+        suspensionUpdate = update;
+        return { modifiedCount: 1 };
+    };
+    let claimUpdate;
+    Job.findOneAndUpdate = async (_filter, update) => {
+        claimUpdate = update;
+        return { jobId: 'normal-job', attemptCount: 2 };
+    };
+    context.after(() => {
+        Job.updateOne = originalUpdateOne;
+        Job.findOneAndUpdate = originalFindOneAndUpdate;
+    });
+
+    const queue = new QueueManager();
+    await queue.handleProcessingFailure(
+        { jobId: 'normal-job', processingToken: 'token', attemptCount: 2 },
+        new ProcessingError(ErrorCodes.SCHEDULER_SUSPENDED, 'yield to priority')
+    );
+    assert.equal(suspensionUpdate.$set.status, 'pending');
+    assert.equal(suspensionUpdate.$set.schedulerSuspended, true);
+    assert.equal(suspensionUpdate.$inc, undefined);
+
+    await queue.claimNextJob('normal-id', {
+        resumeSuspended: true,
+        processingStartedAt: new Date(),
+    });
+    assert.equal(claimUpdate.$inc, undefined);
+    assert.equal(claimUpdate.$set.schedulerSuspended, false);
+});
+
 test('an idle worker stops after one empty claim instead of polling in a microtask loop', async () => {
     const queue = new QueueManager();
     let claims = 0;
     let schedules = 0;
 
     queue.recoverExpiredLeases = async () => 0;
-    queue.claimNextJob = async () => {
+    queue.claimAdmissibleJob = async () => {
         claims += 1;
         return null;
     };

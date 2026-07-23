@@ -3,7 +3,11 @@ import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import { processPdf } from './pdfService.js';
 import { processTranslation } from './geminiService.js';
-import { createQualityGeminiExecutors } from './qualityGeminiExecutors.js';
+import {
+    createQualityGeminiExecutors,
+    qualityGeminiLimiter,
+    qualityKeyScheduler,
+} from './qualityGeminiExecutors.js';
 import { QualityPipelineService } from './qualityPipelineService.js';
 import { QualityDocumentContextService } from './qualityDocumentContextService.js';
 import Job from '../models/jobModel.js';
@@ -16,7 +20,7 @@ import {
     TRANSLATION_PIPELINE_MODE,
     TRANSLATION_WORKER_CONCURRENCY
 } from '../config/env.js';
-import { QUALITY_PIPELINE_VERSION } from './qualityPipelineState.js';
+import { isTerminalQualityStage, QUALITY_PIPELINE_VERSION } from './qualityPipelineState.js';
 import { cleanupOrphanUploads } from './storageService.js';
 import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 import {
@@ -37,6 +41,7 @@ import {
     failureAdvice,
     isTerminalRetryable,
 } from './jobFailurePolicy.js';
+import { operationalMetrics } from './operationalMetrics.js';
 
 const CIRCUIT_BREAKER_KEY = 'circuit_breaker';
 const PRIORITY_FOLDER_NAME = 'Ưu tiên';
@@ -48,10 +53,10 @@ export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
 // Khi toàn bộ key Gemini đang cooldown, không thay job vừa dừng bằng PDF mới.
 // Retry của job cũ phải được ưu tiên sau khi pool hồi phục.
 export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 10;
-// Limiter Gemini toàn cục quyết định số request; mỗi PDF được phép có hai chunk chờ xử lý.
-const QUALITY_CHUNK_CONCURRENCY = 2;
+export const SCHEDULER_EXECUTION_VERSION = 'project-pool-v1';
+const PRIORITY_DEMAND_CACHE_MS = 250;
 
-const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings';
+const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings processingStartedAt completedAt schedulerSuspended schedulerExecutionVersion';
 
 export class QueueManager extends EventEmitter {
     constructor({
@@ -60,7 +65,7 @@ export class QueueManager extends EventEmitter {
         concurrency = TRANSLATION_WORKER_CONCURRENCY,
     } = {}) {
         super();
-        this.concurrency = concurrency;
+        this.concurrency = Math.min(3, concurrency);
         this.activeJobs = new Map();
         this.activeSourceBytes = 0;
         this.pumpPromise = null;
@@ -75,6 +80,7 @@ export class QueueManager extends EventEmitter {
         this.sourceService = sourceService;
         this.sourceCleanupService = sourceCleanupService;
         this.cleanupTimer = null;
+        this.priorityDemandCache = { checkedAt: 0, value: false };
     }
 
     async initDB() {
@@ -152,6 +158,8 @@ export class QueueManager extends EventEmitter {
     }
 
     getSystemStatus() {
+        const limiter = qualityGeminiLimiter.snapshot();
+        const broker = qualityKeyScheduler.metricsSnapshot();
         return {
             isHibernating: this.isHibernating,
             stats: this.hibernationStats,
@@ -161,7 +169,19 @@ export class QueueManager extends EventEmitter {
                 activeJobs: this.activeJobs.size,
                 activeSourceBytes: this.activeSourceBytes,
                 parallelSourceBudgetBytes: PARALLEL_SOURCE_BUDGET_BYTES,
-            }
+            },
+            dispatcher: {
+                stageQueueDepth: Math.max(
+                    limiter.waitingCount,
+                    broker.activeLogicalRequests - limiter.activeCount
+                ),
+                waitingStages: limiter.waitingCount,
+                activeStages: limiter.activeCount,
+                logicalConcurrency: limiter.limit,
+                activeProjectCount: broker.activeProjectLimit,
+                resourceGuard: limiter.lastResourceSnapshot,
+                quotaGate: qualityKeyScheduler.availabilitySnapshot(),
+            },
         };
     }
 
@@ -492,39 +512,59 @@ export class QueueManager extends EventEmitter {
     }
 
     async peekNextJob() {
-        return Job.findOne(this.pendingJobFilter(), '_id sourceSize')
+        return Job.findOne(
+            this.pendingJobFilter(),
+            '_id sourceSize priority schedulerSuspended processingStartedAt'
+        )
             .sort({ priority: -1, createdAt: 1, _id: 1 })
             .lean();
     }
 
-    async claimNextJob(candidateId = null) {
+    async claimNextJob(candidateId = null, { resumeSuspended = false, processingStartedAt = null } = {}) {
         const filter = this.pendingJobFilter();
         if (candidateId) filter._id = candidateId;
+        if (resumeSuspended) filter.schedulerSuspended = true;
         const processingToken = randomUUID();
+        const update = {
+            $set: {
+                status: 'processing',
+                processingToken,
+                leaseExpiresAt: new Date(Date.now() + LEASE_DURATION_MS),
+                nextRetryAt: null,
+                error: null,
+                errorCode: null,
+                schedulerSuspended: false,
+                schedulerExecutionVersion: SCHEDULER_EXECUTION_VERSION,
+                ...(!processingStartedAt ? { processingStartedAt: new Date() } : {}),
+            },
+        };
+        if (!resumeSuspended) update.$inc = { attemptCount: 1 };
         return Job.findOneAndUpdate(
             filter,
-            {
-                $set: {
-                    status: 'processing',
-                    processingToken,
-                    leaseExpiresAt: new Date(Date.now() + LEASE_DURATION_MS),
-                    nextRetryAt: null,
-                    error: null,
-                    errorCode: null
-                },
-                $inc: { attemptCount: 1 }
-            },
+            update,
             { sort: { priority: -1, createdAt: 1, _id: 1 }, returnDocument: 'after' }
         );
     }
 
     async claimAdmissibleJob() {
-        if (this.activeJobs.size === 0) return this.claimNextJob();
+        if (qualityKeyScheduler.availabilitySnapshot().gated) return null;
         if ([...this.activeJobs.values()].some(active => !active.sourceSize)) return null;
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
             const candidate = await this.peekNextJob();
             if (!candidate) return null;
+            if (candidate.priority !== 1
+                && [...this.activeJobs.values()].some(active => active.priority === 1)) {
+                return null;
+            }
+            if (this.activeJobs.size === 0) {
+                const claimed = await this.claimNextJob(candidate._id, {
+                    resumeSuspended: candidate.schedulerSuspended === true,
+                    processingStartedAt: candidate.processingStartedAt,
+                });
+                if (claimed) return claimed;
+                continue;
+            }
             const sourceSize = candidate.sourceSize;
             // ponytail: source bytes là proxy bảo thủ; nâng cấp bằng admission theo RAM đo được nếu cần chạy song song PDF lớn.
             if (!Number.isSafeInteger(sourceSize)
@@ -532,7 +572,10 @@ export class QueueManager extends EventEmitter {
                 || this.activeSourceBytes + sourceSize > PARALLEL_SOURCE_BUDGET_BYTES) {
                 return null;
             }
-            const claimed = await this.claimNextJob(candidate._id);
+            const claimed = await this.claimNextJob(candidate._id, {
+                resumeSuspended: candidate.schedulerSuspended === true,
+                processingStartedAt: candidate.processingStartedAt,
+            });
             if (claimed) return claimed;
         }
         return null;
@@ -585,7 +628,8 @@ export class QueueManager extends EventEmitter {
             ).sort({ leaseExpiresAt: 1 }).lean()
         ]);
 
-        const wakeTimes = [nextRetry?.nextRetryAt, nextLease?.leaseExpiresAt]
+        const quotaWakeup = qualityKeyScheduler.availabilitySnapshot().nextAvailableAt;
+        const wakeTimes = [nextRetry?.nextRetryAt, nextLease?.leaseExpiresAt, quotaWakeup]
             .filter(Boolean)
             .map(value => new Date(value).getTime());
         if (wakeTimes.length === 0) return;
@@ -651,6 +695,55 @@ export class QueueManager extends EventEmitter {
         if (!active) throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
     }
 
+    async hasPriorityDemand(excludingJobId = null) {
+        if ([...this.activeJobs.entries()].some(([jobId, active]) => (
+            jobId !== excludingJobId && active.priority === 1
+        ))) return true;
+
+        const now = Date.now();
+        if (now - this.priorityDemandCache.checkedAt < PRIORITY_DEMAND_CACHE_MS) {
+            return this.priorityDemandCache.value;
+        }
+        const value = Boolean(await Job.exists({
+            ...this.pendingJobFilter(new Date(now)),
+            priority: 1,
+        }));
+        this.priorityDemandCache = { checkedAt: now, value };
+        if (value) qualityGeminiLimiter.setPriorityGate(true);
+        return value;
+    }
+
+    async refreshPriorityGate() {
+        const activePriority = [...this.activeJobs.values()].some(active => active.priority === 1);
+        if (!activePriority
+            && !this.priorityDemandCache.value
+            && !qualityGeminiLimiter.snapshot().priorityGate) {
+            qualityGeminiLimiter.setPriorityGate(false);
+            return;
+        }
+        const pendingPriority = activePriority ? true : Boolean(await Job.exists({
+            ...this.pendingJobFilter(),
+            priority: 1,
+        }));
+        qualityGeminiLimiter.setPriorityGate(activePriority || pendingPriority);
+        this.priorityDemandCache = {
+            checkedAt: Date.now(),
+            value: activePriority || pendingPriority,
+        };
+    }
+
+    async assertStageAdmission(job) {
+        await this.assertJobActive(job);
+        if (job.priority === 1 || !(await this.hasPriorityDemand(job.jobId))) return;
+        qualityKeyScheduler.suspendJob(job.jobId);
+        qualityGeminiLimiter.suspendJob(job.jobId);
+        throw new ProcessingError(
+            ErrorCodes.SCHEDULER_SUSPENDED,
+            'Job thường được tạm nhường source lane cho thư mục Ưu tiên.',
+            { publicMessage: 'Tạm nhường tài nguyên cho tài liệu ưu tiên.' }
+        );
+    }
+
     async getQualityProgress(jobId) {
         const [completedChunks, passedChunks, needsReviewRows] = await Promise.all([
             TranslationChunk.countDocuments({
@@ -680,7 +773,21 @@ export class QueueManager extends EventEmitter {
 
     async processQualityChunks(job, splitResult, sourcePath, emitLog, signal) {
         const { chunkBuffers, totalPages, pageRanges } = splitResult;
+        qualityKeyScheduler.resumeJob(job.jobId);
+        // Encode lazily when a stage is actually issued, retain it across that
+        // chunk's stages, then release it at the terminal boundary.
+        const chunkPayloads = new Map();
+        const getChunkPayload = chunkIndex => {
+            if (!chunkPayloads.has(chunkIndex)) {
+                chunkPayloads.set(
+                    chunkIndex,
+                    Buffer.from(chunkBuffers[chunkIndex]).toString('base64')
+                );
+            }
+            return chunkPayloads.get(chunkIndex);
+        };
         const executors = createQualityGeminiExecutors({
+            schedulingContext: { jobId: job.jobId, priority: job.priority || 0 },
             onSchedulerEvent: event => {
                 const status = event.status ? ` status=${event.status}` : '';
                 const retry = event.retryAfterMs ? ` retryAfterMs=${event.retryAfterMs}` : '';
@@ -694,6 +801,7 @@ export class QueueManager extends EventEmitter {
             totalPages,
             signal,
             assertActive: () => this.assertJobActive(job),
+            assertCanStartStage: () => this.assertStageAdmission(job),
             onStage: async event => {
                 await Job.updateOne(
                     {
@@ -716,21 +824,60 @@ export class QueueManager extends EventEmitter {
         const pipeline = new QualityPipelineService({ ChunkModel: TranslationChunk, executors });
         const indexes = chunkBuffers.map((_, index) => index);
 
-        await runBoundedTasks(indexes, QUALITY_CHUNK_CONCURRENCY, async chunkIndex => {
-            const range = pageRanges[chunkIndex];
-            return pipeline.runChunk({
-                jobId: job.jobId,
-                chunkIndex,
-                pageStart: range.pageStart,
-                pageEnd: range.pageEnd,
-                totalPages,
-                pdfBuffer: chunkBuffers[chunkIndex],
-                documentContext,
-                signal,
-                assertActive: () => this.assertJobActive(job),
-                onStage: async event => {
-                    if (event.phase === 'started') {
-                        const progress = await this.getQualityProgress(job.jobId);
+        const chunkDispatcherWidth = Math.min(
+            indexes.length,
+            qualityGeminiLimiter.snapshot().maxLimit
+        );
+        try {
+            await runBoundedTasks(indexes, chunkDispatcherWidth, async chunkIndex => {
+                const range = pageRanges[chunkIndex];
+                return pipeline.runChunk({
+                    jobId: job.jobId,
+                    chunkIndex,
+                    pageStart: range.pageStart,
+                    pageEnd: range.pageEnd,
+                    totalPages,
+                    pdfBuffer: () => getChunkPayload(chunkIndex),
+                    documentContext,
+                    signal,
+                    assertActive: () => this.assertJobActive(job),
+                    assertCanStartStage: () => this.assertStageAdmission(job),
+                    onStage: async event => {
+                        if (event.phase === 'started') {
+                            await Job.updateOne(
+                                {
+                                    jobId: job.jobId,
+                                    status: 'processing',
+                                    processingToken: job.processingToken,
+                                    cancelRequested: { $ne: true },
+                                },
+                                { $set: { currentQualityStage: event.action } }
+                            );
+                            this.emitJobUpdate(job.jobId, 'processing', {
+                                translationMode: 'quality',
+                                translationPipelineVersion: QUALITY_PIPELINE_VERSION,
+                                currentQualityStage: event.action,
+                                qualityStagePhase: 'started',
+                                chunkIndex,
+                                pageStart: range.pageStart,
+                                pageEnd: range.pageEnd,
+                            });
+                            emitLog(`🧪 [Chunk ${chunkIndex + 1}] Bắt đầu stage=${event.action}.`);
+                            return;
+                        }
+
+                        const terminal = isTerminalQualityStage(event.chunk.stage);
+                        const progress = terminal
+                            ? await this.getQualityProgress(job.jobId)
+                            : null;
+                        if (terminal) {
+                            chunkPayloads.delete(chunkIndex);
+                            operationalMetrics.increment(
+                                'translation.pages_completed',
+                                range.pageEnd - range.pageStart + 1
+                            );
+                            operationalMetrics.increment('translation.chunks_terminal');
+                        }
                         await Job.updateOne(
                             {
                                 jobId: job.jobId,
@@ -738,46 +885,30 @@ export class QueueManager extends EventEmitter {
                                 processingToken: job.processingToken,
                                 cancelRequested: { $ne: true },
                             },
-                            { $set: { currentQualityStage: event.action } }
+                            {
+                                $set: {
+                                    currentQualityStage: event.action,
+                                    ...(progress || {}),
+                                },
+                            }
                         );
                         this.emitJobUpdate(job.jobId, 'processing', {
                             translationMode: 'quality',
                             translationPipelineVersion: QUALITY_PIPELINE_VERSION,
-                            ...progress,
+                            ...(progress || {}),
                             currentQualityStage: event.action,
-                            qualityStagePhase: 'started',
+                            qualityStagePhase: 'completed',
                             chunkIndex,
                             pageStart: range.pageStart,
                             pageEnd: range.pageEnd,
                         });
-                        emitLog(`🧪 [Chunk ${chunkIndex + 1}] Bắt đầu stage=${event.action}.`);
-                        return;
-                    }
-
-                    const progress = await this.getQualityProgress(job.jobId);
-                    await Job.updateOne(
-                        {
-                            jobId: job.jobId,
-                            status: 'processing',
-                            processingToken: job.processingToken,
-                            cancelRequested: { $ne: true },
-                        },
-                        { $set: progress }
-                    );
-                    this.emitJobUpdate(job.jobId, 'processing', {
-                        translationMode: 'quality',
-                        translationPipelineVersion: QUALITY_PIPELINE_VERSION,
-                        ...progress,
-                        currentQualityStage: event.action,
-                        qualityStagePhase: 'completed',
-                        chunkIndex,
-                        pageStart: range.pageStart,
-                        pageEnd: range.pageEnd,
-                    });
-                    emitLog(`✅ [Chunk ${chunkIndex + 1}] Hoàn thành stage=${event.action}.`);
-                },
+                        emitLog(`✅ [Chunk ${chunkIndex + 1}] Hoàn thành stage=${event.action}.`);
+                    },
+                });
             });
-        });
+        } finally {
+            chunkPayloads.clear();
+        }
 
         return this.getQualityProgress(job.jobId);
     }
@@ -864,6 +995,7 @@ export class QueueManager extends EventEmitter {
             {
                 $set: {
                     status: 'completed',
+                    completedAt: new Date(),
                     error: null,
                     errorCode: null,
                     processingToken: null,
@@ -900,6 +1032,28 @@ export class QueueManager extends EventEmitter {
 
     async handleProcessingFailure(job, rawError) {
         const error = normalizeProcessingError(rawError);
+        if (error.code === ErrorCodes.SCHEDULER_SUSPENDED) {
+            await Job.updateOne(
+                { jobId: job.jobId, processingToken: job.processingToken },
+                {
+                    $set: {
+                        status: 'pending',
+                        schedulerSuspended: true,
+                        error: null,
+                        errorCode: null,
+                        nextRetryAt: new Date(),
+                        processingToken: null,
+                        leaseExpiresAt: null,
+                    },
+                }
+            );
+            this.priorityDemandCache = { checkedAt: 0, value: true };
+            this.emitJobUpdate(job.jobId, 'pending', {
+                schedulerSuspended: true,
+                schedulerExecutionVersion: SCHEDULER_EXECUTION_VERSION,
+            });
+            return;
+        }
         const cancellationRequested = error.code === ErrorCodes.CANCELLED || Boolean(await Job.exists({
             jobId: job.jobId,
             processingToken: job.processingToken,
@@ -1019,6 +1173,9 @@ export class QueueManager extends EventEmitter {
                 this.activeJobs.delete(job.jobId);
                 this.activeSourceBytes -= active.sourceSize || 0;
             }
+            await this.refreshPriorityGate().catch(error => {
+                console.error('❌ [PRIORITY GATE] Không thể làm mới trạng thái:', error.message);
+            });
             if (!this.isHibernating && !this.isMaintenancePaused) void this.startWorker();
         }
     }
@@ -1038,8 +1195,13 @@ export class QueueManager extends EventEmitter {
             const active = {
                 abortController: new AbortController(),
                 sourceSize,
+                priority: job.priority || 0,
             };
             this.activeJobs.set(job.jobId, active);
+            if (active.priority === 1) {
+                this.priorityDemandCache = { checkedAt: Date.now(), value: true };
+                qualityGeminiLimiter.setPriorityGate(true);
+            }
             this.activeSourceBytes += sourceSize || 0;
             void this.runActiveJob(job);
         }

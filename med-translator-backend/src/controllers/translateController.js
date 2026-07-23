@@ -7,7 +7,7 @@ import { r2Service, runtimeConfig, uploadBatchService } from '../services/runtim
 import { PRIORITY_FOLDER_NAME, UploadBatchError } from '../services/uploadBatchService.js';
 import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
-import { qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
+import { qualityGeminiLimiter, qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
 import { buildPublicJobUpdate, buildPublicQualitySummary } from '../services/qualityPublicView.js';
 import { buildQualityReviewHeader, prependQualityReviewHeader } from '../services/qualityReviewMarkdown.js';
 
@@ -22,6 +22,7 @@ const QUALITY_REVIEW_FIELDS = [
     'reverifyReport',
     'qualityReviewReason',
 ].join(' ');
+const UI_JOB_EVENT_THROTTLE_MS = 250;
 
 async function getReviewChunks(jobId, job) {
     if (job?.status !== 'completed' || job?.translationMode !== 'quality') return [];
@@ -39,7 +40,11 @@ function sendUploadBatchError(res, error) {
 
 export function buildGeminiKeyStatusPayload(scheduler = qualityKeyScheduler) {
     const keys = scheduler.publicStatus();
-    return { keyCount: keys.length, keys };
+    return {
+        keyCount: keys.length,
+        keys,
+        quota: scheduler.quotaAggregate(),
+    };
 }
 
 export const getGeminiKeyStatus = (_req, res) => {
@@ -227,9 +232,31 @@ export const streamLogs = (req, res) => {
         res.write(`: keep-alive-ping\n\n`);
     }, 15000); 
 
-    const onJobUpdated = (job) => {
-        const payload = buildPublicJobUpdate(job);
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    const pendingJobUpdates = new Map();
+    const jobUpdateTimers = new Map();
+    const lastJobUpdateAt = new Map();
+    const writeJobUpdate = job => {
+        lastJobUpdateAt.set(job.jobId, Date.now());
+        res.write(`data: ${JSON.stringify(buildPublicJobUpdate(job))}\n\n`);
+    };
+    const onJobUpdated = job => {
+        const terminal = ['completed', 'failed', 'cancelled'].includes(job.status);
+        const elapsed = Date.now() - (lastJobUpdateAt.get(job.jobId) || 0);
+        if (terminal || elapsed >= UI_JOB_EVENT_THROTTLE_MS) {
+            clearTimeout(jobUpdateTimers.get(job.jobId));
+            jobUpdateTimers.delete(job.jobId);
+            pendingJobUpdates.delete(job.jobId);
+            writeJobUpdate(job);
+            return;
+        }
+        pendingJobUpdates.set(job.jobId, job);
+        if (jobUpdateTimers.has(job.jobId)) return;
+        jobUpdateTimers.set(job.jobId, setTimeout(() => {
+            jobUpdateTimers.delete(job.jobId);
+            const latest = pendingJobUpdates.get(job.jobId);
+            pendingJobUpdates.delete(job.jobId);
+            if (latest) writeJobUpdate(latest);
+        }, Math.max(1, UI_JOB_EVENT_THROTTLE_MS - elapsed)));
     };
 
     const onJobLog = ({ jobId, msg }) => {
@@ -263,6 +290,9 @@ export const streamLogs = (req, res) => {
         translationQueue.off('jobLog', onJobLog);
         appEvents.off('batchUpdated', onBatchUpdated);
         appEvents.off('sourceCleanup', onSourceCleanup);
+        for (const timer of jobUpdateTimers.values()) clearTimeout(timer);
+        jobUpdateTimers.clear();
+        pendingJobUpdates.clear();
         clearInterval(heartbeat); // Ngăn rò rỉ bộ nhớ (Memory Leak)
         res.end();
     });
@@ -336,9 +366,21 @@ export const getSystemStatus = async (req, res) => {
 export const getOperationalMetrics = async (req, res) => {
     try {
         const cleanupBacklog = await Job.countDocuments({ sourceCleanupState: { $in: ['pending', 'retry'] } });
+        const metrics = operationalMetrics.snapshot();
+        const elapsedHours = Math.max(
+            1 / 3600,
+            (Date.now() - new Date(metrics.startedAt).getTime()) / 3_600_000
+        );
+        const pagesCompleted = metrics.counters['translation.pages_completed'] || 0;
         res.status(200).json({
-            ...operationalMetrics.snapshot(),
-            gauges: { cleanupBacklog },
+            ...metrics,
+            gauges: {
+                ...metrics.gauges,
+                cleanupBacklog,
+                pagesPerHour: pagesCompleted / elapsedHours,
+            },
+            gemini: qualityKeyScheduler.metricsSnapshot(),
+            dispatcher: qualityGeminiLimiter.snapshot(),
             geminiKeyPool: qualityKeyScheduler.snapshot(),
         });
     } catch (error) {

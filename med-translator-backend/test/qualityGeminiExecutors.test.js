@@ -58,7 +58,13 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         },
     };
 
-    await executors.translate({ pdfBuffer });
+    let lazyPayloadReads = 0;
+    await executors.translate({
+        pdfBuffer: () => {
+            lazyPayloadReads += 1;
+            return pdfBuffer.toString('base64');
+        },
+    });
     await executors.medical_audit({ pdfBuffer, chunk });
     await executors.revise({ pdfBuffer, chunk });
     await executors.verify({ pdfBuffer, chunk });
@@ -69,6 +75,7 @@ test('quality executors use high thinking, bounded output and structured JSON wi
         'translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify',
     ]);
     assert.equal(limiterCalls, 6);
+    assert.equal(lazyPayloadReads, 1);
     for (const request of requests) {
         assert.equal(Object.hasOwn(request.config, 'temperature'), false);
         assert.equal(request.config.thinkingConfig.thinkingLevel, 'HIGH');

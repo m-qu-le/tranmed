@@ -13,21 +13,21 @@ const deferred = () => {
     return { promise, resolve };
 };
 
-test('admission allows the 100 MiB budget but blocks the 101 MiB FIFO head and unknown-size jobs', async () => {
-    const queue = new QueueManager({ concurrency: 5 });
-    queue.activeJobs.set('active', { sourceSize: 80 * MiB });
-    queue.activeSourceBytes = 80 * MiB;
+test('admission allows the 15 MiB budget but blocks an oversized FIFO head and unknown-size jobs', async () => {
+    const queue = new QueueManager({ concurrency: 3 });
+    queue.activeJobs.set('active', { sourceSize: 10 * MiB });
+    queue.activeSourceBytes = 10 * MiB;
     let claims = 0;
-    queue.peekNextJob = async () => ({ _id: 'fits-exactly', sourceSize: 20 * MiB });
+    queue.peekNextJob = async () => ({ _id: 'fits-exactly', sourceSize: 5 * MiB });
     queue.claimNextJob = async id => {
         claims += 1;
-        return { jobId: String(id), sourceSize: 20 * MiB };
+        return { jobId: String(id), sourceSize: 5 * MiB };
     };
 
     assert.equal((await queue.claimAdmissibleJob()).jobId, 'fits-exactly');
     assert.equal(claims, 1);
 
-    queue.activeSourceBytes = 100 * MiB;
+    queue.activeSourceBytes = 15 * MiB;
     queue.peekNextJob = async () => ({ _id: 'fifo-head', sourceSize: MiB });
     assert.equal(await queue.claimAdmissibleJob(), null);
     assert.equal(claims, 1, 'the FIFO head must not be claimed or skipped when it does not fit');
@@ -37,16 +37,16 @@ test('admission allows the 100 MiB budget but blocks the 101 MiB FIFO head and u
     queue.peekNextJob = async () => { peeked = true; return { _id: 'behind-unknown', sourceSize: MiB }; };
     assert.equal(await queue.claimAdmissibleJob(), null);
     assert.equal(peeked, false, 'an unknown-size active job must run alone');
-    assert.equal(PARALLEL_SOURCE_BUDGET_BYTES, 100 * MiB);
+    assert.equal(PARALLEL_SOURCE_BUDGET_BYTES, 15 * MiB);
 });
 
-test('worker pool activates five valid-source jobs without claiming a sixth over budget job', async () => {
+test('worker pool activates at most three source jobs within the 15 MiB budget', async () => {
     const queue = new QueueManager({ concurrency: 5 });
-    const gates = Array.from({ length: 5 }, deferred);
-    const jobs = Array.from({ length: 6 }, (_, index) => ({
+    const gates = Array.from({ length: 3 }, deferred);
+    const jobs = Array.from({ length: 4 }, (_, index) => ({
         _id: `job-${index + 1}`,
         jobId: `job-${index + 1}`,
-        sourceSize: 20 * MiB,
+        sourceSize: 5 * MiB,
         processingToken: `token-${index + 1}`,
         attemptCount: 1,
         maxAttempts: 3,
@@ -68,10 +68,10 @@ test('worker pool activates five valid-source jobs without claiming a sixth over
 
     await queue.startWorker();
 
-    assert.equal(queue.activeJobs.size, 5);
-    assert.equal(queue.activeSourceBytes, 100 * MiB);
-    assert.deepEqual(claimedIds, ['job-1', 'job-2', 'job-3', 'job-4', 'job-5']);
-    assert.equal(jobs[0].jobId, 'job-6');
+    assert.equal(queue.activeJobs.size, 3);
+    assert.equal(queue.activeSourceBytes, 15 * MiB);
+    assert.deepEqual(claimedIds, ['job-1', 'job-2', 'job-3']);
+    assert.equal(jobs[0].jobId, 'job-4');
 
     queue.isMaintenancePaused = true;
     gates.forEach(gate => gate.resolve());
@@ -81,6 +81,7 @@ test('worker pool activates five valid-source jobs without claiming a sixth over
 test('an empty lane claims a large or unknown-size FIFO head to run alone', async () => {
     const queue = new QueueManager({ concurrency: 2 });
     const large = { jobId: 'large', sourceSize: 30 * MiB };
+    queue.peekNextJob = async () => ({ _id: 'large', sourceSize: 30 * MiB });
     queue.claimNextJob = async () => large;
     assert.equal(await queue.claimAdmissibleJob(), large);
 });
@@ -248,7 +249,7 @@ test('worker status exposes only aggregate pool observations', () => {
         concurrency: 2,
         activeJobs: 1,
         activeSourceBytes: 3 * MiB,
-        parallelSourceBudgetBytes: 100 * MiB,
+        parallelSourceBudgetBytes: 15 * MiB,
     });
     assert.equal(JSON.stringify(queue.getSystemStatus()).includes('private-job-id'), false);
 });

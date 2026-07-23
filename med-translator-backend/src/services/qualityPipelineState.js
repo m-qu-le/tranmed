@@ -48,6 +48,12 @@ export function getNextQualityAction(chunk, maxRepairCycles = QUALITY_MAX_REPAIR
     }
 }
 
+export function qualityStageAttemptKey(action, chunk) {
+    if (action === 'repair') return `repair_${Number(chunk?.repairCount || 0) + 1}`;
+    if (action === 'reverify') return `reverify_${Math.max(1, Number(chunk?.repairCount || 0))}`;
+    return action;
+}
+
 export function transitionForAction(action, result, chunk, maxRepairCycles = QUALITY_MAX_REPAIR_CYCLES) {
     const repairCount = Number(chunk.repairCount || 0);
     const cycle = action === 'repair' ? repairCount + 1 : repairCount;
@@ -160,6 +166,11 @@ export function versionResetUpdate(pipelineVersion = QUALITY_PIPELINE_VERSION) {
             qualityStatus: 'pending',
             repairCount: 0,
             usageByStage: {},
+            stageAttempts: {},
+            physicalAttemptCount: 0,
+            nextStageRetryAt: null,
+            lastStageErrorCode: null,
+            lastProjectIndex: null,
             stageUpdatedAt: new Date(),
         },
         $unset: {

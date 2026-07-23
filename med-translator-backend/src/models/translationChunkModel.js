@@ -38,10 +38,16 @@ const translationChunkSchema = new mongoose.Schema({
     qualityStatus: { type: String, enum: QUALITY_STATUSES, default: null },
     qualityReviewReason: { type: qualityReviewReasonSchema, default: null },
     usageByStage: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    stageAttempts: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    physicalAttemptCount: { type: Number, min: 0, default: 0 },
+    nextStageRetryAt: { type: Date, default: null },
+    lastStageErrorCode: { type: String, default: null },
+    lastProjectIndex: { type: Number, min: 0, default: null },
     stageUpdatedAt: { type: Date, default: null },
 }, { timestamps: true });
 
 translationChunkSchema.index({ jobId: 1, chunkIndex: 1 }, { unique: true });
 translationChunkSchema.index({ jobId: 1, qualityStatus: 1, chunkIndex: 1 });
+translationChunkSchema.index({ nextStageRetryAt: 1, jobId: 1, chunkIndex: 1 });
 
 export default mongoose.model('TranslationChunk', translationChunkSchema);

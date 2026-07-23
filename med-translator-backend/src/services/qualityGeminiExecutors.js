@@ -1,8 +1,19 @@
 import { ThinkingLevel } from '@google/genai';
-import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../config/env.js';
+import {
+    GEMINI_ACTIVE_PROJECT_LIMIT,
+    GEMINI_MODEL,
+    GEMINI_PROJECT_LIMITS,
+    GEMINI_SCHEDULER_MODE,
+    GEMINI_TIMEOUT_MS,
+    getGeminiApiKeys,
+    getGeminiProjects,
+} from '../config/env.js';
 import { createGeminiFileContents, createPdfContents, generateGeminiContent } from './geminiAdapter.js';
 import { GeminiKeyScheduler } from './geminiKeyScheduler.js';
 import { AdaptiveGeminiLimiter } from './adaptiveGeminiLimiter.js';
+import GeminiQuotaState from '../models/geminiQuotaStateModel.js';
+import { operationalMetrics } from './operationalMetrics.js';
+import { runtimeResourceSnapshot } from './runtimeResourceMonitor.js';
 import {
     buildAuditInstruction,
     buildRepairInstruction,
@@ -27,9 +38,50 @@ import { normalizeQualityMarkdown } from './qualityMarkdown.js';
 import { assertQualityTextCoverage } from './qualityTextGuard.js';
 import { DOCUMENT_CONTEXT_JSON_SCHEMA, isQualityDocumentContext } from './qualityDocumentContext.js';
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
+import { qualityStageAttemptKey } from './qualityPipelineState.js';
 
-export const qualityKeyScheduler = new GeminiKeyScheduler({ keysProvider: getGeminiApiKeys });
-export const qualityGeminiLimiter = new AdaptiveGeminiLimiter();
+const legacyProjectsProvider = () => getGeminiApiKeys().map((apiKey, index) => ({
+    id: `legacy-key-${index + 1}`,
+    apiKey,
+    index,
+}));
+const projectProvider = GEMINI_SCHEDULER_MODE === 'legacy'
+    ? legacyProjectsProvider
+    : getGeminiProjects;
+const configuredProjectCount = projectProvider().length;
+const activeProjectCount = GEMINI_SCHEDULER_MODE === 'legacy'
+    ? configuredProjectCount
+    : Math.min(GEMINI_ACTIVE_PROJECT_LIMIT, configuredProjectCount);
+const schedulerLimits = GEMINI_SCHEDULER_MODE === 'legacy'
+    ? {
+        rpm: 12,
+        tpm: 200_000,
+        normalRpd: 400,
+        retryRpd: 400,
+        totalRpd: 400,
+        maxInFlight: Number.MAX_SAFE_INTEGER,
+    }
+    : GEMINI_PROJECT_LIMITS;
+
+export const qualityKeyScheduler = new GeminiKeyScheduler({
+    projectsProvider: projectProvider,
+    StateModel: GEMINI_SCHEDULER_MODE === 'project_pool' ? GeminiQuotaState : null,
+    limits: schedulerLimits,
+    activeProjectLimit: activeProjectCount,
+    maxPhysicalAttempts: GEMINI_SCHEDULER_MODE === 'legacy'
+        ? Math.max(1, configuredProjectCount)
+        : 3,
+    maxInlineWaitMs: 60_000,
+});
+export const qualityGeminiLimiter = new AdaptiveGeminiLimiter({
+    initialLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : Math.max(1, activeProjectCount),
+    minLimit: GEMINI_SCHEDULER_MODE === 'legacy' ? 3 : Math.max(1, activeProjectCount),
+    maxLimit: GEMINI_SCHEDULER_MODE === 'legacy'
+        ? 6
+        : Math.max(1, Math.min(100, activeProjectCount * 2)),
+    successesPerIncrease: 30,
+    resourceProvider: runtimeResourceSnapshot,
+});
 
 function wait(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -79,6 +131,7 @@ export function createQualityGeminiExecutors({
     limiter = qualityGeminiLimiter,
     generate = generateGeminiContent,
     onSchedulerEvent = () => {},
+    schedulingContext = {},
     uploadFile = async ({ apiKey, sourcePath, signal }) => {
         const { GoogleGenAI } = await import('@google/genai');
         const client = new GoogleGenAI({ apiKey });
@@ -89,22 +142,93 @@ export function createQualityGeminiExecutors({
         return { client, file };
     },
 } = {}) {
-    const schedule = (requestFactory, options) => limiter.run(
-        async () => {
-            try {
-                return await scheduler.execute(requestFactory, {
+    const schedule = async (requestFactory, options) => {
+        operationalMetrics.increment('gemini.logical_stages');
+        if (options.metricStage) {
+            operationalMetrics.increment(`gemini.${options.metricStage}.logical_stages`);
+        }
+        let physicalAttempts = 0;
+        let lastProjectIndex = null;
+        try {
+            const result = await scheduler.execute(
+                credentials => limiter.run(
+                    () => {
+                        credentials.markPhysicalStart?.();
+                        return requestFactory(credentials);
+                    },
+                    {
+                        signal: options.signal,
+                        priority: schedulingContext.priority || 0,
+                        jobId: schedulingContext.jobId || null,
+                    }
+                ),
+                {
                     ...options,
+                    deferPhysicalStart: true,
+                    jobId: schedulingContext.jobId || null,
                     onEvent: event => {
-                        if (event.type === 'cooldown' && event.status === 429) limiter.onKeyRateLimit();
+                        if (event.type === 'reserved') {
+                            physicalAttempts = Math.max(
+                                physicalAttempts,
+                                Number(event.physicalAttempt) || physicalAttempts + 1
+                            );
+                            lastProjectIndex = event.keyIndex;
+                            operationalMetrics.increment('gemini.physical_attempts');
+                            if (options.metricStage) {
+                                operationalMetrics.increment(
+                                    `gemini.${options.metricStage}.physical_attempts`
+                                );
+                            }
+                        }
+                        if (event.type === 'cooldown' && event.status === 429) {
+                            operationalMetrics.increment('gemini.rate_limit_responses');
+                            operationalMetrics.increment(`gemini.project_${event.keyIndex}.rate_limit_responses`);
+                            limiter.onKeyRateLimit();
+                        }
+                        if (event.type === 'content_retry') {
+                            operationalMetrics.increment('gemini.content_retries');
+                        }
+                        if (event.type === 'service_retry') {
+                            operationalMetrics.increment('gemini.service_retries');
+                        }
                         options.onEvent?.(event);
                     },
-                });
-            } catch (error) {
-                if (error?.poolExhausted) limiter.onPoolExhausted();
-                throw error;
+                }
+            );
+            if (options.metricStage && Number.isFinite(result?.metadata?.latencyMs)) {
+                operationalMetrics.observe(
+                    `gemini.${options.metricStage}.latency`,
+                    result.metadata.latencyMs
+                );
             }
-        },
-        { signal: options.signal }
+            const usage = result?.metadata?.usage;
+            if (options.metricStage && Number.isFinite(usage?.promptTokenCount)) {
+                operationalMetrics.observeDistribution(
+                    `gemini.${options.metricStage}.prompt_tokens`,
+                    usage.promptTokenCount
+                );
+            }
+            if (options.metricStage && Number.isFinite(usage?.totalTokenCount)) {
+                operationalMetrics.observeDistribution(
+                    `gemini.${options.metricStage}.total_tokens`,
+                    usage.totalTokenCount
+                );
+            }
+            return result;
+        } catch (error) {
+            if (error?.poolExhausted) limiter.onPoolExhausted();
+            error.schedulerMetadata = {
+                physicalAttempts,
+                projectIndex: lastProjectIndex,
+            };
+            throw error;
+        }
+    };
+
+    const attemptKindFor = (chunk, stage) => (
+        Number(chunk?.stageAttempts?.[qualityStageAttemptKey(stage, chunk)] || 0) > 1
+            ? 'retry'
+            : 'normal'
     );
 
     const execute = async ({
@@ -117,6 +241,7 @@ export function createQualityGeminiExecutors({
         requireCoverage = false,
         jsonSchema = QUALITY_REPORT_JSON_SCHEMA,
         structuredValidator = isQualityReport,
+        chunk = null,
         signal,
     }) => {
         const result = await schedule(
@@ -125,7 +250,10 @@ export function createQualityGeminiExecutors({
                     apiKey,
                     keyIndex,
                     model: GEMINI_MODEL,
-                    contents: createPdfContents(pdfBuffer, instruction),
+                    contents: createPdfContents(
+                        typeof pdfBuffer === 'function' ? pdfBuffer() : pdfBuffer,
+                        instruction
+                    ),
                     config: stageConfig(systemInstruction, responseType, jsonSchema),
                     signal,
                     stage,
@@ -158,6 +286,8 @@ export function createQualityGeminiExecutors({
             },
             {
                 estimatedInputTokens: 10_000,
+                metricStage: stage,
+                attemptKind: attemptKindFor(chunk, stage),
                 signal,
                 onEvent: event => onSchedulerEvent({ stage, ...event }),
             }
@@ -191,13 +321,16 @@ export function createQualityGeminiExecutors({
             },
             {
                 estimatedInputTokens: Math.min(200_000, Math.max(20_000, totalPages * 258)),
+                metricStage: 'document_context',
+                attemptKind: 'normal',
                 signal,
                 onEvent: event => onSchedulerEvent({ stage: 'document_context', ...event }),
             }
         ),
-        translate: ({ pdfBuffer, documentContext, signal }) => execute({
+        translate: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'translate',
             pdfBuffer,
+            chunk,
             instruction: buildTranslateInstruction(documentContext),
             systemInstruction: QUALITY_TRANSLATION_SYSTEM_INSTRUCTION,
             signal,
@@ -205,6 +338,7 @@ export function createQualityGeminiExecutors({
         medical_audit: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'medical_audit',
             pdfBuffer,
+            chunk,
             instruction: buildAuditInstruction(chunk.draftContent, {
                 documentContext,
                 minimumCoverageItems: minimumQualityCoverageItems(chunk.draftContent),
@@ -218,6 +352,7 @@ export function createQualityGeminiExecutors({
         revise: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'revise',
             pdfBuffer,
+            chunk,
             instruction: buildRevisionInstruction(chunk.draftContent, chunk.auditReport, { documentContext }),
             systemInstruction: MEDICAL_REVISION_SYSTEM_INSTRUCTION,
             referenceText: chunk.draftContent,
@@ -226,6 +361,7 @@ export function createQualityGeminiExecutors({
         verify: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'verify',
             pdfBuffer,
+            chunk,
             instruction: buildVerifyInstruction(chunk.revisedContent, {
                 documentContext,
                 minimumCoverageItems: minimumQualityCoverageItems(chunk.revisedContent),
@@ -238,6 +374,7 @@ export function createQualityGeminiExecutors({
         repair: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'repair',
             pdfBuffer,
+            chunk,
             instruction: buildRepairInstruction(
                 chunk.repairedContent || chunk.revisedContent,
                 chunk.reverifyReport || chunk.verificationReport,
@@ -250,6 +387,7 @@ export function createQualityGeminiExecutors({
         reverify: ({ pdfBuffer, chunk, documentContext, signal }) => execute({
             stage: 'reverify',
             pdfBuffer,
+            chunk,
             instruction: buildVerifyInstruction(chunk.repairedContent, {
                 documentContext,
                 minimumCoverageItems: minimumQualityCoverageItems(chunk.repairedContent),

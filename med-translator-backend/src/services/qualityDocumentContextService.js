@@ -12,14 +12,22 @@ export class QualityDocumentContextService {
         this.contextVersion = contextVersion;
     }
 
-    async prepare({ job, sourcePath, totalPages, signal, assertActive = async () => {}, onStage = async () => {} }) {
+    async prepare({
+        job,
+        sourcePath,
+        totalPages,
+        signal,
+        assertActive = async () => {},
+        assertCanStartStage = assertActive,
+        onStage = async () => {},
+    }) {
         const current = plain(await this.JobModel.findOne({ jobId: job.jobId }));
         if (current?.qualityContextVersion === this.contextVersion
             && isQualityDocumentContext(current.qualityDocumentContext)) {
             return current.qualityDocumentContext;
         }
 
-        await assertActive();
+        await assertCanStartStage();
         await onStage({ phase: 'started', action: 'document_context' });
         const result = await this.executors.document_context({ sourcePath, totalPages, signal });
         await assertActive();

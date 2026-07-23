@@ -52,6 +52,9 @@ class MemoryChunkModel {
             return clone(this.row);
         }
         for (const [path, value] of Object.entries(update.$set || {})) setPath(this.row, path, value);
+        for (const [path, value] of Object.entries(update.$inc || {})) {
+            setPath(this.row, path, Number(getPath(this.row, path) || 0) + value);
+        }
         for (const path of Object.keys(update.$unset || {})) unsetPath(this.row, path);
         return clone(this.row);
     }
@@ -66,7 +69,7 @@ class CommitThenThrowOnceModel extends MemoryChunkModel {
 
     async findOneAndUpdate(filter, update, options = {}) {
         const result = await super.findOneAndUpdate(filter, update, options);
-        if (!this.hasThrown && filter.stage === this.stage) {
+        if (!this.hasThrown && filter.stage === this.stage && update.$set?.stage) {
             this.hasThrown = true;
             throw new Error(`connection lost after committing ${this.stage}`);
         }
@@ -82,7 +85,7 @@ class ThrowBeforeCommitOnceModel extends MemoryChunkModel {
     }
 
     async findOneAndUpdate(filter, update, options = {}) {
-        if (!this.hasThrown && filter.stage === this.stage) {
+        if (!this.hasThrown && filter.stage === this.stage && update.$set?.stage) {
             this.hasThrown = true;
             throw new Error(`database unavailable before committing ${this.stage}`);
         }
@@ -212,6 +215,34 @@ test('quality pipeline resumes after every persisted stage without repeating com
         await run(service);
         assert.deepEqual(calls, expectedCalls, `resume từ ${stage}`);
     }
+});
+
+test('priority suspension happens only after the running stage artifact is persisted', async () => {
+    const model = new MemoryChunkModel();
+    const calls = [];
+    let boundaryChecks = 0;
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: createExecutors(calls),
+    });
+    await assert.rejects(
+        run(service, {
+            assertCanStartStage: async () => {
+                boundaryChecks += 1;
+                if (boundaryChecks > 1) {
+                    throw new ProcessingError(
+                        ErrorCodes.SCHEDULER_SUSPENDED,
+                        'priority arrived'
+                    );
+                }
+            },
+        }),
+        error => error.code === ErrorCodes.SCHEDULER_SUSPENDED
+    );
+    assert.deepEqual(calls, ['translate']);
+    assert.equal(model.row.stage, 'translated');
+    assert.equal(model.row.draftContent, 'translate markdown');
+    assert.equal(model.row.stageAttempts.translate, 1);
 });
 
 test('restart after an ambiguous DB acknowledgement never repeats a committed stage', async () => {

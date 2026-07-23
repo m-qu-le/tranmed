@@ -17,6 +17,33 @@ export function getGeminiApiKeys() {
         .filter(Boolean);
 }
 
+export function getGeminiProjectIds(source = process.env) {
+    return (source.GEMINI_PROJECT_IDS || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+}
+
+export function getGeminiProjects(source = process.env) {
+    const keys = (source.GEMINI_API_KEYS || '')
+        .split(',')
+        .map(key => key.trim())
+        .filter(Boolean);
+    const projectIds = getGeminiProjectIds(source);
+    if (keys.length === 0) return [];
+    if (projectIds.length !== keys.length) {
+        throw new Error('GEMINI_PROJECT_IDS phải có đúng một ID ổn định cho mỗi GEMINI_API_KEYS.');
+    }
+    if (new Set(projectIds).size !== projectIds.length) {
+        throw new Error('GEMINI_PROJECT_IDS không được chứa ID trùng nhau.');
+    }
+    return keys.map((apiKey, index) => Object.freeze({
+        id: projectIds[index],
+        apiKey,
+        index,
+    }));
+}
+
 function readPositiveInteger(name, fallback, source = process.env) {
     const rawValue = source[name];
     if (!rawValue) return fallback;
@@ -78,17 +105,36 @@ export function readP003Config(source = process.env) {
 
 export function readTranslationWorkerConcurrency(source = process.env) {
     const rawValue = source.TRANSLATION_WORKER_CONCURRENCY;
-    if (rawValue === undefined || rawValue === '') return 5;
+    if (rawValue === undefined || rawValue === '') return 3;
     const normalized = String(rawValue).trim();
-    if (!['1', '2', '3', '4', '5'].includes(normalized)) {
-        throw new Error('TRANSLATION_WORKER_CONCURRENCY chỉ nhận số nguyên từ 1 đến 5.');
+    if (!['1', '2', '3'].includes(normalized)) {
+        throw new Error('TRANSLATION_WORKER_CONCURRENCY chỉ nhận số nguyên từ 1 đến 3.');
     }
     return Number(normalized);
 }
 
+function readRatio(name, fallback, source = process.env) {
+    const rawValue = source[name];
+    if (rawValue === undefined || rawValue === '') return fallback;
+    const normalized = String(rawValue).trim();
+    const value = Number(normalized);
+    if (!Number.isFinite(value) || value <= 0 || value > 1) {
+        throw new Error(`${name} phải lớn hơn 0 và không vượt quá 1.`);
+    }
+    return value;
+}
+
+function readEnum(name, accepted, fallback, source = process.env) {
+    const normalized = source[name]?.trim().toLowerCase() || fallback;
+    if (!accepted.includes(normalized)) {
+        throw new Error(`${name} chỉ nhận một trong các giá trị: ${accepted.join(', ')}.`);
+    }
+    return normalized;
+}
+
 export function readParallelSourceBudgetMb(source = process.env) {
     const rawValue = source.PARALLEL_SOURCE_BUDGET_MB;
-    if (rawValue === undefined || rawValue === '') return 100;
+    if (rawValue === undefined || rawValue === '') return 15;
     const normalized = String(rawValue).trim();
     const value = Number(normalized);
     if (!Number.isSafeInteger(value) || value < 10 || value > 100 || String(value) !== normalized) {
@@ -104,6 +150,29 @@ export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
 export const QUALITY_MAX_REPAIR_CYCLES = p003Config.maxRepairCycles;
 export const TRANSLATION_WORKER_CONCURRENCY = readTranslationWorkerConcurrency();
 export const PARALLEL_SOURCE_BUDGET_BYTES = readParallelSourceBudgetMb() * 1024 * 1024;
+export const GEMINI_SCHEDULER_MODE = readEnum(
+    'GEMINI_SCHEDULER_MODE',
+    ['legacy', 'project_pool'],
+    'project_pool'
+);
+export const GEMINI_PROJECT_RPM = readPositiveInteger('GEMINI_PROJECT_RPM', 15);
+export const GEMINI_PROJECT_TPM = readPositiveInteger('GEMINI_PROJECT_TPM', 250_000);
+export const GEMINI_PROJECT_RPD = readPositiveInteger('GEMINI_PROJECT_RPD', 500);
+export const GEMINI_PROJECT_HEADROOM = readRatio('GEMINI_PROJECT_HEADROOM', 0.9);
+export const GEMINI_ACTIVE_PROJECT_LIMIT = readPositiveInteger('GEMINI_ACTIVE_PROJECT_LIMIT', 5);
+export const GEMINI_PROJECT_MAX_IN_FLIGHT = readPositiveInteger('GEMINI_PROJECT_MAX_IN_FLIGHT', 2);
+
+export const GEMINI_PROJECT_LIMITS = Object.freeze({
+    rpm: Math.max(1, Math.round(GEMINI_PROJECT_RPM * GEMINI_PROJECT_HEADROOM)),
+    tpm: Math.max(1, Math.floor(GEMINI_PROJECT_TPM * GEMINI_PROJECT_HEADROOM)),
+    normalRpd: Math.max(1, Math.floor(GEMINI_PROJECT_RPD * GEMINI_PROJECT_HEADROOM)),
+    retryRpd: Math.max(
+        0,
+        GEMINI_PROJECT_RPD - Math.floor(GEMINI_PROJECT_RPD * GEMINI_PROJECT_HEADROOM)
+    ),
+    totalRpd: GEMINI_PROJECT_RPD,
+    maxInFlight: GEMINI_PROJECT_MAX_IN_FLIGHT,
+});
 
 function readRequiredString(name, missing) {
     const value = process.env[name]?.trim();
@@ -121,6 +190,19 @@ export function validateRuntimeEnv() {
     const missing = [];
     const mongodbUri = readRequiredString('MONGODB_URI', missing);
     if (getGeminiApiKeys().length === 0) missing.push('GEMINI_API_KEYS');
+    if (GEMINI_SCHEDULER_MODE === 'project_pool') {
+        const projectIds = getGeminiProjectIds();
+        if (projectIds.length === 0) missing.push('GEMINI_PROJECT_IDS');
+        if (getGeminiApiKeys().length > 0 && projectIds.length > 0) {
+            const projects = getGeminiProjects();
+            if (GEMINI_ACTIVE_PROJECT_LIMIT > projects.length) {
+                throw new Error('GEMINI_ACTIVE_PROJECT_LIMIT không được vượt quá số Gemini project đã cấu hình.');
+            }
+            if (GEMINI_PROJECT_MAX_IN_FLIGHT > 2) {
+                throw new Error('GEMINI_PROJECT_MAX_IN_FLIGHT không được vượt quá 2 trên Render miễn phí.');
+            }
+        }
+    }
 
     const r2AccountId = readRequiredString('R2_ACCOUNT_ID', missing);
     const r2AccessKeyId = readRequiredString('R2_ACCESS_KEY_ID', missing);
@@ -158,6 +240,11 @@ export function validateRuntimeEnv() {
         maxFileSizeMb: MAX_FILE_SIZE_MB,
         maxJobAttempts: MAX_JOB_ATTEMPTS,
         geminiTimeoutMs: GEMINI_TIMEOUT_MS,
+        gemini: Object.freeze({
+            schedulerMode: GEMINI_SCHEDULER_MODE,
+            activeProjectLimit: GEMINI_ACTIVE_PROJECT_LIMIT,
+            projectLimits: GEMINI_PROJECT_LIMITS,
+        }),
         translation: p003Config,
         r2: Object.freeze({
             accountId: r2AccountId,

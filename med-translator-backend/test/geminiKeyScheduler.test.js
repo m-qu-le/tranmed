@@ -132,7 +132,7 @@ test('all-key quota exhaustion returns one durable retry error without spinning'
             && error.poolExhausted
             && error.retryAfterMs === 60_000
     );
-    assert.equal(calls.length, 7);
+    assert.equal(calls.length, 3);
 
     now += 60_001;
     await assert.rejects(
