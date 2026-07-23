@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createQualityGeminiExecutors } from '../src/services/qualityGeminiExecutors.js';
+import { AdaptiveGeminiLimiter } from '../src/services/adaptiveGeminiLimiter.js';
 import { QUALITY_REPORT_JSON_SCHEMA } from '../src/services/translationQuality.js';
-import { ErrorCodes } from '../src/utils/processingError.js';
+import { ErrorCodes, ProcessingError } from '../src/utils/processingError.js';
 
 const completeCoverage = {
     status: 'COMPLETE',
@@ -21,6 +22,8 @@ const documentContext = {
 test('quality executors use high thinking, bounded output and structured JSON without leaking artifacts to events', async () => {
     const requests = [];
     const events = [];
+    let limiterCalls = 0;
+    const limiter = { run: async task => { limiterCalls += 1; return task(); }, onPoolExhausted: () => {} };
     const scheduler = {
         async execute(factory, options) {
             options.onEvent({ type: 'reserved', keyIndex: 3 });
@@ -33,7 +36,7 @@ test('quality executors use high thinking, bounded output and structured JSON wi
             ? { text: '{"status":"PASS","errors":[],"coverage":{"status":"COMPLETE","items":[]}}', json: { status: 'PASS', errors: [], coverage: completeCoverage }, metadata: { stage: request.stage } }
             : { text: '# Markdown', metadata: { stage: request.stage } };
     };
-    const executors = createQualityGeminiExecutors({ scheduler, generate, onSchedulerEvent: event => events.push(event) });
+    const executors = createQualityGeminiExecutors({ scheduler, limiter, generate, onSchedulerEvent: event => events.push(event) });
     const pdfBuffer = Buffer.alloc(100, 1);
     const chunk = {
         draftContent: 'draft',
@@ -65,6 +68,7 @@ test('quality executors use high thinking, bounded output and structured JSON wi
     assert.deepEqual(requests.map(request => request.stage), [
         'translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify',
     ]);
+    assert.equal(limiterCalls, 6);
     for (const request of requests) {
         assert.equal(Object.hasOwn(request.config, 'temperature'), false);
         assert.equal(request.config.thinkingConfig.thinkingLevel, 'HIGH');
@@ -119,13 +123,35 @@ test('revision coverage failure is raised inside the scheduler so another key ca
     assert.equal(result.text, reference.trim());
 });
 
+test('only all-key quota exhaustion lowers the shared Gemini limit', async () => {
+    const limiter = new AdaptiveGeminiLimiter({ initialLimit: 6, minLimit: 3, maxLimit: 6 });
+    const scheduler = {
+        async execute() {
+            throw new ProcessingError(ErrorCodes.GEMINI_RATE_LIMIT, 'all keys cooling down', {
+                retryable: true,
+                poolExhausted: true,
+            });
+        },
+    };
+    const executors = createQualityGeminiExecutors({ scheduler, limiter });
+
+    await assert.rejects(
+        executors.translate({ pdfBuffer: Buffer.alloc(10), documentContext }),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+    );
+    assert.equal(limiter.snapshot().limit, 3);
+});
+
 test('document context uses an ephemeral Gemini File API PDF and deletes it after generation', async () => {
     const deleted = [];
     const scheduler = { async execute(factory) { return factory({ apiKey: 'key-0', keyIndex: 0 }); } };
     const client = { files: { delete: async ({ name }) => deleted.push(name) } };
     const requests = [];
+    let limiterCalls = 0;
+    const limiter = { run: async task => { limiterCalls += 1; return task(); }, onPoolExhausted: () => {} };
     const executors = createQualityGeminiExecutors({
         scheduler,
+        limiter,
         uploadFile: async () => ({ client, file: { name: 'files/context', uri: 'gemini://context', mimeType: 'application/pdf', state: 'ACTIVE' } }),
         generate: async request => {
             requests.push(request);
@@ -136,6 +162,7 @@ test('document context uses an ephemeral Gemini File API PDF and deletes it afte
     const result = await executors.document_context({ sourcePath: 'source.pdf', totalPages: 20 });
 
     assert.deepEqual(result.json, documentContext);
+    assert.equal(limiterCalls, 1);
     assert.equal(requests[0].stage, 'document_context');
     assert.equal(requests[0].contents[0].parts[0].fileData.fileUri, 'gemini://context');
     assert.deepEqual(deleted, ['files/context']);

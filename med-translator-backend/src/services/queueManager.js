@@ -44,7 +44,11 @@ const LEASE_DURATION_MS = 5 * 60 * 1000;
 const LEASE_HEARTBEAT_MS = 60 * 1000;
 export const CIRCUIT_BREAKER_WAKEUP_POLICY = 'daily_15_asia_ho_chi_minh';
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
-export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 10;
+// Khi toàn bộ key Gemini đang cooldown, không thay job vừa dừng bằng PDF mới.
+// Retry của job cũ phải được ưu tiên sau khi pool hồi phục.
+export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 1;
+// Limiter Gemini toàn cục quyết định số request; mỗi PDF được phép có hai chunk chờ xử lý.
+const QUALITY_CHUNK_CONCURRENCY = 2;
 const CIRCUIT_BREAKER_WAKEUP_UTC_HOUR = 8; // 15:00 UTC+7; Việt Nam không dùng DST.
 export function nextCircuitBreakerWakeup(now = new Date()) {
     const wakeupTime = new Date(now.getTime());
@@ -734,7 +738,7 @@ export class QueueManager extends EventEmitter {
         const pipeline = new QualityPipelineService({ ChunkModel: TranslationChunk, executors });
         const indexes = chunkBuffers.map((_, index) => index);
 
-        await runBoundedTasks(indexes, 2, async chunkIndex => {
+        await runBoundedTasks(indexes, QUALITY_CHUNK_CONCURRENCY, async chunkIndex => {
             const range = pageRanges[chunkIndex];
             return pipeline.runChunk({
                 jobId: job.jobId,
@@ -968,7 +972,9 @@ export class QueueManager extends EventEmitter {
                 maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : null,
                 nextRetryAt
             });
-            if (shouldHibernate) await this.triggerHibernation(error.retryAfterMs);
+            if (shouldHibernate && !this.isHibernating) {
+                await this.triggerHibernation(Math.max(1000, nextRetryAt.getTime() - now.getTime()));
+            }
             return;
         }
 
@@ -1004,7 +1010,9 @@ export class QueueManager extends EventEmitter {
             sourceRetentionUntil,
             failureAdvice: terminalAdvice,
         });
-        if (shouldHibernate) await this.triggerHibernation(error.retryAfterMs);
+        if (shouldHibernate && !this.isHibernating) {
+            await this.triggerHibernation(error.retryAfterMs);
+        }
     }
 
     async runActiveJob(job) {

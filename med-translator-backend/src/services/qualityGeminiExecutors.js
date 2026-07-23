@@ -2,6 +2,7 @@ import { ThinkingLevel } from '@google/genai';
 import { GEMINI_MODEL, GEMINI_TIMEOUT_MS, getGeminiApiKeys } from '../config/env.js';
 import { createGeminiFileContents, createPdfContents, generateGeminiContent } from './geminiAdapter.js';
 import { GeminiKeyScheduler } from './geminiKeyScheduler.js';
+import { AdaptiveGeminiLimiter } from './adaptiveGeminiLimiter.js';
 import {
     buildAuditInstruction,
     buildRepairInstruction,
@@ -28,6 +29,7 @@ import { DOCUMENT_CONTEXT_JSON_SCHEMA, isQualityDocumentContext } from './qualit
 import { ErrorCodes, ProcessingError } from '../utils/processingError.js';
 
 export const qualityKeyScheduler = new GeminiKeyScheduler({ keysProvider: getGeminiApiKeys });
+export const qualityGeminiLimiter = new AdaptiveGeminiLimiter();
 
 function wait(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -74,6 +76,7 @@ function stageConfig(systemInstruction, responseType, jsonSchema = QUALITY_REPOR
 
 export function createQualityGeminiExecutors({
     scheduler = qualityKeyScheduler,
+    limiter = qualityGeminiLimiter,
     generate = generateGeminiContent,
     onSchedulerEvent = () => {},
     uploadFile = async ({ apiKey, sourcePath, signal }) => {
@@ -86,6 +89,24 @@ export function createQualityGeminiExecutors({
         return { client, file };
     },
 } = {}) {
+    const schedule = (requestFactory, options) => limiter.run(
+        async () => {
+            try {
+                return await scheduler.execute(requestFactory, {
+                    ...options,
+                    onEvent: event => {
+                        if (event.type === 'cooldown' && event.status === 429) limiter.onKeyRateLimit();
+                        options.onEvent?.(event);
+                    },
+                });
+            } catch (error) {
+                if (error?.poolExhausted) limiter.onPoolExhausted();
+                throw error;
+            }
+        },
+        { signal: options.signal }
+    );
+
     const execute = async ({
         stage,
         pdfBuffer,
@@ -98,7 +119,7 @@ export function createQualityGeminiExecutors({
         structuredValidator = isQualityReport,
         signal,
     }) => {
-        const result = await scheduler.execute(
+        const result = await schedule(
             async ({ apiKey, keyIndex }) => {
                 const generated = await generate({
                     apiKey,
@@ -145,7 +166,7 @@ export function createQualityGeminiExecutors({
     };
 
     return Object.freeze({
-        document_context: ({ sourcePath, totalPages, signal }) => scheduler.execute(
+        document_context: ({ sourcePath, totalPages, signal }) => schedule(
             async ({ apiKey, keyIndex }) => {
                 const { client, file } = await uploadFile({ apiKey, sourcePath, signal });
                 try {

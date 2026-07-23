@@ -26,7 +26,10 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
     const queue = new QueueManager();
     queue.safeUnlink = async () => {};
     const hibernationCalls = [];
-    queue.triggerHibernation = async retryAfterMs => hibernationCalls.push(retryAfterMs);
+    queue.triggerHibernation = async retryAfterMs => {
+        hibernationCalls.push(retryAfterMs);
+        queue.isHibernating = true;
+    };
     const job = {
         jobId: 'job-policy',
         filePath: 'fixture.pdf',
@@ -61,13 +64,9 @@ test('error policy retries quota errors but permanently fails invalid PDFs', asy
         publicMessage: 'Toàn bộ Gemini key đang chờ quota.'
     });
     poolError.retryAfterMs = 60_000;
-    for (let index = 0; index < 9; index += 1) {
-        await queue.handleProcessingFailure(job, poolError);
-    }
-    assert.deepEqual(hibernationCalls, []);
-
     await queue.handleProcessingFailure(job, poolError);
-    assert.deepEqual(hibernationCalls, [60_000]);
+    assert.equal(hibernationCalls.length, 1);
+    assert.ok(hibernationCalls[0] >= 5 * 60 * 1000);
     assert.equal(updates.at(-1).update.$inc.retryCount, 1);
     assert.equal(updates.at(-1).update.$inc.quotaRetryCount, 1);
     assert.equal(updates.at(-1).update.$set.status, 'pending');
