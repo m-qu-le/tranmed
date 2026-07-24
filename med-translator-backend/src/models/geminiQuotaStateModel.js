@@ -14,6 +14,7 @@ const geminiQuotaStateSchema = new mongoose.Schema({
     dailyNormalCount: { type: Number, default: 0, min: 0 },
     dailyRetryCount: { type: Number, default: 0, min: 0 },
     cooldownUntil: { type: Date, default: null },
+    consecutiveRateLimits: { type: Number, default: 0, min: 0 },
     disabled: { type: Boolean, default: false },
     hasSucceeded: { type: Boolean, default: false },
     lastSuccessAt: { type: Date, default: null },

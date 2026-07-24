@@ -4,7 +4,9 @@ import System from '../src/models/systemModel.js';
 import { PARALLEL_SOURCE_BUDGET_BYTES } from '../src/config/env.js';
 import {
     QueueManager,
+    qualityDispatcherWidth,
 } from '../src/services/queueManager.js';
+import { qualityKeyScheduler } from '../src/services/qualityGeminiExecutors.js';
 
 const MiB = 1024 * 1024;
 const deferred = () => {
@@ -12,6 +14,27 @@ const deferred = () => {
     const promise = new Promise(done => { resolve = done; });
     return { promise, resolve };
 };
+
+test('quality dispatcher follows the current adaptive limit, not its configured maximum', () => {
+    assert.equal(qualityDispatcherWidth(10, { limit: 1, maxLimit: 5 }), 1);
+    assert.equal(qualityDispatcherWidth(10, { limit: 3, maxLimit: 5 }), 3);
+    assert.equal(qualityDispatcherWidth(0, { limit: 3, maxLimit: 5 }), 0);
+});
+
+test('redeploy maintenance pause safely suspends the next stage admission', async context => {
+    const queue = new QueueManager({ concurrency: 1 });
+    const jobId = 'maintenance-drain-stage';
+    context.after(() => qualityKeyScheduler.resumeJob(jobId));
+    queue.assertJobActive = async () => {};
+    queue.hasPriorityDemand = async () => false;
+
+    queue.pauseForRedeploy();
+
+    await assert.rejects(
+        queue.assertStageAdmission({ jobId, priority: 0 }),
+        error => error.code === 'SCHEDULER_SUSPENDED'
+    );
+});
 
 test('admission allows the 15 MiB budget but blocks an oversized FIFO head and unknown-size jobs', async () => {
     const queue = new QueueManager({ concurrency: 3 });

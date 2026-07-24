@@ -18,6 +18,7 @@ export const DEFAULT_GEMINI_HEADROOM = Object.freeze({
 });
 export const PROJECT_POOL_EXECUTION_VERSION = 'project-pool-v2';
 const SCHEDULER_STATE_ID = 'gemini-project-pool';
+const RATE_LIMIT_CIRCUIT_REASON = 'rate_limit_circuit';
 
 function statusOf(error) {
     return error?.status || error?.response?.status || error?.$metadata?.httpStatusCode || null;
@@ -146,6 +147,7 @@ function clonePersistedState(state) {
         dailyNormalCount: state.dailyNormalCount,
         dailyRetryCount: state.dailyRetryCount,
         cooldownUntil: state.cooldownUntil ? new Date(state.cooldownUntil) : null,
+        consecutiveRateLimits: state.consecutiveRateLimits,
         disabled: state.disabled,
         hasSucceeded: state.hasSucceeded,
         lastSuccessAt: state.lastSuccessAt ? new Date(state.lastSuccessAt) : null,
@@ -169,6 +171,12 @@ export class GeminiKeyScheduler {
         random = Math.random,
         maxPhysicalAttempts = 3,
         maxInlineWaitMs = 0,
+        rateLimitCircuitWindowMs = 10_000,
+        rateLimitCircuitProjectThreshold = 5,
+        rateLimitCircuitBaseDelayMs = 60_000,
+        rateLimitCircuitMaxDelayMs = 10 * 60_000,
+        rateLimitCircuitMaxJitterMs = 30_000,
+        rateLimitCircuitResetSuccesses = 10,
         sleep = wait,
     }) {
         if (!projectsProvider && !keysProvider) {
@@ -201,6 +209,18 @@ export class GeminiKeyScheduler {
         this.random = random;
         this.maxPhysicalAttempts = maxPhysicalAttempts;
         this.maxInlineWaitMs = maxInlineWaitMs;
+        this.rateLimitCircuitWindowMs = Math.max(1000, rateLimitCircuitWindowMs);
+        this.rateLimitCircuitProjectThreshold = Math.max(
+            1,
+            rateLimitCircuitProjectThreshold
+        );
+        this.rateLimitCircuitBaseDelayMs = Math.max(1000, rateLimitCircuitBaseDelayMs);
+        this.rateLimitCircuitMaxDelayMs = Math.max(
+            this.rateLimitCircuitBaseDelayMs,
+            rateLimitCircuitMaxDelayMs
+        );
+        this.rateLimitCircuitMaxJitterMs = Math.max(0, rateLimitCircuitMaxJitterMs);
+        this.rateLimitCircuitResetSuccesses = Math.max(1, rateLimitCircuitResetSuccesses);
         this.sleep = sleep;
         this.states = new Map();
         this.reservationId = 0;
@@ -209,6 +229,11 @@ export class GeminiKeyScheduler {
         this.hydrationPromise = null;
         this.hydrated = false;
         this.globalGateUntil = 0;
+        this.globalGateReason = null;
+        this.recentRateLimitProjects = new Map();
+        this.rateLimitCircuitBackoffLevel = 0;
+        this.rateLimitCircuitRecoverySuccesses = 0;
+        this.rateLimitCircuitOpenCount = 0;
         this.waiters = new Set();
         this.suspendedJobs = new Set();
         this.metrics = {
@@ -221,6 +246,7 @@ export class GeminiKeyScheduler {
             contentFailures: 0,
             serviceFailures: 0,
             groupRotations: 0,
+            circuitOpens: 0,
         };
     }
 
@@ -246,6 +272,7 @@ export class GeminiKeyScheduler {
                 dailyNormalCount: 0,
                 dailyRetryCount: 0,
                 activeCount: 0,
+                consecutiveRateLimits: 0,
                 lastSuccessAt: 0,
                 lastReservedAt: 0,
             });
@@ -294,6 +321,10 @@ export class GeminiKeyScheduler {
                 state.dailyNormalCount = row.dailyNormalCount || 0;
                 state.dailyRetryCount = row.dailyRetryCount || 0;
                 state.cooldownUntil = row.cooldownUntil ? new Date(row.cooldownUntil).getTime() : 0;
+                state.consecutiveRateLimits = Math.max(
+                    0,
+                    Number(row.consecutiveRateLimits) || 0
+                );
                 state.disabled = Boolean(row.disabled);
                 state.hasSucceeded = Boolean(row.hasSucceeded);
                 state.lastSuccessAt = row.lastSuccessAt ? new Date(row.lastSuccessAt).getTime() : 0;
@@ -309,6 +340,23 @@ export class GeminiKeyScheduler {
                     ? new Date(schedulerRow.lastRotatedAt).getTime()
                     : 0;
                 this.rotationReason = schedulerRow.rotationReason || null;
+                const persistedGateUntil = schedulerRow.globalGateUntil
+                    ? new Date(schedulerRow.globalGateUntil).getTime()
+                    : 0;
+                const persistedGateReason = schedulerRow.globalGateReason || null;
+                if (persistedGateReason === RATE_LIMIT_CIRCUIT_REASON
+                    && persistedGateUntil > now) {
+                    this.globalGateUntil = persistedGateUntil;
+                    this.globalGateReason = persistedGateReason;
+                }
+                this.rateLimitCircuitBackoffLevel = Math.max(
+                    0,
+                    Number(schedulerRow.rateLimitCircuitBackoffLevel) || 0
+                );
+                this.rateLimitCircuitOpenCount = Math.max(
+                    0,
+                    Number(schedulerRow.rateLimitCircuitOpenCount) || 0
+                );
             }
             this.hydrated = true;
         })().catch(error => {
@@ -399,6 +447,12 @@ export class GeminiKeyScheduler {
             currentGroupIndex: this.currentGroupIndex,
             lastRotatedAt: this.lastRotatedAt ? new Date(this.lastRotatedAt) : null,
             rotationReason: this.rotationReason,
+            globalGateUntil: this.globalGateUntil
+                ? new Date(this.globalGateUntil)
+                : null,
+            globalGateReason: this.globalGateReason,
+            rateLimitCircuitBackoffLevel: this.rateLimitCircuitBackoffLevel,
+            rateLimitCircuitOpenCount: this.rateLimitCircuitOpenCount,
             executionVersion: this.executionVersion,
         };
         const operation = this.schedulerPersistChain
@@ -626,13 +680,32 @@ export class GeminiKeyScheduler {
         if (updates.success) {
             state.hasSucceeded = true;
             state.lastSuccessAt = this.clock();
+            state.consecutiveRateLimits = 0;
         }
+        if (updates.rateLimited) state.consecutiveRateLimits += 1;
         if (updates.disabled) state.disabled = true;
         if (Number.isFinite(updates.cooldownUntil)) {
             state.cooldownUntil = Math.max(state.cooldownUntil, updates.cooldownUntil);
         }
         await this.persist(state, 'mongodb.quota_release.latency');
         this.notifyCapacity();
+    }
+
+    projectRateLimitDelayMs(state, providerRetryMs = null) {
+        if (Number.isFinite(providerRetryMs) && providerRetryMs >= 0) {
+            return providerRetryMs;
+        }
+        const failureNumber = state.consecutiveRateLimits + 1;
+        const baseDelay = Math.min(
+            10 * 60_000,
+            60_000 * (2 ** Math.max(0, failureNumber - 1))
+        );
+        const jitterLimit = Math.min(30_000, Math.floor(baseDelay * 0.2));
+        return baseDelay + (
+            jitterLimit > 0
+                ? Math.floor(this.random() * (jitterLimit + 1))
+                : 0
+        );
     }
 
     rollbackReservation(reservation) {
@@ -746,6 +819,7 @@ export class GeminiKeyScheduler {
 
     metricsSnapshot() {
         const logicalIssued = this.metrics.logicalIssuedRequests;
+        const now = this.clock();
         return {
             ...this.metrics,
             amplificationRatio: logicalIssued ? this.metrics.physicalAttempts / logicalIssued : 0,
@@ -766,9 +840,22 @@ export class GeminiKeyScheduler {
             configuredProjects: this.resolveProjects().length,
             limits: { ...this.limits },
             groupUtilization: this.groupUtilizationSnapshot(),
-            nextAvailableAt: this.globalGateUntil > this.clock()
+            nextAvailableAt: this.globalGateUntil > now
                 ? new Date(this.globalGateUntil)
                 : null,
+            globalGateReason: this.globalGateUntil > now
+                ? this.globalGateReason
+                : null,
+            rateLimitCircuit: {
+                state: this.isRateLimitCircuitOpen(now) ? 'open' : 'closed',
+                backoffLevel: this.rateLimitCircuitBackoffLevel,
+                openCount: this.rateLimitCircuitOpenCount,
+                recentProjectCount: this.recentRateLimitProjects.size,
+                recoverySuccesses: this.rateLimitCircuitRecoverySuccesses,
+                nextAvailableAt: this.isRateLimitCircuitOpen(now)
+                    ? new Date(this.globalGateUntil)
+                    : null,
+            },
         };
     }
 
@@ -793,6 +880,9 @@ export class GeminiKeyScheduler {
         ));
         return {
             gated: this.globalGateUntil > now,
+            gateReason: this.globalGateUntil > now
+                ? this.globalGateReason
+                : null,
             nextAvailableAt: this.globalGateUntil > now
                 ? new Date(this.globalGateUntil)
                 : Number.isFinite(nextCapacityAt) && nextCapacityAt > now
@@ -806,15 +896,102 @@ export class GeminiKeyScheduler {
         };
     }
 
-    openGlobalGate(retryMs, now = this.clock()) {
+    isRateLimitCircuitOpen(now = this.clock()) {
+        return this.globalGateReason === RATE_LIMIT_CIRCUIT_REASON
+            && this.globalGateUntil > now;
+    }
+
+    pruneRecentRateLimits(now = this.clock()) {
+        const cutoff = now - this.rateLimitCircuitWindowMs;
+        for (const [projectId, observedAt] of this.recentRateLimitProjects) {
+            if (observedAt < cutoff) this.recentRateLimitProjects.delete(projectId);
+        }
+    }
+
+    recordRateLimit(projectId, providerRetryMs = null, now = this.clock()) {
+        if (this.isRateLimitCircuitOpen(now)) {
+            return {
+                opened: false,
+                alreadyOpen: true,
+                delayMs: Math.max(1, this.globalGateUntil - now),
+                projectCount: this.recentRateLimitProjects.size,
+            };
+        }
+
+        this.pruneRecentRateLimits(now);
+        this.recentRateLimitProjects.set(projectId, now);
+        this.rateLimitCircuitRecoverySuccesses = 0;
+        const eligibleCount = this.eligibleProjects(this.ensureStates()).length;
+        const threshold = Math.max(
+            1,
+            Math.min(this.rateLimitCircuitProjectThreshold, eligibleCount || 1)
+        );
+        if (this.recentRateLimitProjects.size < threshold) return null;
+
+        const exponentialDelay = Math.min(
+            this.rateLimitCircuitMaxDelayMs,
+            this.rateLimitCircuitBaseDelayMs
+                * (2 ** this.rateLimitCircuitBackoffLevel)
+        );
+        const providerDelay = Number.isFinite(providerRetryMs) && providerRetryMs > 0
+            ? providerRetryMs
+            : 0;
+        const delayBeforeJitter = Math.max(exponentialDelay, providerDelay);
+        const jitterLimit = Math.min(
+            this.rateLimitCircuitMaxJitterMs,
+            Math.floor(delayBeforeJitter * 0.2)
+        );
+        const jitterMs = jitterLimit > 0
+            ? Math.floor(this.random() * (jitterLimit + 1))
+            : 0;
+        const delayMs = delayBeforeJitter + jitterMs;
+        const projectCount = this.recentRateLimitProjects.size;
+
+        this.rateLimitCircuitBackoffLevel += 1;
+        this.rateLimitCircuitOpenCount += 1;
+        this.metrics.circuitOpens += 1;
+        this.recentRateLimitProjects.clear();
+        this.openGlobalGate(delayMs, now, RATE_LIMIT_CIRCUIT_REASON);
+        operationalMetrics.increment('gemini.rate_limit_circuit.opens');
+        return {
+            opened: true,
+            alreadyOpen: false,
+            delayMs,
+            projectCount,
+            backoffLevel: this.rateLimitCircuitBackoffLevel,
+        };
+    }
+
+    recordRateLimitCircuitSuccess() {
+        if (this.rateLimitCircuitBackoffLevel === 0) return false;
+        this.rateLimitCircuitRecoverySuccesses += 1;
+        if (this.rateLimitCircuitRecoverySuccesses < this.rateLimitCircuitResetSuccesses) {
+            return false;
+        }
+        this.rateLimitCircuitBackoffLevel = 0;
+        this.rateLimitCircuitRecoverySuccesses = 0;
+        this.recentRateLimitProjects.clear();
+        operationalMetrics.increment('gemini.rate_limit_circuit.recoveries');
+        return true;
+    }
+
+    openGlobalGate(retryMs, now = this.clock(), reason = 'quota') {
         const delay = Number.isFinite(retryMs) && retryMs > 0 ? retryMs : 60_000;
+        const wasActiveCircuit = this.isRateLimitCircuitOpen(now);
         this.globalGateUntil = Math.max(this.globalGateUntil, now + delay);
+        if (reason === RATE_LIMIT_CIRCUIT_REASON
+            || !wasActiveCircuit
+            || this.globalGateUntil <= now) {
+            this.globalGateReason = reason;
+        }
         return delay;
     }
 
     clearGlobalGate(reason = 'capacity_available') {
+        if (this.isRateLimitCircuitOpen()) return false;
         const wasGated = this.globalGateUntil > this.clock();
         this.globalGateUntil = 0;
+        this.globalGateReason = null;
         if (wasGated) {
             operationalMetrics.increment('gemini.global_gate_recoveries');
             this.rotationReason = reason;
@@ -824,6 +1001,7 @@ export class GeminiKeyScheduler {
     }
 
     clearStaleGate({ estimatedInputTokens = 10_000, attemptKind = 'normal' } = {}) {
+        if (this.isRateLimitCircuitOpen()) return false;
         const projects = this.ensureStates();
         if (!this.hasAnyCapacity(
             this.capacityScope(projects),
@@ -974,7 +1152,8 @@ export class GeminiKeyScheduler {
             if (jobId && this.suspendedJobs.has(jobId)) throw schedulerSuspensionError();
             const gateWaitMs = this.globalGateUntil - this.clock();
             if (gateWaitMs > 0) {
-                if (this.hasAnyCapacity(
+                const circuitOpen = this.isRateLimitCircuitOpen();
+                if (!circuitOpen && this.hasAnyCapacity(
                     capacityProjects,
                     estimatedInputTokens,
                     attemptKind
@@ -990,7 +1169,12 @@ export class GeminiKeyScheduler {
                         'Gemini project pool đang tạm đóng quota gate.',
                         gateWaitMs,
                         this.clock(),
-                        { poolExhausted: true, deferredReason: 'quota' }
+                        {
+                            poolExhausted: true,
+                            deferredReason: circuitOpen
+                                ? RATE_LIMIT_CIRCUIT_REASON
+                                : 'quota',
+                        }
                     );
                 }
             }
@@ -1006,6 +1190,31 @@ export class GeminiKeyScheduler {
                     if (signal?.aborted) throw cancellationError();
                     if (jobId && this.suspendedJobs.has(jobId)) {
                         throw schedulerSuspensionError();
+                    }
+                    const admissionNow = this.clock();
+                    const admissionGateWaitMs = this.globalGateUntil - admissionNow;
+                    if (admissionGateWaitMs > 0) {
+                        const circuitOpen = this.isRateLimitCircuitOpen(admissionNow);
+                        if (!circuitOpen && this.hasAnyCapacity(
+                            capacityProjects,
+                            estimatedInputTokens,
+                            kind
+                        )) {
+                            this.clearGlobalGate('capacity_available');
+                        } else {
+                            recordDeferredBeforeIssue();
+                            throw rateLimitError(
+                                'Gemini project pool đã đóng gate trong lúc stage chờ permit.',
+                                admissionGateWaitMs,
+                                admissionNow,
+                                {
+                                    poolExhausted: true,
+                                    deferredReason: circuitOpen
+                                        ? RATE_LIMIT_CIRCUIT_REASON
+                                        : 'quota',
+                                }
+                            );
+                        }
                     }
                     reservation = await this.reserve(
                         projects,
@@ -1061,7 +1270,9 @@ export class GeminiKeyScheduler {
                     success: true,
                     actualInputTokens: admittedResult?.metadata?.usage?.promptTokenCount,
                 });
+                const circuitRecovered = this.recordRateLimitCircuitSuccess();
                 this.clearGlobalGate('request_succeeded');
+                if (circuitRecovered) await this.persistSchedulerState();
                 onEvent({
                     type: 'succeeded',
                     keyIndex: project.index,
@@ -1151,9 +1362,14 @@ export class GeminiKeyScheduler {
                     continue;
                 }
                 if (status === 429) {
-                    const waitMs = retryAfterMs(error, this.clock()) ?? 60_000;
+                    const observedAt = this.clock();
+                    const providerRetryMs = retryAfterMs(error, observedAt);
+                    const waitMs = this.projectRateLimitDelayMs(state, providerRetryMs);
                     this.metrics.rateLimitResponses += 1;
-                    await this.release(reservation, { cooldownUntil: this.clock() + waitMs });
+                    await this.release(reservation, {
+                        cooldownUntil: observedAt + waitMs,
+                        rateLimited: true,
+                    });
                     errors.push({ scope: 'quota', error });
                     onEvent({
                         type: 'cooldown',
@@ -1162,6 +1378,26 @@ export class GeminiKeyScheduler {
                         retryAfterMs: waitMs,
                         groupIndex: this.currentGroupIndex,
                     });
+                    const circuit = this.recordRateLimit(project.id, waitMs, observedAt);
+                    if (circuit) {
+                        if (circuit.opened) await this.persistSchedulerState();
+                        onEvent({
+                            type: 'rate_limit_circuit_opened',
+                            retryAfterMs: circuit.delayMs,
+                            projectCount: circuit.projectCount,
+                            backoffLevel: circuit.backoffLevel
+                                || this.rateLimitCircuitBackoffLevel,
+                        });
+                        throw rateLimitError(
+                            'Nhiều Gemini project trả 429 trong thời gian ngắn; circuit đã tạm đóng.',
+                            circuit.delayMs,
+                            observedAt,
+                            {
+                                poolExhausted: true,
+                                deferredReason: RATE_LIMIT_CIRCUIT_REASON,
+                            }
+                        );
+                    }
                     continue;
                 }
 

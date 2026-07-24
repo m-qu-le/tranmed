@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AdaptiveGeminiLimiter } from '../src/services/adaptiveGeminiLimiter.js';
 import { GeminiKeyScheduler } from '../src/services/geminiKeyScheduler.js';
 import { ErrorCodes, ProcessingError } from '../src/utils/processingError.js';
 
@@ -223,6 +224,235 @@ test('quota reservation is created only after the concurrency limiter grants a p
     releasePermit();
     await pending;
     assert.equal(broker.snapshot()[0].rpm, 1);
+});
+
+test('a queued stage rechecks the global circuit after receiving a limiter permit', async () => {
+    let now = 1_000_000;
+    const broker = scheduler({
+        projectsProvider: () => fiftyProjects.slice(0, 5),
+        clock: () => now,
+    });
+    let releasePermit;
+    const permit = new Promise(resolve => { releasePermit = resolve; });
+    let waitingForPermit = false;
+    let calls = 0;
+    const pending = broker.execute(
+        async () => {
+            calls += 1;
+            return { metadata: { usage: { promptTokenCount: 1 } } };
+        },
+        {
+            estimatedInputTokens: 1,
+            admitPhysical: async task => {
+                waitingForPermit = true;
+                await permit;
+                return task();
+            },
+        }
+    );
+    while (!waitingForPermit) await new Promise(resolve => setImmediate(resolve));
+
+    broker.openGlobalGate(60_000, now, 'rate_limit_circuit');
+    releasePermit();
+
+    await assert.rejects(
+        pending,
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+            && error.poolExhausted
+            && error.deferredReason === 'rate_limit_circuit'
+    );
+    assert.equal(calls, 0, 'no request may start after the circuit opened while waiting');
+    assert.equal(broker.metricsSnapshot().physicalAttempts, 0);
+});
+
+test('five distinct fast 429 responses open a global circuit instead of scanning the pool', async () => {
+    const broker = scheduler({
+        eligibleProjectLimit: 50,
+        projectGroupSize: 5,
+        groupRotationEnabled: true,
+        random: () => 0,
+        rateLimitCircuitProjectThreshold: 5,
+        rateLimitCircuitWindowMs: 10_000,
+        rateLimitCircuitBaseDelayMs: 60_000,
+    });
+    let calls = 0;
+    const alwaysRateLimited = async () => {
+        calls += 1;
+        const error = new Error('quota');
+        error.status = 429;
+        throw error;
+    };
+
+    await assert.rejects(
+        broker.execute(alwaysRateLimited),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT && !error.poolExhausted
+    );
+    await assert.rejects(
+        broker.execute(alwaysRateLimited),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+            && error.poolExhausted
+            && error.deferredReason === 'rate_limit_circuit'
+    );
+    assert.equal(calls, 5, 'the circuit must stop rotation before all 50 projects are probed');
+
+    const physicalAttempts = broker.metricsSnapshot().physicalAttempts;
+    await assert.rejects(
+        broker.execute(alwaysRateLimited),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+            && error.deferredReason === 'rate_limit_circuit'
+    );
+    assert.equal(calls, 5);
+    assert.equal(broker.metricsSnapshot().physicalAttempts, physicalAttempts);
+    assert.equal(broker.availabilitySnapshot().gateReason, 'rate_limit_circuit');
+});
+
+test('thirty concurrent logical stages stop within six physical 429 attempts with limiter one', async () => {
+    const broker = scheduler({
+        eligibleProjectLimit: 50,
+        projectGroupSize: 5,
+        groupRotationEnabled: true,
+        random: () => 0,
+        rateLimitCircuitProjectThreshold: 5,
+    });
+    const limiter = new AdaptiveGeminiLimiter({
+        initialLimit: 1,
+        minLimit: 1,
+        maxLimit: 1,
+    });
+    let calls = 0;
+    const cooldownProjects = [];
+    const stages = Array.from({ length: 30 }, (_, index) => broker.execute(
+        async () => {
+            calls += 1;
+            const error = new Error('quota');
+            error.status = 429;
+            throw error;
+        },
+        {
+            jobId: `burst-job-${index + 1}`,
+            onEvent: event => {
+                if (event.type === 'cooldown') cooldownProjects.push(event.keyIndex);
+            },
+            admitPhysical: task => limiter.run(task, {
+                jobId: `burst-job-${index + 1}`,
+            }),
+        }
+    ));
+
+    const settled = await Promise.allSettled(stages);
+    assert.equal(settled.every(result => result.status === 'rejected'), true);
+    assert.ok(
+        calls <= 6,
+        `bounded burst exceeded: ${calls}; cooldowns: ${cooldownProjects.join(',')}`
+    );
+    assert.equal(broker.metricsSnapshot().physicalAttempts, calls);
+    assert.equal(broker.metricsSnapshot().logicalRequests, 30);
+});
+
+test('rate-limit circuit backs off exponentially and resets only after ten successes', async () => {
+    let now = 1_000_000;
+    const broker = scheduler({
+        projectsProvider: () => fiftyProjects.slice(0, 5),
+        clock: () => now,
+        random: () => 0,
+        rateLimitCircuitProjectThreshold: 5,
+        rateLimitCircuitBaseDelayMs: 60_000,
+        rateLimitCircuitMaxDelayMs: 600_000,
+        rateLimitCircuitResetSuccesses: 10,
+    });
+    const rateLimitProject = projectId => broker.recordRateLimit(projectId, null, now);
+
+    let opened;
+    for (const project of fiftyProjects.slice(0, 5)) {
+        opened = rateLimitProject(project.id) || opened;
+    }
+    assert.equal(opened.delayMs, 60_000);
+    assert.equal(broker.metricsSnapshot().rateLimitCircuit.backoffLevel, 1);
+
+    now = broker.globalGateUntil + 1;
+    for (const project of fiftyProjects.slice(0, 5)) {
+        opened = rateLimitProject(project.id) || opened;
+    }
+    assert.equal(opened.delayMs, 120_000);
+    assert.equal(broker.metricsSnapshot().rateLimitCircuit.backoffLevel, 2);
+
+    now = broker.globalGateUntil + 1;
+    const succeed = () => ({ metadata: { usage: { promptTokenCount: 1 } } });
+    for (let count = 0; count < 9; count += 1) {
+        await broker.execute(succeed, { estimatedInputTokens: 1 });
+    }
+    assert.equal(broker.metricsSnapshot().rateLimitCircuit.backoffLevel, 2);
+    await broker.execute(succeed, { estimatedInputTokens: 1 });
+    assert.equal(broker.metricsSnapshot().rateLimitCircuit.backoffLevel, 0);
+});
+
+test('project cooldown grows after repeated generic 429 and success resets it', async () => {
+    let now = 1_000_000;
+    const broker = scheduler({
+        projectsProvider: () => fiftyProjects.slice(0, 1),
+        clock: () => now,
+        random: () => 0,
+    });
+    const reject429 = async () => {
+        const error = new Error('quota');
+        error.status = 429;
+        throw error;
+    };
+
+    await assert.rejects(broker.execute(reject429));
+    assert.equal(broker.snapshot()[0].cooldownUntil - now, 60_000);
+
+    now = broker.globalGateUntil + 1;
+    await assert.rejects(broker.execute(reject429));
+    assert.equal(broker.snapshot()[0].cooldownUntil - now, 120_000);
+
+    now = broker.globalGateUntil + 1;
+    await broker.execute(
+        async () => ({ metadata: { usage: { promptTokenCount: 1 } } }),
+        { estimatedInputTokens: 1 }
+    );
+    assert.equal(broker.states.get('project-1').consecutiveRateLimits, 0);
+});
+
+test('an open rate-limit circuit survives scheduler restart', async () => {
+    let now = 1_000_000;
+    let schedulerRow = null;
+    const SchedulerStateModel = {
+        findOne() {
+            return {
+                lean: async () => schedulerRow == null
+                    ? null
+                    : structuredClone(schedulerRow),
+            };
+        },
+        async findOneAndUpdate(_filter, update) {
+            schedulerRow = structuredClone(update.$set);
+            return structuredClone(schedulerRow);
+        },
+    };
+    const options = {
+        SchedulerStateModel,
+        projectsProvider: () => fiftyProjects.slice(0, 5),
+        clock: () => now,
+        random: () => 0,
+        rateLimitCircuitProjectThreshold: 5,
+    };
+    const first = scheduler(options);
+    const reject429 = async () => {
+        const error = new Error('quota');
+        error.status = 429;
+        throw error;
+    };
+
+    await assert.rejects(first.execute(reject429));
+    await assert.rejects(first.execute(reject429));
+    assert.equal(first.availabilitySnapshot().gateReason, 'rate_limit_circuit');
+
+    const restarted = scheduler(options);
+    await restarted.hydrate();
+    assert.equal(restarted.availabilitySnapshot().gated, true);
+    assert.equal(restarted.availabilitySnapshot().gateReason, 'rate_limit_circuit');
+    assert.equal(restarted.metricsSnapshot().rateLimitCircuit.backoffLevel, 1);
 });
 
 test('rotation rollback confines capacity checks to the first five-project working set', async () => {

@@ -85,7 +85,11 @@ test('error policy defers quota without retry amplification but permanently fail
     for (let attempt = 0; attempt < 10; attempt += 1) {
         await queue.handleProcessingFailure(job, poolError);
     }
-    assert.equal(hibernationCalls.length, 0);
+    assert.deepEqual(
+        hibernationCalls,
+        [60_000],
+        'the authoritative pool deadline must stop queue refill immediately'
+    );
     assert.equal(updates.at(-1).update.$inc, undefined);
     assert.equal(updates.at(-1).update.$set.schedulerDeferred, true);
     assert.equal(updates.at(-1).update.$set.status, 'pending');

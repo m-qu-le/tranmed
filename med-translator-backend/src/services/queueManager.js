@@ -55,9 +55,6 @@ const LEASE_HEARTBEAT_MS = 60 * 1000;
 const INFRASTRUCTURE_RETRY_BASE_DELAY_MS = 60 * 1000;
 const INFRASTRUCTURE_RETRY_MAX_DELAY_MS = 10 * 60 * 1000;
 export const POOL_EXHAUSTION_WAKEUP_POLICY = 'pool_retry_after';
-// Khi toàn bộ key Gemini đang cooldown, không thay job vừa dừng bằng PDF mới.
-// Retry của job cũ phải được ưu tiên sau khi pool hồi phục.
-export const POOL_EXHAUSTION_HIBERNATION_THRESHOLD = 10;
 export const SCHEDULER_EXECUTION_VERSION = PROJECT_POOL_EXECUTION_VERSION;
 const PRIORITY_DEMAND_CACHE_MS = 250;
 const SOURCE_CACHE_WAIT_LIMIT_MS = 60_000;
@@ -65,6 +62,15 @@ const WATCHDOG_INTERVAL_MS = 30_000;
 const WATCHDOG_IDLE_LIMIT_MS = 2 * 60_000;
 
 const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings processingStartedAt completedAt schedulerSuspended schedulerDeferred schedulerExecutionVersion';
+
+export function qualityDispatcherWidth(readyCount, limiterSnapshot = {}) {
+    if (!Number.isSafeInteger(readyCount) || readyCount <= 0) return 0;
+    const currentLimit = Number.isSafeInteger(limiterSnapshot.limit)
+        && limiterSnapshot.limit > 0
+        ? limiterSnapshot.limit
+        : 1;
+    return Math.min(readyCount, currentLimit);
+}
 
 function waitAbortably(delayMs, signal) {
     return new Promise((resolve, reject) => {
@@ -103,10 +109,11 @@ export class QueueManager extends EventEmitter {
         this.pumpRequested = false;
         this.isHibernating = false;
         this.isMaintenancePaused = false;
-        this.consecutivePoolExhaustions = 0;
+        this.maintenanceSuspendedJobs = new Set();
         this.hibernationCount = 0;
         this.hibernationStats = null;
         this.hibernationTimer = null;
+        this.hibernationPromise = null;
         this.retryTimer = null;
         this.sourceService = sourceService;
         this.sourceCleanupService = sourceCleanupService;
@@ -221,6 +228,11 @@ export class QueueManager extends EventEmitter {
             isHibernating: this.isHibernating,
             stats: this.hibernationStats,
             isMaintenancePaused: this.isMaintenancePaused,
+            maintenanceState: !this.isMaintenancePaused
+                ? 'running'
+                : this.activeJobs.size > 0 || limiter.activeCount > 0
+                    ? 'draining'
+                    : 'drained',
             worker: {
                 concurrency: this.concurrency,
                 activeJobs: this.activeJobs.size,
@@ -284,6 +296,11 @@ export class QueueManager extends EventEmitter {
 
     pauseForRedeploy() {
         this.isMaintenancePaused = true;
+        for (const jobId of this.activeJobs.keys()) {
+            this.maintenanceSuspendedJobs.add(jobId);
+            qualityKeyScheduler.suspendJob(jobId);
+            qualityGeminiLimiter.suspendJob(jobId);
+        }
         if (this.retryTimer) {
             clearTimeout(this.retryTimer);
             this.retryTimer = null;
@@ -294,6 +311,10 @@ export class QueueManager extends EventEmitter {
 
     async cancelRedeployPause() {
         this.isMaintenancePaused = false;
+        for (const jobId of this.maintenanceSuspendedJobs) {
+            qualityKeyScheduler.resumeJob(jobId);
+        }
+        this.maintenanceSuspendedJobs.clear();
         this.emit('systemStatusChanged', this.getSystemStatus());
         await this.startWorker();
         return this.getSystemStatus();
@@ -302,28 +323,38 @@ export class QueueManager extends EventEmitter {
     async triggerHibernation(retryAfterMs = null) {
         if (this.isHibernating) return;
         if (!Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return;
+        if (this.hibernationPromise) return this.hibernationPromise;
 
-        const startTime = new Date();
-        const wakeupTime = new Date(startTime.getTime() + retryAfterMs);
-        const stats = {
-            startTime: startTime.toISOString(),
-            wakeupTime: wakeupTime.toISOString(),
-            wakeupPolicy: POOL_EXHAUSTION_WAKEUP_POLICY,
-            hibernationCount: this.hibernationCount + 1
-        };
+        const operation = (async () => {
+            if (this.isHibernating) return;
+            const startTime = new Date();
+            const wakeupTime = new Date(startTime.getTime() + retryAfterMs);
+            const stats = {
+                startTime: startTime.toISOString(),
+                wakeupTime: wakeupTime.toISOString(),
+                wakeupPolicy: POOL_EXHAUSTION_WAKEUP_POLICY,
+                hibernationCount: this.hibernationCount + 1
+            };
 
-        await System.findOneAndUpdate(
-            { key: CIRCUIT_BREAKER_KEY },
-            { $set: { isHibernating: true, stats } },
-            { upsert: true }
-        );
+            await System.findOneAndUpdate(
+                { key: CIRCUIT_BREAKER_KEY },
+                { $set: { isHibernating: true, stats } },
+                { upsert: true }
+            );
 
-        this.isHibernating = true;
-        this.hibernationCount = stats.hibernationCount;
-        this.hibernationStats = stats;
-        this.emit('systemStatusChanged', this.getSystemStatus());
-        this.scheduleWakeUp(wakeupTime.getTime() - startTime.getTime());
-        console.log(`🛑 [CIRCUIT BREAKER] Tạm dừng đến ${wakeupTime.toISOString()} vì toàn bộ Gemini key chưa thể cấp phát.`);
+            this.isHibernating = true;
+            this.hibernationCount = stats.hibernationCount;
+            this.hibernationStats = stats;
+            this.emit('systemStatusChanged', this.getSystemStatus());
+            this.scheduleWakeUp(wakeupTime.getTime() - startTime.getTime());
+            console.log(`🛑 [CIRCUIT BREAKER] Tạm dừng đến ${wakeupTime.toISOString()} vì toàn bộ Gemini key chưa thể cấp phát.`);
+        })();
+        this.hibernationPromise = operation;
+        try {
+            return await operation;
+        } finally {
+            if (this.hibernationPromise === operation) this.hibernationPromise = null;
+        }
     }
 
     async wakeUp() {
@@ -333,7 +364,6 @@ export class QueueManager extends EventEmitter {
             { upsert: true }
         );
 
-        this.consecutivePoolExhaustions = 0;
         this.isHibernating = false;
         this.hibernationStats = null;
         this.hibernationTimer = null;
@@ -852,6 +882,16 @@ export class QueueManager extends EventEmitter {
 
     async assertStageAdmission(job) {
         await this.assertJobActive(job);
+        if (this.isMaintenancePaused) {
+            this.maintenanceSuspendedJobs.add(job.jobId);
+            qualityKeyScheduler.suspendJob(job.jobId);
+            qualityGeminiLimiter.suspendJob(job.jobId);
+            throw new ProcessingError(
+                ErrorCodes.SCHEDULER_SUSPENDED,
+                'Job được tạm dừng an toàn giữa hai Gemini stage để bảo trì.',
+                { publicMessage: 'Tạm dừng an toàn để bảo trì hệ thống.' }
+            );
+        }
         if (job.priority === 1 || !(await this.hasPriorityDemand(job.jobId))) return;
         qualityKeyScheduler.suspendJob(job.jobId);
         qualityGeminiLimiter.suspendJob(job.jobId);
@@ -1139,9 +1179,9 @@ export class QueueManager extends EventEmitter {
                 }
 
                 this.watchdogState.nextWakeTime = null;
-                const width = Math.max(
-                    1,
-                    Math.min(ready.length, qualityGeminiLimiter.snapshot().maxLimit)
+                const width = qualityDispatcherWidth(
+                    ready.length,
+                    qualityGeminiLimiter.snapshot()
                 );
                 const selected = ready.slice(0, width);
                 for (const entry of selected) {
@@ -1293,7 +1333,6 @@ export class QueueManager extends EventEmitter {
 
         await this.safeUnlink(job.filePath);
         await this.cleanupSourceSafely(job, 'completed');
-        this.consecutivePoolExhaustions = 0;
         this.emitJobUpdate(job.jobId, 'completed', {
             ...(translationMode === 'quality' ? {
                 translationMode: 'quality',
@@ -1369,6 +1408,11 @@ export class QueueManager extends EventEmitter {
                 this.watchdogState.blockedReason = 'quota_pool_exhausted';
                 this.watchdogState.nextWakeTime = nextRetryAt;
                 this.emit('systemStatusChanged', this.getSystemStatus());
+                if (quotaDeferral && !this.isHibernating) {
+                    await this.triggerHibernation(
+                        Math.max(1, nextRetryAt.getTime() - now)
+                    );
+                }
             }
             return;
         }
@@ -1382,11 +1426,6 @@ export class QueueManager extends EventEmitter {
             this.emitJobUpdate(job.jobId, 'cancelled', { error: null, errorCode: ErrorCodes.CANCELLED });
             return;
         }
-
-        this.consecutivePoolExhaustions = error.poolExhausted
-            ? this.consecutivePoolExhaustions + 1
-            : 0;
-        const shouldHibernate = this.consecutivePoolExhaustions >= POOL_EXHAUSTION_HIBERNATION_THRESHOLD;
 
         const category = classifyFailure(error.code);
         const now = new Date();
@@ -1423,9 +1462,6 @@ export class QueueManager extends EventEmitter {
                 maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : null,
                 nextRetryAt
             });
-            if (shouldHibernate && !this.isHibernating) {
-                await this.triggerHibernation(error.retryAfterMs);
-            }
             return;
         }
 
@@ -1462,9 +1498,6 @@ export class QueueManager extends EventEmitter {
             sourceRetentionUntil,
             failureAdvice: terminalAdvice,
         });
-        if (shouldHibernate && !this.isHibernating) {
-            await this.triggerHibernation(error.retryAfterMs);
-        }
     }
 
     async runActiveJob(job) {
@@ -1664,6 +1697,13 @@ export class QueueManager extends EventEmitter {
             const gateCleared = qualityKeyScheduler.clearStaleGate();
             const availability = qualityKeyScheduler.availabilitySnapshot();
             this.watchdogState.nextWakeTime = availability.nextAvailableAt;
+            if (availability.gated) {
+                this.watchdogState.status = 'blocked';
+                this.watchdogState.blockedReason = availability.gateReason
+                    || 'quota_pool_exhausted';
+                this.emit('systemStatusChanged', this.getSystemStatus());
+                return false;
+            }
             if (!availability.anyCapacity) {
                 this.watchdogState.status = 'blocked';
                 this.watchdogState.blockedReason = 'all_projects_no_capacity';
