@@ -63,12 +63,13 @@ document_context (một lần mỗi quality job)
 
 1. Claim phải atomic và có compare-and-set; job worker cũ không được ghi đè worker mới sau lease recovery (`processingToken` và lease là hàng rào).
 2. `priority=1` luôn đi trước `priority=0` đối với job đang eligible; thứ tự trong cùng priority là `createdAt`, rồi `_id`. Không preempt job đã `processing`.
-3. Circuit breaker/hibernate và maintenance pause ngăn claim job mới, không làm mất Job/UploadBatch đã persist. Priority upload vẫn có thể prepare/PUT/confirm khi worker ngủ.
+3. Circuit breaker/hibernate và maintenance pause ngăn claim job mới, không làm mất Job/UploadBatch đã persist. Maintenance cho physical request hoàn tất rồi suspend ở ranh giới stage; không abort qua cleanup `CANCELLED`. Priority upload vẫn có thể prepare/PUT/confirm khi worker ngủ.
 4. Lane song song chỉ được claim khi mọi active source có size hợp lệ và tổng source không vượt budget. Source size chỉ là proxy bảo thủ cho RAM, không phải số đo RAM.
 5. `clientUploadId`, `clientBatchId` và storage key phải giữ idempotency cho prepare/confirm/retry. Không báo người dùng có thể đóng máy trước `canCloseClient=true`.
 6. Job mới lưu Markdown theo `TranslationChunk.content`; `Job.result` chỉ còn compatibility legacy.
 7. Mỗi stage quality persist atomically; pipeline-version mismatch chỉ reset chunk dở dang, không rewrite chunk terminal có content.
 8. `repairCount` không quá 2; coverage thiếu không bao giờ thành PASS; revision/repair phải qua guard giữ ít nhất 80% meaningful text của bản trước.
+9. Global rate-limit circuit phải được re-check ngay trước Gemini reservation/API call. Generic 429 không đủ để kết luận RPD hết hoặc IP bị block; không tăng concurrency/project pool để dò lỗi quota.
 9. Preview, Copy và Download phải nhận cùng header review do backend dựng, tránh UI tự tái diễn giải report private.
 10. Cleanup source phải idempotent. Failed job R2 giữ source đến `sourceRetentionUntil` để cho phép retry; completed/cancel/delete dọn sớm. Thất bại xóa R2 phải có state/retry thay vì bỏ quên object.
 

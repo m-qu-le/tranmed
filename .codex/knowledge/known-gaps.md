@@ -29,8 +29,24 @@ Danh sách này mô tả những gì hệ thống **chưa** đảm bảo. Không
 - SSE có thể mất/reorder. HTTP resync là bắt buộc; không thêm feature phụ thuộc hoàn toàn vào event stream.
 - Source R2 của failed job được giữ có hạn để retry. Điều đó là trade-off recovery vs retention; cần cấu hình R2 lifecycle là safety net phù hợp với `R2_SOURCE_RETENTION_DAYS`, nhưng app cleanup vẫn là cơ chế chính.
 - Source cleanup có retry, nhưng retry backlog/R2 outage có thể khiến object tồn tại lâu hơn dự kiến. Theo dõi `storage.cleanupBacklog`, source cleanup SSE/metrics và R2 lifecycle khi vận hành.
-- Maintenance pause chỉ sống trong process. Nó không phải distributed deploy lock, không ngăn browser đã có presigned URL upload, và không thay thế kiểm active jobs trước deploy.
+- Maintenance pause chỉ sống trong process và không phải distributed deploy lock.
+  Sau P013 nó safe-drain Gemini tại ranh giới stage, nhưng vẫn không ngăn browser đã
+  có presigned URL upload và không thay thế kiểm `maintenanceState=drained`, active
+  stage/job cùng Mongo processing trước deploy.
 - Metrics hiện in-memory và reset khi Render restart; không có backend observability retention/alerting dài hạn. `/metrics` hữu ích cho snapshot, không phải time-series source of truth.
+- P013 chứng minh production phục hồi với 0/225 response 429 sau bản vá, nhưng không
+  xác định được quota dimension upstream đã gây burst ban đầu. Circuit giảm
+  amplification khi tái phát; nó không tạo thêm quota và không chứng minh source/IP
+  enforcement nếu chỉ nhìn một response generic.
+- Atlas IP Access List hiện cho phép `0.0.0.0/0` theo quyết định chấp nhận rủi ro của
+  owner. Password/URI phải tiếp tục được giữ ngoài source, chat, ảnh chụp và log; đổi
+  password ngay nếu có khả năng lộ.
+- User ứng dụng `tranmed_app` hiện có `readWriteAnyDatabase@admin`, rộng hơn nhu cầu
+  runtime. Least-privilege hardening còn thiếu: thu hẹp về `readWrite` chỉ trên
+  `studymed_translator`.
+- Atlas Free không cung cấp chiến lược managed backup đủ cho nhu cầu phục hồi. P012
+  đang dựa vào rollback window của cluster Hong Kong; backup định kỳ và restore drill
+  vẫn là công việc vận hành chưa hoàn tất.
 
 ## Khoản nợ mã nguồn
 

@@ -7,6 +7,66 @@
 - `/api/health` là heartbeat Mongo. `/api/readiness` là readiness Mongo + R2. Cả hai đều cần thành công trước và sau deploy; health không chứng minh R2 usable.
 - Runtime production có thể khác fallback mã nguồn. Xem `/api/translate/status` để biết worker/budget/hibernate/maintenance/storage backlog và `/api/translate/gemini-keys/status` để biết số/trạng thái key, không suy luận từ `.env` local.
 
+## Topology production sau P012
+
+- Backend chạy trên Render Ohio (US East).
+- MongoDB hiện hành là Atlas project `TranMed-US`, cluster Free
+  `tranmed-us-prod`, AWS N. Virginia `US_EAST_1`, database
+  `studymed_translator`.
+- P012 dùng controlled cold start: chỉ bootstrap state/index bắt buộc, không restore
+  job/folder/chunk cũ. Lịch sử giao diện cũ đã được chủ hệ thống chủ động từ bỏ sau
+  khi tải các file Markdown cần giữ.
+- Cluster Hong Kong là rollback safety net, phải giữ 7–14 ngày và qua ít nhất hai
+  batch thật trước khi cân nhắc xóa.
+- Canary ngày 24-07-2026 hoàn tất 1/1 chunk trong khoảng 21 giây, không retry/429;
+  Mongo operation p95 là 31 ms so với khoảng 598–757 ms trước cutover. Đây là bằng
+  chứng tại thời điểm canary, không thay cho giám sát production liên tục.
+- Atlas IP Access List `0.0.0.0/0` là ngoại lệ được owner chấp nhận cho hệ thống cá
+  nhân. Database user `tranmed_app` hiện có role `readWriteAnyDatabase@admin`; không
+  dùng tài khoản này cho quản trị và nên thu hẹp về `readWrite` trên đúng database
+  trong đợt hardening.
+
+### Capacity rollout P011 và containment P013
+
+- P011 được đưa ra khỏi archive ngày 24-07-2026 để tiếp tục theo dõi capacity hậu P012.
+- Kiểm tra live 16:56–16:58 ICT: Mongo operation p95 98 ms/3.610 mẫu, quota
+  reserve/release p95 97/95 ms, RSS khoảng 47% và event-loop p95 20 ms; Mongo/resource
+  gate đạt.
+- Cửa sổ trước P013 từng có amplification tích lũy 1,219, limiter window rate-limit
+  22% và burst 77 giây với +29 logical-issued, +41 physical, +21 phản hồi 429.
+- P013 đã đóng retry storm bằng commit `0f739b1`. Nghiệm thu production ngày
+  24-07-2026 đạt 225 logical-issued/226 physical, 0 response 429, amplification
+  1,0044, 45 terminal chunk và 0 job failed. Đây là bằng chứng tại cửa sổ nghiệm
+  thu, không phải bảo đảm quota tương lai.
+- Giữ `GEMINI_MAX_CONCURRENCY=5`. Không tăng chỉ vì Mongo p95 xanh; phải điều tra quota
+  thật và lặp lại gate ≥200 logical-issued/≥20 chunk terminal với amplification
+  ≤1,15, 429 <1%, không lỗi persist/lease/duplicate/mất stage trước mỗi lần tăng.
+- Hồ sơ đang hoạt động: `../../project-011/project-011.md`; runbook:
+  `../../med-translator-backend/PROJECT_POOL_ROLLOUT.md`.
+- Hồ sơ sự cố đã đóng: `../../archive/project-013/project-013.md`.
+
+### Runbook Gemini 429 sau P013
+
+- Generic `429 RESOURCE_EXHAUSTED` không chứng minh project hết RPD, quota dimension
+  cụ thể hoặc outbound IP Render bị block.
+- Scheduler mở global circuit khi 5 project độc lập trả 429 trong 10 giây. Backoff
+  tăng khoảng 60 giây → 2 → 4 → 8 → tối đa 10 phút và cần 10 physical success liên
+  tiếp để reset.
+- Stage đã chờ limiter phải re-check gate trước reservation/API call. Khi circuit
+  mở, physical-attempt mới phải bằng 0 cho tới `nextAvailableAt`.
+- Project generic 429 có cooldown tăng dần; `Retry-After` từ provider vẫn được ưu
+  tiên. Counter đạt 500 RPD mới là căn cứ nội bộ để chờ Pacific reset; không tự gắn
+  RPD-exhausted chỉ từ response generic.
+- Kiểm `/api/translate/metrics`: `gemini.rateLimitCircuit`, `globalGateReason`,
+  `physicalAttempts/logicalIssuedRequests`, `rateLimitResponses`; kiểm
+  `/api/translate/status`: `quotaGate`, `blockedReason`, `nextWakeTime`.
+- Khi 429 burst xuất hiện: không tăng concurrency, không bật thêm project để probe,
+  không restart liên tục. Đợi circuit deadline, xác nhận queue hibernate và dùng
+  maintenance drain trước diagnostic probe cô lập.
+- Chỉ nghi source/IP enforcement khi cùng key/project/model/payload thành công local
+  nhưng Render idle vẫn 429 trong phép thử đồng thời, giới hạn request. Nếu workload
+  production Render đang thành công liên tục thì không kết luận IP block.
+
 ## Biến môi trường backend
 
 Tạo `.env` từ `.env.example` khi chạy local. `validateRuntimeEnv()` yêu cầu các biến sau khi server thật khởi động:
@@ -91,9 +151,9 @@ Không có migration bắt buộc riêng cho P004–P010 trong mã hiện tại.
 
 1. Kiểm tra batch upload: người dùng phải đã thấy `canCloseClient=true`; đừng redeploy giữa một upload browser chưa được confirm.
 2. Kiểm tra `/api/translate/status`. Dùng UI hoặc `POST /maintenance/pause` với `X-Maintenance-Token` để ngừng claim mới.
-3. Đợi `worker.activeJobs=0` và không còn Job `processing`. Pause không giết active job; nó chỉ là cửa sổ an toàn để tránh job lai model/code.
+3. Pause cho physical request đang chạy hoàn tất, suspend job ở ranh giới stage và persist về pending; nó không abort qua `CANCELLED`. Đợi `maintenanceState=drained`, `worker.activeJobs=0`, `dispatcher.activeStages=0`, `dispatcher.waitingStages=0` và không còn Job `processing`.
 4. Deploy backend trước frontend nếu API contract thay đổi. Khi đổi model, đặt rõ `GEMINI_MODEL`; khi đổi worker/budget, đặt rõ cả hai biến, không xóa biến để rơi vào fallback 5/100.
-5. Sau restart, gọi `/api/readiness`, `/api/translate/status`, `/api/translate/metrics`, và kiểm key status. Xác nhận maintenance không còn paused, storage available, cleanup/upload backlog hợp lý, worker config đúng ý định.
+5. Sau restart, gọi `/api/readiness`, `/api/translate/status`, `/api/translate/metrics`, và kiểm key status. Xác nhận maintenance `running`/không paused, circuit/gate hợp lý, storage available, cleanup/upload backlog hợp lý, worker config đúng ý định.
 6. Chỉ chạy canary/smoke production nếu được phê duyệt; không thêm PDF canary khi backlog thật đang tồn tại.
 
 Nếu maintenance instance cũ bị redeploy, pause state chỉ sống trong instance đó; instance mới recovery queue/lease và bắt đầu worker bình thường. Sau crash/restart, kiểm `processing`, `nextRetryAt`, cleanup state và stderr/log; không mặc định job thành công chỉ vì server đã lên.

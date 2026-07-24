@@ -11,8 +11,8 @@ Startup fail-fast nếu thiếu Mongo/Gemini/R2 required env, R2 endpoint không
 - Job pending eligible có `sourceState=ready`; claim sắp theo `{ priority: -1, createdAt: 1, _id: 1 }`, sau đó CAS để tránh duplicate claim.
 - Khi claim, job nhận `processingToken`, `leaseExpiresAt` và heartbeat gia hạn lease. Khởi động lại/lỗi worker chỉ phục hồi job processing khi lease hết hạn; worker cũ mất quyền ghi.
 - `MAX_JOB_ATTEMPTS` kiểm soát retry xử lý. Queue phân loại infrastructure/content/terminal, đặt `nextRetryAt` và lập timer để thức dậy đúng hạn.
-- Nếu key pool không cấp phát được, circuit breaker persist trạng thái hibernate trong `System`; wake-up tự động hoặc `/force-wakeup` sẽ chạy lại worker. Hibernation không chặn cloud upload.
-- `pauseForRedeploy()` ngừng claim mới và retry timer, nhưng để active job chạy đến terminal. API pause/cancel bắt buộc header `X-Maintenance-Token` khớp `MAINTENANCE_CONTROL_TOKEN` bằng `timingSafeEqual`.
+- Nếu key pool không cấp phát được, circuit breaker persist trạng thái hibernate trong `System`; wake-up tự động hoặc `/force-wakeup` sẽ chạy lại worker. Hibernation không chặn cloud upload. Quota pool exhaustion đi theo deadline authoritative của scheduler, không đợi bộ đếm retry job.
+- `pauseForRedeploy()` ngừng claim mới/retry timer, cho physical request đang chạy hoàn tất rồi suspend job ở ranh giới stage về pending. API pause/cancel bắt buộc header `X-Maintenance-Token` khớp `MAINTENANCE_CONTROL_TOKEN` bằng `timingSafeEqual`; chỉ deploy khi status là `maintenanceState=drained` và active/waiting/processing đều bằng 0.
 - Pool nhận từ 1 đến 5 job. Job đầu có thể chạy độc lập; lane tiếp chỉ nhận đúng job FIFO tiếp theo khi mọi active job có `sourceSize` hợp lệ và `activeSourceBytes + candidate.sourceSize` không vượt `PARALLEL_SOURCE_BUDGET_BYTES`. Unknown/large source chặn parallel admission, không bị bỏ qua.
 - `sourceSize` là proxy cho RAM. P008 đã ghi nhận 5 worker/100 MiB làm Render Free tràn bộ nhớ; đừng nâng runtime worker/budget dựa trên fallback code mà không có quyết định và kiểm chứng vận hành mới.
 
@@ -29,7 +29,9 @@ Quality mode có version `p010-v1`, prompt version `p003-prompts-v3` và context
 - Toàn PDF tạo document context một lần bằng Gemini Files API; file Gemini tạm phải được xóa trong `finally`. Context được persist private để resume, có giới hạn kích thước và chỉ là trợ giúp nhất quán thuật ngữ; chunk PDF là nguồn quyết định.
 - PDF mặc định chia hai trang/chunk. Bên trong chunk stage tuần tự: translate → medical audit JSON → revise → verify JSON; tối đa hai chunk chạy song song trong một job.
 - Text stage dùng 65,536 output tokens; context/audit/verify/reverify JSON dùng 16,384. Tất cả quality request dùng `thinkingLevel: HIGH`, `includeThoughts: false`; không gửi `temperature`, top-p/top-k, thinking budget hoặc candidate count.
-- Scheduler xoay API key, theo dõi quota/cooldown/disabled và metadata không chứa key. 429, invalid JSON/schema và 5xx có thể xoay key; 401/403 disable key cho đến restart/reconfigure. Một key được key khác cứu không được tính là circuit failure toàn cục.
+- Scheduler xoay API key, theo dõi quota/cooldown/disabled và metadata không chứa key. 429, invalid JSON/schema và 5xx có thể xoay key; 401/403 disable key cho đến restart/reconfigure.
+- Dispatcher tạo batch theo adaptive `limit`, không theo `maxLimit`. Năm project độc lập trả 429 trong 10 giây mở global rate-limit circuit; stage re-check gate ngay trước reservation/API call. Circuit backoff 60 giây → 2 → 4 → 8 → tối đa 10 phút, có jitter và cần 10 physical success liên tiếp để reset. State circuit cùng consecutive project 429/cooldown được persist để restart không tạo cold-start burst.
+- Generic 429 không tự đánh dấu project RPD-exhausted. Cooldown project tăng dần khi provider không gửi `Retry-After`; admission chỉ chờ Pacific reset khi daily counter thực sự đạt configured RPD.
 - Audit/verify JSON phải pass validator và coverage checklist. Verify/reverify `PASS` chỉ hợp lệ khi coverage `COMPLETE`; bất kỳ FAIL nào có thể repair tối đa hai vòng. Output revision/repair co rút dưới guard coverage 80% bị từ chối để không thay bản đầy đủ bằng bản mất nội dung.
 - `needs_review` giữ final content tốt nhất hiện có. Nếu repair output invalid, reason private chỉ lưu mã lỗi cấu trúc, không lưu raw Gemini response/prompt. Job quality completed có review chunk nhận header Markdown P004 dựng khi đọc.
 
@@ -68,6 +70,8 @@ Base: `/api/translate`. API không có authentication người dùng; CORS, rate
 - `Job`: identity/name/folder/priority; queue and lease fields; storage/source cleanup state; retry/failure info; quality aggregate/context; `result` legacy. Index claim chính là `{ status, priority, createdAt, _id }`.
 - `TranslationChunk`: unique `{jobId, chunkIndex}`, page range, pipeline/prompt version, stage, private artifacts, final `content`, `repairCount <= 2`, final quality status/reason và usage metadata.
 - `UploadBatch`: unique `batchId`, optional unique `clientBatchId`, manifest counters/status/priority. Virtual `canCloseClient` chỉ true khi batch ready và all items confirmed/skipped.
-- `System`: circuit-breaker hibernation state/timing persist qua restart.
+- `System`: queue hibernation state/timing persist qua restart.
+- `GeminiQuotaState`: rolling quota events, daily counts, cooldown và consecutive rate-limit streak theo stable project ID; không chứa API key.
+- `GeminiSchedulerState`: group cursor và global rate-limit circuit deadline/reason/backoff/open count.
 
 Không đổi enum/index hoặc xóa field trước khi truy tất cả caller, migration lịch sử và khả năng đọc job legacy. Migration P001–P003 có sẵn nhưng chỉ được chạy theo quy trình `operations.md`.
