@@ -157,6 +157,10 @@ export const TRANSLATION_PIPELINE_MODE = p003Config.pipelineMode;
 export const PDF_PAGES_PER_CHUNK = p003Config.pagesPerChunk;
 export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
 export const QUALITY_MAX_REPAIR_CYCLES = p003Config.maxRepairCycles;
+export const GEMINI_DIAGNOSTIC_PROBE_ENABLED = readBoolean(
+    'GEMINI_DIAGNOSTIC_PROBE_ENABLED',
+    false
+);
 export const TRANSLATION_WORKER_CONCURRENCY = readTranslationWorkerConcurrency();
 export const PARALLEL_SOURCE_BUDGET_BYTES = readParallelSourceBudgetMb() * 1024 * 1024;
 export const GEMINI_SCHEDULER_MODE = readEnum(

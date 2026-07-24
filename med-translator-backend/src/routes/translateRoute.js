@@ -19,6 +19,7 @@ import {
     bulkDeleteJobs,
     getSystemStatus,
     getOperationalMetrics,
+    runGeminiDiagnosticProbe,
     forceWakeUpSystem, // [THÊM MỚI] Import hàm ép thức dậy
     pauseForRedeploy,
     cancelRedeployPause,
@@ -38,6 +39,16 @@ const uploadRateLimit = rateLimit({
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     message: { error: 'Đã gửi quá nhiều upload trong một giờ. Vui lòng thử lại sau.' }
+});
+const diagnosticProbeRateLimit = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 4,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+        error: 'Đã chạy quá nhiều Gemini diagnostic probe trong một giờ.',
+        code: 'PROBE_RATE_LIMIT',
+    },
 });
 
 function requireMaintenanceControl(req, res, next) {
@@ -89,6 +100,12 @@ router.delete('/jobs/:jobId', deleteJob);
 router.post('/force-wakeup', forceWakeUpSystem);
 router.post('/maintenance/pause', requireMaintenanceControl, pauseForRedeploy);
 router.post('/maintenance/cancel', requireMaintenanceControl, cancelRedeployPause);
+router.post(
+    '/diagnostics/gemini-probe',
+    requireMaintenanceControl,
+    diagnosticProbeRateLimit,
+    runGeminiDiagnosticProbe
+);
 
 // [THÊM MỚI] 7. API Xóa toàn bộ hàng đợi thư mục (Nhận folderName qua URL params)
 router.delete('/folder/:folderName', deleteFolderQueue);

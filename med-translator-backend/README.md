@@ -32,6 +32,27 @@ Các giới hạn quan trọng:
 
 Sau khi mọi batch upload đã báo an toàn trên Cloud, chọn nút nhỏ **“Tạm dừng để redeploy”** ở góc trên trái, nhập `MAINTENANCE_CONTROL_TOKEN`, rồi chờ banner báo không còn job đang chạy. Khi đó có thể redeploy Render. Chế độ tạm dừng chỉ tồn tại trong instance cũ; server mới tự nhận queue và chạy bình thường, không cần bấm nút khởi động lại.
 
+## Chẩn đoán Gemini trên Render Free
+
+Khi Render không có Shell, có thể tạm bật `GEMINI_DIAGNOSTIC_PROBE_ENABLED=true`
+và gọi `POST /api/translate/diagnostics/gemini-probe` với header
+`X-Maintenance-Token`. Body chỉ nhận một trong hai model:
+
+```json
+{"model":"gemini-3.5-flash-lite"}
+```
+
+hoặc:
+
+```json
+{"model":"gemini-3.1-flash-lite"}
+```
+
+Probe dùng duy nhất key đầu tiên, gửi một PDF nhỏ tạo trong RAM và không ghi file,
+MongoDB, R2 hay nội dung phản hồi. Endpoint mặc định tắt, giới hạn 4 request/giờ,
+mỗi model có cooldown 5 phút và không bao giờ trả API key. Tắt lại biến môi trường
+sau khi chẩn đoán xong.
+
 ## Thống kê và worker pool P008
 
 - `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.

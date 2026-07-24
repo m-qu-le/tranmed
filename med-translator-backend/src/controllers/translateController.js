@@ -10,6 +10,10 @@ import { operationalMetrics } from '../services/operationalMetrics.js';
 import { qualityGeminiLimiter, qualityKeyScheduler } from '../services/qualityGeminiExecutors.js';
 import { buildPublicJobUpdate, buildPublicQualitySummary } from '../services/qualityPublicView.js';
 import { buildQualityReviewHeader, prependQualityReviewHeader } from '../services/qualityReviewMarkdown.js';
+import {
+    GeminiDiagnosticProbeError,
+    geminiDiagnosticProbe,
+} from '../services/geminiDiagnosticProbe.js';
 
 const QUALITY_REVIEW_FIELDS = [
     'chunkIndex',
@@ -49,6 +53,29 @@ export function buildGeminiKeyStatusPayload(scheduler = qualityKeyScheduler) {
 
 export const getGeminiKeyStatus = (_req, res) => {
     res.status(200).json(buildGeminiKeyStatusPayload());
+};
+
+export const runGeminiDiagnosticProbe = async (req, res) => {
+    try {
+        res.status(200).json(await geminiDiagnosticProbe.run(req.body?.model));
+    } catch (error) {
+        if (error instanceof GeminiDiagnosticProbeError) {
+            if (error.retryAfterSeconds) {
+                res.setHeader('Retry-After', String(error.retryAfterSeconds));
+            }
+            return res.status(error.status).json({
+                error: error.message,
+                code: error.code,
+                ...(error.retryAfterSeconds
+                    ? { retryAfterSeconds: error.retryAfterSeconds }
+                    : {}),
+            });
+        }
+        return res.status(500).json({
+            error: 'Không thể chạy Gemini diagnostic probe.',
+            code: 'PROBE_INTERNAL_ERROR',
+        });
+    }
 };
 
 export const prepareUploadBatch = async (req, res) => {
