@@ -1093,7 +1093,6 @@ function App() {
             <span>File đã xong</span>
             <small>
               Chờ {jobStats?.pending ?? '—'} · xử lý {jobStats?.processing ?? '—'} · lỗi {jobStats?.failed ?? '—'}
-              {jobStats?.deleted > 0 ? ` · đã xóa ${jobStats.deleted}` : ''}
               {jobStats?.untrackedFiles > 0 ? ` · mất dấu vết ${jobStats.untrackedFiles}` : ''}
             </small>
           </article>

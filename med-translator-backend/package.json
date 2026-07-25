@@ -28,7 +28,9 @@
     "smoke:r2-presign": "node scripts/smoke-r2-presign.js",
     "smoke:p010-gemini": "node scripts/smoke-project-010-gemini.js",
     "smoke:p003-quality": "node scripts/smoke-project-003-quality.js",
-    "reconcile:r2": "node scripts/reconcile-r2.js"
+    "reconcile:r2": "node scripts/reconcile-r2.js",
+    "upload:staging": "node scripts/local-uploader.js",
+    "upload:staging:dry-run": "node scripts/local-uploader.js --dry-run"
   },
   "keywords": [],
   "author": "",

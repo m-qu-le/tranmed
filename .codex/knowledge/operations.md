@@ -120,6 +120,26 @@ npm run smoke:p003-quality
 
 Các smoke Gemini có thể phát sinh request/chi phí; P010 smoke tạo tài nguyên tạm và có cleanup, nhưng vẫn cần xác nhận kết quả/cleanup thay vì coi script chạy là thành công.
 
+## Upload từ laptop không mở giao diện
+
+Nhấp đúp `../../Upload file chờ dịch.bat` để quét
+`D:\1. File chờ dịch`, xem thống kê rồi xác nhận một lần trước khi tạo job
+production. Cấu trúc bắt buộc là `Tên sách\<một thư mục con>\*.pdf`; tên sách trở
+thành nhóm StudyMed và mọi file đi vào hàng thường.
+
+Chỉ kiểm tra local, không gọi mạng, không tạo job và không ghi ledger:
+
+```powershell
+cd med-translator-backend
+npm run upload:staging:dry-run
+```
+
+Ledger chống trùng nằm tại
+`%LOCALAPPDATA%\StudyMed\Uploader\state-v1.json`. Không xóa/reset ledger hoặc đổi
+file của batch đang dở để thử lại; giữ nguyên nguồn và chạy lại để resume. Thiết
+kế, interface, failure mode và recovery đầy đủ nằm trong
+[local-uploader.md](local-uploader.md).
+
 ## Migration, backup và R2 maintenance
 
 Migration P001–P003 là additive/idempotent nhưng vẫn làm trên dữ liệu thật, không phải lệnh bootstrap vô hại. Trước P002/P003, chọn một thư mục backup **ngoài repository** và chạy dry-run trước migration.

@@ -11,10 +11,11 @@ StudyMed Translator nhận PDF y khoa, đưa file trực tiếp từ trình duy�
 1. [project-map.md](project-map.md) — sơ đồ thành phần, dữ liệu, luồng và các bất biến xuyên hệ thống.
 2. [backend.md](backend.md) — backend, queue, API, schema và quality pipeline.
 3. [frontend.md](frontend.md) — React UI, cloud uploader, SSE và luồng kết quả.
-4. [operations.md](operations.md) — cấu hình, kiểm tra, deploy/redeploy, migration và an toàn dữ liệu.
-5. [known-gaps.md](known-gaps.md) — giới hạn đã biết; không diễn giải chúng là tính năng đã hoàn tất.
-6. `../../project-011/` — hồ sơ P011 đang mở để theo dõi capacity rollout hậu P012.
-7. `../../archive/project-001/` đến `../../archive/project-013/`, trừ P011 đang mở — quyết định và bằng chứng lịch sử. Archive không phải runtime và không thay thế tài liệu này.
+4. [local-uploader.md](local-uploader.md) — công cụ upload một chạm, cấu trúc nguồn, ledger chống trùng và recovery.
+5. [operations.md](operations.md) — cấu hình, kiểm tra, deploy/redeploy, migration và an toàn dữ liệu.
+6. [known-gaps.md](known-gaps.md) — giới hạn đã biết; không diễn giải chúng là tính năng đã hoàn tất.
+7. `../../project-011/` — hồ sơ P011 đang mở để theo dõi capacity rollout hậu P012.
+8. `../../archive/project-001/` đến `../../archive/project-013/`, trừ P011 đang mở — quyết định và bằng chứng lịch sử. Archive không phải runtime và không thay thế tài liệu này.
 
 ## Snapshot kỹ thuật đang áp dụng
 
@@ -30,6 +31,7 @@ StudyMed Translator nhận PDF y khoa, đưa file trực tiếp từ trình duy�
 | Output ceiling | text 65,536 token; JSON audit/verify/context 16,384 token |
 | Worker config code fallback | 5 job song song, source budget 100 MiB; runtime có thể đặt 1–5 và 10–100 MiB |
 | Upload browser → R2 | concurrency 4, presigned URL, prepare/confirm idempotent |
+| Upload laptop → R2 | BAT/Node CLI, concurrency 4, ledger SHA-256 trong LocalAppData |
 | Hạ tầng production | Backend Render Ohio; MongoDB Atlas `tranmed-us-prod` Free/AWS N. Virginia `US_EAST_1`; Cloudflare R2 giữ nguyên |
 
 Các fallback trên không chứng minh cấu hình Render đang chạy. Muốn biết runtime, gọi `/api/translate/status`, `/api/translate/metrics`, `/api/readiness` và endpoint key status theo hướng dẫn trong `operations.md`; không suy đoán từ `.env` local hoặc archive.
