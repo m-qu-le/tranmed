@@ -23,7 +23,10 @@ test('job history pages follow creation order so uploaded A-Z files stay A-Z', a
         cursor: '000000000000000000000100',
     });
 
-    assert.deepEqual(calls.filter, { _id: { $gt: '000000000000000000000100' } });
+    assert.deepEqual(calls.filter, {
+        status: { $ne: 'deleted' },
+        _id: { $gt: '000000000000000000000100' },
+    });
     assert.deepEqual(calls.sort, { _id: 1 });
     assert.equal(calls.limit, 2);
     assert.deepEqual(result.items.map(item => item._id), ['000000000000000000000101']);
@@ -52,7 +55,11 @@ test('folder pages scope priority separately and keep the same cursor order', as
         cursor: '000000000000000000000200',
     });
 
-    assert.deepEqual(calls.filter, { priority: 1, _id: { $gt: '000000000000000000000200' } });
+    assert.deepEqual(calls.filter, {
+        status: { $ne: 'deleted' },
+        priority: 1,
+        _id: { $gt: '000000000000000000000200' },
+    });
     assert.deepEqual(calls.sort, { _id: 1 });
     assert.equal(calls.limit, 2);
     assert.match(calls.fields, /priority/);

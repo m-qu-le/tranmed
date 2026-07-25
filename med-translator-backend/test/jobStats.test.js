@@ -13,6 +13,7 @@ test('job stats aggregate global statuses, folders, and cloud uploads', async (c
         pipeline = value;
         return [{
             statuses: [{ _id: 'pending', count: 473 }, { _id: 'completed', count: 32 }],
+            confirmedTracked: [{ count: 99 }],
             folders: [{ _id: { name: 'Harrison', priority: false }, count: 500 }],
         }];
     };
@@ -32,7 +33,8 @@ test('job stats aggregate global statuses, folders, and cloud uploads', async (c
     const stats = await new QueueManager().getJobStats();
 
     assert.deepEqual(stats, {
-        pending: 473, processing: 0, completed: 32, failed: 0,
+        uploading: 0, pending: 473, processing: 0, completed: 32, failed: 0,
+        cancelled: 0, deleted: 0, untrackedFiles: 1,
         folders: [{ name: 'Harrison', priority: false, count: 500 }],
         cloud: {
             uploadingBatches: 0, uploadedBytes: 0, totalBytes: 0,
@@ -40,6 +42,7 @@ test('job stats aggregate global statuses, folders, and cloud uploads', async (c
         },
     });
     assert.ok(pipeline[0].$facet.statuses);
+    assert.ok(pipeline[0].$facet.confirmedTracked);
     assert.ok(pipeline[0].$facet.folders);
 });
 

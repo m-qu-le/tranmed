@@ -54,6 +54,27 @@ test('source deletion timestamp cannot be recorded before deletion succeeds', as
     await assert.rejects(job.validate(), /sourceDeletedAt chỉ được đặt/);
 });
 
+test('deleted jobs retain an auditable terminal tombstone without requiring source bytes', async () => {
+    const deletedAt = new Date('2026-07-25T07:00:00.000Z');
+    const job = new Job({
+        jobId: 'deleted-completed-job',
+        originalName: '18 Blood.pdf',
+        status: 'deleted',
+        storageProvider: 'r2',
+        storageKey: 'incoming/batch-1/deleted-completed-job.pdf',
+        sourceState: 'deleted',
+        sourceDeletedAt: deletedAt,
+        uploadBatchId: 'batch-1',
+        completedAt: new Date('2026-07-25T06:00:00.000Z'),
+        deletionRequestedAt: deletedAt,
+        deletedAt,
+        statusBeforeDeletion: 'completed',
+        translatedBeforeDeletion: true,
+        deletedChunkCount: 4,
+    });
+    await job.validate();
+});
+
 test('storage keys are independent from original filenames', () => {
     const first = createIncomingStorageKey('batch-1', 'job-1');
     const second = createIncomingStorageKey('batch-1', 'job-2');

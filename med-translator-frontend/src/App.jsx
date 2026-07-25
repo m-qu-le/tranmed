@@ -64,6 +64,11 @@ const persistHiddenUploadBatchIds = hiddenIds => {
 const normalizeJobStats = value => {
   const keys = ['pending', 'processing', 'completed', 'failed'];
   if (!keys.every(key => Number.isSafeInteger(value?.[key]) && value[key] >= 0)) return null;
+  const auditKeys = ['uploading', 'cancelled', 'deleted', 'untrackedFiles'];
+  const audit = Object.fromEntries(auditKeys.map(key => [
+    key,
+    Number.isSafeInteger(value?.[key]) && value[key] >= 0 ? value[key] : 0,
+  ]));
   const folders = Array.isArray(value.folders)
     ? value.folders.filter(folder => typeof folder?.name === 'string'
       && Number.isSafeInteger(folder.count) && folder.count >= 0)
@@ -73,7 +78,7 @@ const normalizeJobStats = value => {
   const cloud = cloudKeys.every(key => Number.isFinite(value.cloud?.[key]) && value.cloud[key] >= 0)
     ? Object.fromEntries(cloudKeys.map(key => [key, value.cloud[key]]))
     : null;
-  return { ...Object.fromEntries(keys.map(key => [key, value[key]])), folders, cloud };
+  return { ...Object.fromEntries(keys.map(key => [key, value[key]])), ...audit, folders, cloud };
 };
 
 const folderNameForJob = job => job.priority === 1 ? PRIORITY_FOLDER_NAME : (job.folderName || 'Mặc định');
@@ -1080,13 +1085,17 @@ function App() {
           </article>
           <article>
             <strong>{dashboard.safeFiles}</strong>
-            <span>File đã an toàn trên Cloud</span>
-            <small>Đã xác nhận {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
+            <span>File đã xác nhận upload</span>
+            <small>Lịch sử Cloud: {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
           </article>
           <article>
             <strong>{jobStats?.completed ?? '—'}</strong>
             <span>File đã xong</span>
-            <small>Chờ {jobStats?.pending ?? '—'} · xử lý {jobStats?.processing ?? '—'} · lỗi {jobStats?.failed ?? '—'}</small>
+            <small>
+              Chờ {jobStats?.pending ?? '—'} · xử lý {jobStats?.processing ?? '—'} · lỗi {jobStats?.failed ?? '—'}
+              {jobStats?.deleted > 0 ? ` · đã xóa ${jobStats.deleted}` : ''}
+              {jobStats?.untrackedFiles > 0 ? ` · mất dấu vết ${jobStats.untrackedFiles}` : ''}
+            </small>
           </article>
         </section>
 

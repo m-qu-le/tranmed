@@ -145,7 +145,7 @@ test('mock R2 lifecycle survives duplicate prepare/confirm then downloads and de
     });
     uploadService.expireStaleUploads = async () => 0;
     const recovered = await uploadService.reconcileUploadingJobs();
-    assert.deepEqual(recovered, { scanned: 2, confirmed: 2, expired: 0 });
+    assert.deepEqual(recovered, { recovered: 0, scanned: 2, confirmed: 2, expired: 0 });
 
     const confirmed = await uploadService.confirmBatch(prepared.batchId, jobIds);
     const repeatedConfirm = await uploadService.confirmBatch(prepared.batchId, jobIds);

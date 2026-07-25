@@ -10,7 +10,7 @@ const jobSchema = new mongoose.Schema({
     filePath: { type: String, default: null },
     status: { 
         type: String, 
-        enum: ['uploading', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
+        enum: ['uploading', 'pending', 'processing', 'completed', 'failed', 'cancelled', 'deleted'],
         default: 'pending' 
     },
     storageProvider: { type: String, enum: ['local', 'r2'], default: null },
@@ -51,6 +51,15 @@ const jobSchema = new mongoose.Schema({
     leaseExpiresAt: { type: Date, default: null },
     processingStartedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
+    deletionRequestedAt: { type: Date, default: null },
+    deletedAt: { type: Date, default: null },
+    statusBeforeDeletion: {
+        type: String,
+        enum: ['uploading', 'pending', 'processing', 'completed', 'failed', 'cancelled'],
+        default: null
+    },
+    translatedBeforeDeletion: { type: Boolean, default: false },
+    deletedChunkCount: { type: Number, default: 0, min: 0 },
     schedulerSuspended: { type: Boolean, default: false },
     schedulerDeferred: { type: Boolean, default: false },
     schedulerExecutionVersion: { type: String, default: null },
@@ -75,7 +84,7 @@ const jobSchema = new mongoose.Schema({
 jobSchema.pre('validate', function validateSourceInvariant() {
     const hasLocalSource = Boolean(this.filePath);
     const hasR2Source = this.storageProvider === 'r2' && Boolean(this.storageKey);
-    if (!hasLocalSource && !hasR2Source) {
+    if (this.status !== 'deleted' && !hasLocalSource && !hasR2Source) {
         this.invalidate('filePath', 'Job phải tham chiếu file local hoặc object R2.');
     }
 
@@ -98,6 +107,14 @@ jobSchema.pre('validate', function validateSourceInvariant() {
     }
     if (this.translationMode === 'quality' && !this.translationPipelineVersion) {
         this.invalidate('translationPipelineVersion', 'Job quality bắt buộc có translationPipelineVersion.');
+    }
+    if (this.status === 'deleted') {
+        if (!this.deletedAt || !this.deletionRequestedAt || !this.statusBeforeDeletion) {
+            this.invalidate('deletedAt', 'Job deleted bắt buộc giữ dấu vết trạng thái và thời điểm xóa.');
+        }
+        if (this.translatedBeforeDeletion !== (this.statusBeforeDeletion === 'completed' || Boolean(this.completedAt))) {
+            this.invalidate('translatedBeforeDeletion', 'Dấu vết dịch trước khi xóa không khớp trạng thái hoàn tất.');
+        }
     }
 });
 

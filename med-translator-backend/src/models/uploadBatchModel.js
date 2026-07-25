@@ -1,5 +1,12 @@
 import mongoose from 'mongoose';
 
+const uploadManifestItemSchema = new mongoose.Schema({
+    jobId: { type: String, required: true },
+    clientUploadId: { type: String, required: true },
+    originalName: { type: String, required: true, maxlength: 255 },
+    sourceSize: { type: Number, min: 0, default: null },
+}, { _id: false });
+
 const uploadBatchSchema = new mongoose.Schema({
     batchId: { type: String, required: true, unique: true },
     clientBatchId: { type: String, unique: true, sparse: true },
@@ -17,6 +24,8 @@ const uploadBatchSchema = new mongoose.Schema({
     failedFiles: { type: Number, default: 0, min: 0 },
     skippedFiles: { type: Number, default: 0, min: 0 },
     readyAt: { type: Date, default: null },
+    // Manifest bất biến là nguồn sự thật để có thể tái tạo một Job bị mất.
+    items: { type: [uploadManifestItemSchema], default: [] },
 }, {
     timestamps: true,
     toJSON: { virtuals: true },
@@ -36,6 +45,15 @@ uploadBatchSchema.pre('validate', function validateBatchCounts() {
     }
     if (this.status === 'ready' && this.confirmedFiles + this.skippedFiles !== this.totalFiles) {
         this.invalidate('status', 'Batch ready phải xác nhận hoặc bỏ qua đủ toàn bộ file.');
+    }
+    if (this.items.length > 0) {
+        if (this.items.length !== this.totalFiles) {
+            this.invalidate('items', 'Manifest item phải khớp totalFiles.');
+        }
+        if (new Set(this.items.map(item => item.jobId)).size !== this.items.length
+            || new Set(this.items.map(item => item.clientUploadId)).size !== this.items.length) {
+            this.invalidate('items', 'Manifest item không được trùng jobId/clientUploadId.');
+        }
     }
 });
 

@@ -93,6 +93,11 @@ test('prepare creates 200 stable R2 jobs and repeated prepare reissues URLs with
     assert.equal(first.items.length, 200);
     assert.deepEqual(first.items.map(item => item.jobId), second.items.map(item => item.jobId));
     assert.equal(new Set(jobs.map(job => job.storageKey)).size, 200);
+    assert.equal(batch.items.length, 200);
+    assert.deepEqual(
+        batch.items.map(item => item.jobId),
+        jobs.map(job => job.jobId),
+    );
     assert.equal(jobs.every(job => /^incoming\/[A-Za-z0-9-]+\/[A-Za-z0-9-]+\.pdf$/.test(job.storageKey)), true);
     assert.equal(jobs.some(job => job.storageKey.includes('Tên trùng')), false);
     assert.equal(insertCalls, 1);
@@ -239,20 +244,80 @@ test('abandon marks only unconfirmed items skipped after R2 deletion and makes t
     assert.equal(result.canCloseClient, true);
 });
 
-test('stale uploading jobs expire through the same abandon cleanup path', async () => {
+test('stale uploading jobs become visible terminal failures instead of disappearing', async () => {
     const staleJobs = [
-        { jobId: 'stale-1', uploadBatchId: 'batch-stale' },
-        { jobId: 'stale-2', uploadBatchId: 'batch-stale' },
+        { jobId: 'stale-1', uploadBatchId: 'batch-stale', storageKey: 'incoming/batch-stale/stale-1.pdf', status: 'uploading' },
+        { jobId: 'stale-2', uploadBatchId: 'batch-stale', storageKey: 'incoming/batch-stale/stale-2.pdf', status: 'uploading' },
     ];
+    const deleted = [];
     const service = new UploadBatchService({
-        Job: { find: () => query(staleJobs) },
-        UploadBatch: {},
-        r2: {},
+        Job: {
+            find: () => query(staleJobs),
+            async updateOne(filter, update) {
+                const job = staleJobs.find(row => row.jobId === filter.jobId);
+                Object.assign(job, update.$set);
+                return { modifiedCount: 1 };
+            },
+        },
+        UploadBatch: { findOne: () => query({ batchId: 'batch-stale' }) },
+        r2: { async deleteObject(key) { deleted.push(key); } },
         config,
     });
-    const calls = [];
-    service.abandonItems = async (batchId, jobIds) => { calls.push({ batchId, jobIds }); };
+    service.refreshBatch = async () => {};
     const expired = await service.expireStaleUploads();
     assert.equal(expired, 2);
-    assert.deepEqual(calls, [{ batchId: 'batch-stale', jobIds: ['stale-1', 'stale-2'] }]);
+    assert.equal(staleJobs.every(job => job.status === 'failed' && job.errorCode === 'UPLOAD_EXPIRED'), true);
+    assert.deepEqual(deleted, [
+        'incoming/batch-stale/stale-1.pdf',
+        'incoming/batch-stale/stale-2.pdf',
+    ]);
+});
+
+test('manifest reconciliation recreates a missing job as failed when its R2 source is gone', async () => {
+    const batch = {
+        batchId: 'batch-manifest',
+        folderName: 'Sinh lý',
+        priority: 0,
+        status: 'ready',
+        readyAt: new Date('2026-07-25T01:00:00.000Z'),
+        items: [{
+            jobId: 'missing-job',
+            clientUploadId: 'missing-client',
+            originalName: '18 Blood.pdf',
+            sourceSize: 1234,
+        }],
+    };
+    let inserted = null;
+    const service = new UploadBatchService({
+        Job: {
+            async distinct() { return []; },
+            async updateOne(filter, update) {
+                inserted = update.$setOnInsert;
+                return { upsertedCount: 1 };
+            },
+        },
+        UploadBatch: { find: () => query([batch]) },
+        r2: {
+            async headObject() {
+                const error = new Error('missing');
+                error.name = 'NoSuchKey';
+                error.$metadata = { httpStatusCode: 404 };
+                throw error;
+            },
+        },
+        config: {
+            ...config,
+            translationMode: 'quality',
+            translationPipelineVersion: 'quality-v1',
+        },
+    });
+
+    const recovered = await service.reconcileManifestGaps();
+
+    assert.equal(recovered, 1);
+    assert.equal(inserted.originalName, '18 Blood.pdf');
+    assert.equal(inserted.status, 'failed');
+    assert.equal(inserted.errorCode, 'MANIFEST_JOB_MISSING');
+    assert.equal(inserted.sourceState, 'missing');
+    assert.ok(inserted.uploadConfirmedAt instanceof Date);
 });

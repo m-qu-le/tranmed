@@ -62,6 +62,7 @@ const WATCHDOG_INTERVAL_MS = 30_000;
 const WATCHDOG_IDLE_LIMIT_MS = 2 * 60_000;
 
 const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings processingStartedAt completedAt schedulerSuspended schedulerDeferred schedulerExecutionVersion';
+const VISIBLE_JOB_FILTER = Object.freeze({ status: { $ne: 'deleted' } });
 
 export function qualityDispatcherWidth(readyCount, limiterSnapshot = {}) {
     if (!Number.isSafeInteger(readyCount) || readyCount <= 0) return 0;
@@ -427,7 +428,10 @@ export class QueueManager extends EventEmitter {
     }
 
     async getJobsSummary({ limit = 100, cursor = null } = {}) {
-        const filter = cursor ? { _id: { $gt: cursor } } : {};
+        const filter = {
+            ...VISIBLE_JOB_FILTER,
+            ...(cursor ? { _id: { $gt: cursor } } : {}),
+        };
         const rows = await Job.find(filter, JOB_SUMMARY_FIELDS)
             .sort({ _id: 1 })
             .limit(limit + 1)
@@ -444,6 +448,7 @@ export class QueueManager extends EventEmitter {
     async getFolderJobsSummary({ folderName, limit = 100, cursor = null } = {}) {
         const isPriorityFolder = folderName === PRIORITY_FOLDER_NAME;
         const filter = {
+            ...VISIBLE_JOB_FILTER,
             ...(isPriorityFolder ? { priority: 1 } : { folderName, priority: { $ne: 1 } }),
             ...(cursor ? { _id: { $gt: cursor } } : {}),
         };
@@ -461,11 +466,16 @@ export class QueueManager extends EventEmitter {
             Job.aggregate([{
                 $facet: {
                     statuses: [
-                        { $match: { status: { $in: ['pending', 'processing', 'completed', 'failed'] } } },
+                        { $match: { status: { $in: ['uploading', 'pending', 'processing', 'completed', 'failed', 'cancelled', 'deleted'] } } },
                         { $group: { _id: '$status', count: { $sum: 1 } } },
                     ],
-                    folders: [{
-                        $group: {
+                    confirmedTracked: [
+                        { $match: { uploadConfirmedAt: { $ne: null } } },
+                        { $count: 'count' },
+                    ],
+                    folders: [
+                        { $match: VISIBLE_JOB_FILTER },
+                        { $group: {
                             _id: {
                                 name: {
                                     $cond: [
@@ -477,8 +487,8 @@ export class QueueManager extends EventEmitter {
                                 priority: { $eq: ['$priority', 1] },
                             },
                             count: { $sum: 1 },
-                        },
-                    }],
+                        } },
+                    ],
                 },
             }]),
             UploadBatch.aggregate([{
@@ -494,11 +504,21 @@ export class QueueManager extends EventEmitter {
             }]),
         ]);
         const snapshot = jobRows[0] || {};
-        const stats = { pending: 0, processing: 0, completed: 0, failed: 0 };
+        const stats = {
+            uploading: 0,
+            pending: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0,
+            cancelled: 0,
+            deleted: 0,
+        };
         for (const row of snapshot.statuses || []) stats[row._id] = row.count;
         const cloud = cloudRows[0] || {};
+        const confirmedTrackedFiles = snapshot.confirmedTracked?.[0]?.count || 0;
         return {
             ...stats,
+            untrackedFiles: Math.max(0, (cloud.confirmedFiles || 0) - confirmedTrackedFiles),
             folders: (snapshot.folders || []).map(row => ({
                 name: typeof row._id?.name === 'string' && row._id.name.trim() ? row._id.name : 'Mặc định',
                 priority: row._id?.priority === true,
@@ -788,7 +808,7 @@ export class QueueManager extends EventEmitter {
                 cancelRequested: { $ne: true }
             });
             if (!isStillActive) {
-                throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+                await this.throwInactiveJob(job);
             }
 
             await TranslationChunk.updateOne(
@@ -808,7 +828,7 @@ export class QueueManager extends EventEmitter {
                 { $set: { completedChunks } }
             );
             if (progressUpdate.matchedCount === 0) {
-                throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+                await this.throwInactiveJob(job);
             }
             this.emitJobUpdate(job.jobId, 'processing', {
                 completedChunks,
@@ -824,6 +844,21 @@ export class QueueManager extends EventEmitter {
         }
     }
 
+    async throwInactiveJob(job) {
+        const cancellationRequested = Boolean(await Job.exists({
+            jobId: job.jobId,
+            cancelRequested: true,
+        }));
+        if (cancellationRequested) {
+            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được người dùng hủy.');
+        }
+        throw new ProcessingError(
+            ErrorCodes.OWNERSHIP_LOST,
+            'Worker không còn sở hữu lease của tác vụ.',
+            { publicMessage: 'Worker cũ đã dừng; tác vụ hiện tại tiếp tục ở worker mới.' }
+        );
+    }
+
     async assertJobActive(job) {
         const active = await Job.exists({
             jobId: job.jobId,
@@ -831,7 +866,7 @@ export class QueueManager extends EventEmitter {
             processingToken: job.processingToken,
             cancelRequested: { $ne: true }
         });
-        if (!active) throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
+        if (!active) await this.throwInactiveJob(job);
     }
 
     async hasPriorityDemand(excludingJobId = null) {
@@ -1328,7 +1363,7 @@ export class QueueManager extends EventEmitter {
         );
 
         if (updateResult.matchedCount === 0) {
-            throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã bị hủy trước khi lưu kết quả.');
+            await this.throwInactiveJob(job);
         }
 
         await this.safeUnlink(job.filePath);
@@ -1416,14 +1451,17 @@ export class QueueManager extends EventEmitter {
             }
             return;
         }
-        const cancellationRequested = error.code === ErrorCodes.CANCELLED || Boolean(await Job.exists({
+        const cancellationRequested = Boolean(await Job.exists({
             jobId: job.jobId,
-            processingToken: job.processingToken,
-            cancelRequested: true
+            cancelRequested: true,
         }));
         if (cancellationRequested) {
             await this.cleanupJob(job.jobId, job);
             this.emitJobUpdate(job.jobId, 'cancelled', { error: null, errorCode: ErrorCodes.CANCELLED });
+            return;
+        }
+        if ([ErrorCodes.CANCELLED, ErrorCodes.OWNERSHIP_LOST].includes(error.code)) {
+            operationalMetrics.increment('worker.ownership_lost');
             return;
         }
 
@@ -1616,18 +1654,61 @@ export class QueueManager extends EventEmitter {
             ? { jobId, filePath: knownJob }
             : knownJob || await Job.findOne({ jobId }).lean();
         if (!job) return { deleted: false, cleanupPending: false };
+        if (job.status === 'deleted') return { deleted: true, cleanupPending: false };
+        const deletionRequestedAt = job.deletionRequestedAt || new Date();
+        const statusBeforeDeletion = job.statusBeforeDeletion
+            || (job.status === 'cancelled' ? 'cancelled' : job.status);
+        const translatedBeforeDeletion = statusBeforeDeletion === 'completed' || Boolean(job.completedAt);
+        await Job.updateOne(
+            { jobId, status: { $ne: 'deleted' } },
+            {
+                $set: {
+                    deletionRequestedAt,
+                    statusBeforeDeletion,
+                    translatedBeforeDeletion,
+                },
+            }
+        );
         const sourceCleanup = await this.cleanupSourceSafely(job, 'cancel_or_delete');
         if (!sourceCleanup.cleaned) {
-            await Job.updateOne({ jobId }, { $set: { status: 'cancelled', cancelRequested: true } });
+            await Job.updateOne(
+                { jobId, status: { $ne: 'deleted' } },
+                {
+                    $set: {
+                        status: 'cancelled',
+                        cancelRequested: true,
+                        deletionRequestedAt,
+                        statusBeforeDeletion,
+                        translatedBeforeDeletion,
+                    },
+                }
+            );
             return { deleted: false, cleanupPending: true };
         }
         await this.safeUnlink(job.filePath);
+        const deletedChunkCount = await TranslationChunk.countDocuments({ jobId });
         await TranslationChunk.deleteMany({ jobId });
-        await Job.deleteOne({ jobId });
-        if (job.uploadBatchId) {
-            const batchStillHasJobs = await Job.exists({ uploadBatchId: job.uploadBatchId });
-            if (!batchStillHasJobs) await UploadBatch.deleteOne({ batchId: job.uploadBatchId });
-        }
+        const deletedAt = new Date();
+        await Job.updateOne(
+            { jobId, status: { $ne: 'deleted' } },
+            {
+                $set: {
+                    status: 'deleted',
+                    cancelRequested: true,
+                    deletionRequestedAt,
+                    deletedAt,
+                    statusBeforeDeletion,
+                    translatedBeforeDeletion,
+                    deletedChunkCount,
+                    filePath: null,
+                    sourceState: 'deleted',
+                    sourceDeletedAt: sourceCleanup.deletedAt || job.sourceDeletedAt || deletedAt,
+                    processingToken: null,
+                    leaseExpiresAt: null,
+                    nextRetryAt: null,
+                },
+            }
+        );
         return { deleted: true, cleanupPending: false };
     }
 
@@ -1639,12 +1720,29 @@ export class QueueManager extends EventEmitter {
         for (const { job, result } of rows) {
             if (result.cleaned && job.status === 'cancelled') {
                 await this.safeUnlink(job.filePath);
+                const deletedChunkCount = await TranslationChunk.countDocuments({ jobId: job.jobId });
                 await TranslationChunk.deleteMany({ jobId: job.jobId });
-                await Job.deleteOne({ jobId: job.jobId, status: 'cancelled' });
-                if (job.uploadBatchId) {
-                    const batchStillHasJobs = await Job.exists({ uploadBatchId: job.uploadBatchId });
-                    if (!batchStillHasJobs) await UploadBatch.deleteOne({ batchId: job.uploadBatchId });
-                }
+                const deletedAt = new Date();
+                const statusBeforeDeletion = job.statusBeforeDeletion || 'cancelled';
+                await Job.updateOne(
+                    { jobId: job.jobId, status: 'cancelled' },
+                    {
+                        $set: {
+                            status: 'deleted',
+                            deletionRequestedAt: job.deletionRequestedAt || deletedAt,
+                            deletedAt,
+                            statusBeforeDeletion,
+                            translatedBeforeDeletion: statusBeforeDeletion === 'completed' || Boolean(job.completedAt),
+                            deletedChunkCount,
+                            filePath: null,
+                            sourceState: 'deleted',
+                            sourceDeletedAt: result.deletedAt || job.sourceDeletedAt || deletedAt,
+                            processingToken: null,
+                            leaseExpiresAt: null,
+                            nextRetryAt: null,
+                        },
+                    }
+                );
             }
         }
         return rows.length + expiredRows.length;
@@ -1796,15 +1894,20 @@ export class QueueManager extends EventEmitter {
     async cancelAndDeleteJob(jobId) {
         const job = await Job.findOne({ jobId }).lean();
         if (!job) return { found: false, pending: false };
+        if (job.status === 'deleted') return { found: true, pending: false };
 
         if (job.status === 'pending') {
+            const deletionRequestedAt = new Date();
             const cancelledJob = await Job.findOneAndUpdate(
                 { jobId, status: 'pending' },
                 {
                     $set: {
                         status: 'cancelled',
                         cancelRequested: true,
-                        nextRetryAt: null
+                        nextRetryAt: null,
+                        deletionRequestedAt,
+                        statusBeforeDeletion: 'pending',
+                        translatedBeforeDeletion: false,
                     }
                 },
                 { returnDocument: 'after' }
@@ -1820,15 +1923,37 @@ export class QueueManager extends EventEmitter {
         }
 
         if (job.status === 'processing') {
+            const deletionRequestedAt = new Date();
             await Job.updateOne(
                 { jobId },
-                { $set: { cancelRequested: true } }
+                {
+                    $set: {
+                        cancelRequested: true,
+                        deletionRequestedAt,
+                        statusBeforeDeletion: 'processing',
+                        translatedBeforeDeletion: false,
+                    },
+                }
             );
             this.activeJobs.get(jobId)?.abortController.abort();
             return { found: true, pending: true };
         }
 
-        const cleanup = await this.cleanupJob(jobId, job.storageProvider === 'r2' ? job : job.filePath);
+        const deletionRequestedAt = new Date();
+        const preparedJob = await Job.findOneAndUpdate(
+            { jobId, status: job.status },
+            {
+                $set: {
+                    cancelRequested: true,
+                    deletionRequestedAt,
+                    statusBeforeDeletion: job.status,
+                    translatedBeforeDeletion: job.status === 'completed' || Boolean(job.completedAt),
+                },
+            },
+            { returnDocument: 'after' }
+        ).lean();
+        if (!preparedJob) return this.cancelAndDeleteJob(jobId);
+        const cleanup = await this.cleanupJob(jobId, preparedJob);
         return { found: true, pending: cleanup?.cleanupPending || false };
     }
 

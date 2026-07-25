@@ -4,6 +4,7 @@ import { runBoundedTasks } from '../utils/runBoundedTasks.js';
 import { redactError } from '../utils/redactSecrets.js';
 import { appEvents } from './appEvents.js';
 import { operationalMetrics } from './operationalMetrics.js';
+import { ErrorCodes } from '../utils/processingError.js';
 
 export const PRIORITY_FOLDER_NAME = 'Ưu tiên';
 
@@ -154,6 +155,12 @@ export class UploadBatchService {
                 priority: manifest.priority ? 1 : 0,
                 totalFiles: rows.length,
                 totalBytes: manifest.totalBytes,
+                items: rows.map(row => ({
+                    jobId: row.jobId,
+                    clientUploadId: row.clientUploadId,
+                    originalName: row.originalName,
+                    sourceSize: row.sourceSize,
+                })),
             });
             await this.Job.insertMany(rows, { ordered: true });
         } catch (error) {
@@ -211,7 +218,11 @@ export class UploadBatchService {
     async refreshBatch(batch) {
         const [confirmedFiles, failedFiles, skippedFiles, bytes] = await Promise.all([
             this.Job.countDocuments({ uploadBatchId: batch.batchId, uploadConfirmedAt: { $ne: null } }),
-            this.Job.countDocuments({ uploadBatchId: batch.batchId, status: 'failed' }),
+            this.Job.countDocuments({
+                uploadBatchId: batch.batchId,
+                status: 'failed',
+                uploadConfirmedAt: null,
+            }),
             this.Job.countDocuments({ uploadBatchId: batch.batchId, status: 'cancelled' }),
             this.Job.aggregate([
                 { $match: { uploadBatchId: batch.batchId, uploadConfirmedAt: { $ne: null } } },
@@ -327,6 +338,8 @@ export class UploadBatchService {
                         cancelRequested: true,
                         sourceState: 'deleted',
                         sourceDeletedAt: new Date(),
+                        terminalAt: new Date(),
+                        failureAdvice: 'File upload đã được người dùng chủ động bỏ khỏi batch.',
                     },
                 }
             );
@@ -335,6 +348,7 @@ export class UploadBatchService {
     }
 
     async reconcileUploadingJobs(limit = 50) {
+        const recovered = await this.reconcileManifestGaps(limit);
         const jobs = await this.Job.find({ status: 'uploading', sourceState: 'prepared' })
             .sort({ createdAt: 1 }).limit(limit).lean();
         const affectedBatches = new Set();
@@ -358,7 +372,100 @@ export class UploadBatchService {
         const expired = await this.expireStaleUploads(limit);
         operationalMetrics.increment('upload.reconcile.scanned', jobs.length);
         operationalMetrics.increment('upload.reconcile.confirmed', confirmed);
-        return { scanned: jobs.length, confirmed, expired };
+        return { recovered, scanned: jobs.length, confirmed, expired };
+    }
+
+    async reconcileManifestGaps(limit = 50) {
+        if (typeof this.UploadBatch.find !== 'function' || typeof this.Job.distinct !== 'function') return 0;
+        const batches = await this.UploadBatch.find({ 'items.0': { $exists: true } })
+            .sort({ createdAt: 1 })
+            .limit(limit)
+            .lean();
+        let recovered = 0;
+        for (const batch of batches) {
+            const existingIds = new Set(await this.Job.distinct('jobId', { uploadBatchId: batch.batchId }));
+            for (const item of batch.items || []) {
+                if (existingIds.has(item.jobId)) continue;
+                const storageKey = createIncomingStorageKey(batch.batchId, item.jobId);
+                let sourceState = 'prepared';
+                let status = 'uploading';
+                let sourceEtag = null;
+                let uploadConfirmedAt = null;
+                let error = null;
+                let errorCode = null;
+                let failureCategory = null;
+                let terminalAt = null;
+                let failureAdvice = null;
+                try {
+                    const metadata = await this.r2.headObject(storageKey);
+                    if (Number.isSafeInteger(item.sourceSize) && metadata.contentLength !== item.sourceSize) {
+                        throw new UploadBatchError('SOURCE_SIZE_MISMATCH', `Dung lượng object không khớp cho job ${item.jobId}.`, 409);
+                    }
+                    sourceState = 'ready';
+                    status = 'pending';
+                    sourceEtag = metadata.etag || null;
+                    uploadConfirmedAt = batch.readyAt || new Date();
+                } catch (headError) {
+                    const missing = [404, 'NotFound', 'NoSuchKey'].includes(headError?.$metadata?.httpStatusCode)
+                        || ['NotFound', 'NoSuchKey'].includes(headError?.name);
+                    if (!missing && !(headError instanceof UploadBatchError)) {
+                        console.error(`[MANIFEST RECONCILE] Chưa đọc được source cho ${item.jobId}:`, redactError(headError));
+                        continue;
+                    }
+                    sourceState = 'missing';
+                    status = 'failed';
+                    uploadConfirmedAt = batch.status === 'ready' ? (batch.readyAt || batch.updatedAt || new Date()) : null;
+                    error = 'Job bị mất khỏi MongoDB và source R2 không còn; cần tải lại PDF gốc.';
+                    errorCode = ErrorCodes.MANIFEST_JOB_MISSING;
+                    failureCategory = 'terminal';
+                    terminalAt = new Date();
+                    failureAdvice = 'Tải lại đúng PDF gốc; manifest đã giữ tên file để không mất dấu vết.';
+                }
+                try {
+                    const result = await this.Job.updateOne(
+                        { jobId: item.jobId },
+                        {
+                            $setOnInsert: {
+                                jobId: item.jobId,
+                                clientUploadId: item.clientUploadId,
+                                originalName: item.originalName,
+                                folderName: batch.folderName,
+                                priority: batch.priority || 0,
+                                filePath: null,
+                                status,
+                                storageProvider: 'r2',
+                                storageKey,
+                                sourceSize: item.sourceSize,
+                                sourceState,
+                                sourceEtag,
+                                uploadBatchId: batch.batchId,
+                                uploadConfirmedAt,
+                                maxAttempts: this.config.maxJobAttempts,
+                                nextRetryAt: status === 'pending' ? new Date() : null,
+                                error,
+                                errorCode,
+                                failureCategory,
+                                terminalAt,
+                                failureAdvice,
+                                ...(this.config.translationMode ? {
+                                    translationMode: this.config.translationMode,
+                                    translationPipelineVersion: this.config.translationPipelineVersion,
+                                } : {}),
+                            },
+                        },
+                        { upsert: true }
+                    );
+                    if (result.upsertedCount > 0) {
+                        recovered += 1;
+                        existingIds.add(item.jobId);
+                    }
+                } catch (errorDuringInsert) {
+                    if (errorDuringInsert?.code !== 11000) throw errorDuringInsert;
+                }
+            }
+        }
+        operationalMetrics.increment('upload.manifest_jobs_recovered', recovered);
+        return recovered;
     }
 
     async expireStaleUploads(limit = 50, maxAgeMs = 60 * 60 * 1000) {
@@ -367,19 +474,38 @@ export class UploadBatchService {
             sourceState: 'prepared',
             createdAt: { $lte: new Date(Date.now() - maxAgeMs) },
         }).sort({ createdAt: 1 }).limit(limit).lean();
-        const byBatch = new Map();
-        for (const job of staleJobs) {
-            if (!byBatch.has(job.uploadBatchId)) byBatch.set(job.uploadBatchId, []);
-            byBatch.get(job.uploadBatchId).push(job.jobId);
-        }
         let expired = 0;
-        for (const [batchId, jobIds] of byBatch) {
+        const affectedBatches = new Set();
+        for (const job of staleJobs) {
             try {
-                await this.abandonItems(batchId, jobIds);
-                expired += jobIds.length;
+                await this.r2.deleteObject(job.storageKey);
+                const terminalAt = new Date();
+                const update = await this.Job.updateOne(
+                    { jobId: job.jobId, status: 'uploading' },
+                    {
+                        $set: {
+                            status: 'failed',
+                            sourceState: 'deleted',
+                            sourceDeletedAt: terminalAt,
+                            error: 'Upload không được xác nhận trong thời hạn cho phép.',
+                            errorCode: ErrorCodes.UPLOAD_EXPIRED,
+                            failureCategory: 'terminal',
+                            terminalAt,
+                            failureAdvice: 'Chọn lại PDF này để tải lên Cloud.',
+                        },
+                    }
+                );
+                if (update.modifiedCount > 0) {
+                    expired += 1;
+                    affectedBatches.add(job.uploadBatchId);
+                }
             } catch (error) {
-                console.error(`[UPLOAD EXPIRE] Batch ${batchId} chưa dọn được:`, redactError(error));
+                console.error(`[UPLOAD EXPIRE] Job ${job.jobId} chưa dọn được:`, redactError(error));
             }
+        }
+        for (const batchId of affectedBatches) {
+            const batch = await this.UploadBatch.findOne({ batchId }).lean();
+            if (batch) await this.refreshBatch(batch);
         }
         return expired;
     }

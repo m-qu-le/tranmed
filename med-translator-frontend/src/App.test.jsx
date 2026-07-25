@@ -214,6 +214,7 @@ describe('App Cloud Uploader', () => {
       if (url.endsWith('/upload-batches')) return Promise.resolve({ data: { items: [] } })
       if (url.endsWith('/jobs/stats')) return Promise.resolve({ data: {
         pending: 473, processing: 1, completed: 32, failed: 0,
+        deleted: 1, untrackedFiles: 1,
         folders: [{ name: 'Mới', count: 500 }],
         cloud: {
           uploadingBatches: 0, uploadedBytes: 0, totalBytes: 0,
@@ -233,9 +234,10 @@ describe('App Cloud Uploader', () => {
     const dashboard = screen.getByRole('region', { name: 'Tổng quan tiến độ' })
     expect(await within(dashboard).findByText('32')).toBeInTheDocument()
     expect(within(dashboard).getByText('File đã xong')).toBeInTheDocument()
-    expect(within(dashboard).getByText('Chờ 473 · xử lý 1 · lỗi 0')).toBeInTheDocument()
+    expect(within(dashboard).getByText('Chờ 473 · xử lý 1 · lỗi 0 · đã xóa 1 · mất dấu vết 1')).toBeInTheDocument()
     expect(within(dashboard).getByText('100')).toBeInTheDocument()
-    expect(within(dashboard).getByText('Đã xác nhận 100/100 file')).toBeInTheDocument()
+    expect(within(dashboard).getByText('File đã xác nhận upload')).toBeInTheDocument()
+    expect(within(dashboard).getByText('Lịch sử Cloud: 100/100 file')).toBeInTheDocument()
     expect(screen.getByText(/📁 Mới \(500 files\)/)).toBeInTheDocument()
 
     await openFolder('Mới')
@@ -413,7 +415,8 @@ describe('App Cloud Uploader', () => {
 
     await waitFor(() => expect(uploadBatchToCloud).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/Đã lưu an toàn trên Cloud — có thể tắt máy/i)).toBeInTheDocument()
-    expect(screen.getAllByText(/xác nhận 200\/200/i)).toHaveLength(2)
+    expect(screen.getByText(/xác nhận 200\/200/i)).toBeInTheDocument()
+    expect(screen.getByText('Lịch sử Cloud: 200/200 file')).toBeInTheDocument()
   })
 
   it('uploads files dropped into the priority queue immediately and pins their group first', async () => {
