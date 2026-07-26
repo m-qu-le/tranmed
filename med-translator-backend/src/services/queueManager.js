@@ -32,6 +32,7 @@ import {
     sourceCleanupService as runtimeSourceCleanupService,
     sourceService as runtimeSourceService
 } from './runtimeServices.js';
+import { jobDeletionService as runtimeJobDeletionService } from './jobDeletionService.js';
 import {
     ErrorCodes,
     ProcessingError,
@@ -100,6 +101,7 @@ export class QueueManager extends EventEmitter {
     constructor({
         sourceService = runtimeSourceService,
         sourceCleanupService = runtimeSourceCleanupService,
+        jobDeletionService = runtimeJobDeletionService,
         concurrency = TRANSLATION_WORKER_CONCURRENCY,
     } = {}) {
         super();
@@ -118,6 +120,7 @@ export class QueueManager extends EventEmitter {
         this.retryTimer = null;
         this.sourceService = sourceService;
         this.sourceCleanupService = sourceCleanupService;
+        this.jobDeletionService = jobDeletionService;
         this.cleanupTimer = null;
         this.priorityDemandCache = { checkedAt: 0, value: false };
         this.priorityDemandPromise = null;
@@ -146,7 +149,7 @@ export class QueueManager extends EventEmitter {
                     { leaseExpiresAt: null }
                 ]
             },
-            'jobId filePath storageProvider storageKey sourceState sourceCleanupState sourceCleanupAttempts'
+            'jobId filePath status completedAt deletionRequestedAt statusBeforeDeletion uploadBatchId storageProvider storageKey sourceState sourceDeletedAt sourceCleanupState sourceCleanupAttempts'
         ).lean();
         for (const job of cancelledJobs) {
             await this.cleanupJob(job.jobId, job);
@@ -178,6 +181,10 @@ export class QueueManager extends EventEmitter {
         }
         if (cancelledJobs.length > 0) {
             console.log(`🧹 [QUEUE] Đã dọn ${cancelledJobs.length} job hủy dở từ worker cũ.`);
+        }
+        const purgedHistory = await this.jobDeletionService.purgeDeletedHistory();
+        if (purgedHistory > 0) {
+            console.log(`🧹 [QUEUE] Đã xóa vĩnh viễn ${purgedHistory} bản ghi lịch sử đã dọn.`);
         }
 
         // Hydrate quota counters and the persisted group cursor before the
@@ -1654,10 +1661,13 @@ export class QueueManager extends EventEmitter {
             ? { jobId, filePath: knownJob }
             : knownJob || await Job.findOne({ jobId }).lean();
         if (!job) return { deleted: false, cleanupPending: false };
-        if (job.status === 'deleted') return { deleted: true, cleanupPending: false };
+        if (job.status === 'deleted') {
+            await this.jobDeletionService.purgeTombstone(job);
+            return { deleted: true, cleanupPending: false };
+        }
         const deletionRequestedAt = job.deletionRequestedAt || new Date();
         const statusBeforeDeletion = job.statusBeforeDeletion
-            || (job.status === 'cancelled' ? 'cancelled' : job.status);
+            || (job.status === 'cancelled' ? 'cancelled' : (job.status || 'cancelled'));
         const translatedBeforeDeletion = statusBeforeDeletion === 'completed' || Boolean(job.completedAt);
         await Job.updateOne(
             { jobId, status: { $ne: 'deleted' } },
@@ -1686,29 +1696,15 @@ export class QueueManager extends EventEmitter {
             return { deleted: false, cleanupPending: true };
         }
         await this.safeUnlink(job.filePath);
-        const deletedChunkCount = await TranslationChunk.countDocuments({ jobId });
-        await TranslationChunk.deleteMany({ jobId });
-        const deletedAt = new Date();
-        await Job.updateOne(
-            { jobId, status: { $ne: 'deleted' } },
-            {
-                $set: {
-                    status: 'deleted',
-                    cancelRequested: true,
-                    deletionRequestedAt,
-                    deletedAt,
-                    statusBeforeDeletion,
-                    translatedBeforeDeletion,
-                    deletedChunkCount,
-                    filePath: null,
-                    sourceState: 'deleted',
-                    sourceDeletedAt: sourceCleanup.deletedAt || job.sourceDeletedAt || deletedAt,
-                    processingToken: null,
-                    leaseExpiresAt: null,
-                    nextRetryAt: null,
-                },
-            }
-        );
+        await this.jobDeletionService.finalizeDeletion({
+            ...job,
+            deletionRequestedAt,
+            statusBeforeDeletion,
+            translatedBeforeDeletion,
+        }, {
+            deletionRequestedAt,
+            sourceDeletedAt: sourceCleanup.deletedAt || job.sourceDeletedAt || new Date(),
+        });
         return { deleted: true, cleanupPending: false };
     }
 
@@ -1720,29 +1716,10 @@ export class QueueManager extends EventEmitter {
         for (const { job, result } of rows) {
             if (result.cleaned && job.status === 'cancelled') {
                 await this.safeUnlink(job.filePath);
-                const deletedChunkCount = await TranslationChunk.countDocuments({ jobId: job.jobId });
-                await TranslationChunk.deleteMany({ jobId: job.jobId });
-                const deletedAt = new Date();
-                const statusBeforeDeletion = job.statusBeforeDeletion || 'cancelled';
-                await Job.updateOne(
-                    { jobId: job.jobId, status: 'cancelled' },
-                    {
-                        $set: {
-                            status: 'deleted',
-                            deletionRequestedAt: job.deletionRequestedAt || deletedAt,
-                            deletedAt,
-                            statusBeforeDeletion,
-                            translatedBeforeDeletion: statusBeforeDeletion === 'completed' || Boolean(job.completedAt),
-                            deletedChunkCount,
-                            filePath: null,
-                            sourceState: 'deleted',
-                            sourceDeletedAt: result.deletedAt || job.sourceDeletedAt || deletedAt,
-                            processingToken: null,
-                            leaseExpiresAt: null,
-                            nextRetryAt: null,
-                        },
-                    }
-                );
+                await this.jobDeletionService.finalizeDeletion(job, {
+                    deletionRequestedAt: job.deletionRequestedAt || new Date(),
+                    sourceDeletedAt: result.deletedAt || job.sourceDeletedAt || new Date(),
+                });
             }
         }
         return rows.length + expiredRows.length;
@@ -1894,7 +1871,10 @@ export class QueueManager extends EventEmitter {
     async cancelAndDeleteJob(jobId) {
         const job = await Job.findOne({ jobId }).lean();
         if (!job) return { found: false, pending: false };
-        if (job.status === 'deleted') return { found: true, pending: false };
+        if (job.status === 'deleted') {
+            await this.jobDeletionService.purgeTombstone(job);
+            return { found: true, pending: false };
+        }
 
         if (job.status === 'pending') {
             const deletionRequestedAt = new Date();
@@ -1915,10 +1895,7 @@ export class QueueManager extends EventEmitter {
             // Worker có thể claim đúng giữa hai query; đánh giá lại theo trạng thái mới.
             if (!cancelledJob) return this.cancelAndDeleteJob(jobId);
 
-            const cleanup = await this.cleanupJob(
-                jobId,
-                cancelledJob.storageProvider === 'r2' ? cancelledJob : cancelledJob.filePath
-            );
+            const cleanup = await this.cleanupJob(jobId, cancelledJob);
             return { found: true, pending: cleanup?.cleanupPending || false };
         }
 

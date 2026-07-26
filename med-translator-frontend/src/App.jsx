@@ -459,6 +459,10 @@ function App() {
         ));
       }
       else if (data.type === 'batchStatus') {
+        if (data.data?.deleted) {
+          setLocalQueue(previous => previous.filter(task => task.batchId !== data.data.batchId));
+          return;
+        }
         setLocalQueue(previous => previous.map(task => {
           if (task.batchId !== data.data?.batchId) return task;
           const confirmedBytes = data.data.confirmedBytes ?? task.uploadedBytes;

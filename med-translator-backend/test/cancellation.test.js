@@ -135,6 +135,7 @@ test('cancelling a pending job transitions it atomically before cleanup', async 
             filePath: 'pending.pdf',
             status: 'cancelled',
             statusBeforeDeletion: 'pending',
+            translatedBeforeDeletion: false,
             deletionRequestedAt: update.$set.deletionRequestedAt,
         };
     };
@@ -145,64 +146,68 @@ test('cancelling a pending job transitions it atomically before cleanup', async 
 
     const queue = new QueueManager();
     let cleaned = null;
-    queue.cleanupJob = async (jobId, filePath) => {
-        cleaned = { jobId, filePath };
+    queue.cleanupJob = async (jobId, job) => {
+        cleaned = { jobId, job };
     };
 
     const result = await queue.cancelAndDeleteJob('pending-job');
 
     assert.deepEqual(claimFilter, { jobId: 'pending-job', status: 'pending' });
-    assert.deepEqual(cleaned, { jobId: 'pending-job', filePath: 'pending.pdf' });
+    assert.equal(cleaned.jobId, 'pending-job');
+    assert.equal(cleaned.job.filePath, 'pending.pdf');
+    assert.equal(cleaned.job.status, 'cancelled');
+    assert.equal(cleaned.job.statusBeforeDeletion, 'pending');
+    assert.equal(cleaned.job.translatedBeforeDeletion, false);
+    assert.ok(cleaned.job.deletionRequestedAt instanceof Date);
     assert.deepEqual(result, { found: true, pending: false });
 });
 
-test('cleanup preserves a durable tombstone proving whether translation completed before deletion', async (context) => {
+test('cleanup hard-purges history only after source deletion succeeds', async () => {
     const originalUpdateOne = Job.updateOne;
-    const originalCountDocuments = TranslationChunk.countDocuments;
-    const originalDeleteMany = TranslationChunk.deleteMany;
     const updates = [];
 
     Job.updateOne = async (filter, update) => {
         updates.push({ filter, update });
         return { matchedCount: 1 };
     };
-    TranslationChunk.countDocuments = async () => 4;
-    TranslationChunk.deleteMany = async () => ({ deletedCount: 4 });
-    context.after(() => {
+    try {
+        const completedAt = new Date('2026-07-25T06:00:00.000Z');
+        const sourceDeletedAt = new Date('2026-07-25T06:01:00.000Z');
+        let finalized = null;
+        const queue = new QueueManager({
+            sourceCleanupService: {
+                cleanupSource: async () => ({
+                    cleaned: true,
+                    alreadyDeleted: true,
+                    deletedAt: sourceDeletedAt,
+                }),
+            },
+            jobDeletionService: {
+                async finalizeDeletion(job, options) {
+                    finalized = { job, options };
+                    return { purged: true };
+                },
+            },
+        });
+        queue.safeUnlink = async () => {};
+
+        const result = await queue.cleanupJob('completed-job', {
+            jobId: 'completed-job',
+            originalName: '18 Blood.pdf',
+            status: 'completed',
+            completedAt,
+            completedChunks: 4,
+            storageProvider: 'r2',
+            storageKey: 'incoming/batch/completed-job.pdf',
+            sourceState: 'deleted',
+        });
+
+        assert.deepEqual(result, { deleted: true, cleanupPending: false });
+        assert.equal(finalized.job.statusBeforeDeletion, 'completed');
+        assert.equal(finalized.job.translatedBeforeDeletion, true);
+        assert.ok(finalized.job.deletionRequestedAt instanceof Date);
+        assert.equal(finalized.options.sourceDeletedAt, sourceDeletedAt);
+    } finally {
         Job.updateOne = originalUpdateOne;
-        TranslationChunk.countDocuments = originalCountDocuments;
-        TranslationChunk.deleteMany = originalDeleteMany;
-    });
-
-    const completedAt = new Date('2026-07-25T06:00:00.000Z');
-    const queue = new QueueManager({
-        sourceCleanupService: {
-            cleanupSource: async () => ({
-                cleaned: true,
-                alreadyDeleted: true,
-                deletedAt: new Date('2026-07-25T06:01:00.000Z'),
-            }),
-        },
-    });
-    queue.safeUnlink = async () => {};
-
-    const result = await queue.cleanupJob('completed-job', {
-        jobId: 'completed-job',
-        originalName: '18 Blood.pdf',
-        status: 'completed',
-        completedAt,
-        completedChunks: 4,
-        storageProvider: 'r2',
-        storageKey: 'incoming/batch/completed-job.pdf',
-        sourceState: 'deleted',
-    });
-
-    assert.deepEqual(result, { deleted: true, cleanupPending: false });
-    const tombstone = updates.at(-1).update.$set;
-    assert.equal(tombstone.status, 'deleted');
-    assert.equal(tombstone.statusBeforeDeletion, 'completed');
-    assert.equal(tombstone.translatedBeforeDeletion, true);
-    assert.equal(tombstone.deletedChunkCount, 4);
-    assert.ok(tombstone.deletionRequestedAt instanceof Date);
-    assert.ok(tombstone.deletedAt instanceof Date);
+    }
 });
