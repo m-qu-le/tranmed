@@ -1,5 +1,6 @@
 import { ErrorCodes } from '../utils/processingError.js';
 import { R2_SOURCE_RETENTION_DAYS } from '../config/env.js';
+import { GEMINI_CONTENT_ERROR_CODES } from './geminiContentErrors.js';
 
 export const INFRASTRUCTURE_ERROR_CODES = new Set([
     ErrorCodes.GEMINI_RATE_LIMIT,
@@ -12,12 +13,7 @@ export const INFRASTRUCTURE_ERROR_CODES = new Set([
     ErrorCodes.UNKNOWN_PROCESSING_ERROR,
 ]);
 
-export const CONTENT_ERROR_CODES = new Set([
-    ErrorCodes.GEMINI_BLOCKED,
-    ErrorCodes.GEMINI_OUTPUT_TRUNCATED,
-    ErrorCodes.GEMINI_RESPONSE_INVALID,
-    ErrorCodes.GEMINI_SCHEMA_INVALID,
-]);
+export const CONTENT_ERROR_CODES = GEMINI_CONTENT_ERROR_CODES;
 
 export const INFRASTRUCTURE_RETRY_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const CONTENT_MAX_ATTEMPTS = 7;

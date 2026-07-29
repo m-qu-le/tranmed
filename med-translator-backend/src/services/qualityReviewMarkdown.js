@@ -29,10 +29,19 @@ const COVERAGE_LABELS = Object.freeze({
 });
 
 const TECHNICAL_REASON_LABELS = Object.freeze({
-    GEMINI_BLOCKED: 'Bước sửa tự động bị hệ thống xử lý chặn nên không tạo được bản sửa hợp lệ',
-    GEMINI_OUTPUT_TRUNCATED: 'Đầu ra của bước sửa tự động bị cắt ngắn nên không thể dùng an toàn',
-    GEMINI_RESPONSE_INVALID: 'Bước sửa tự động không trả về nội dung có thể sử dụng',
-    GEMINI_SCHEMA_INVALID: 'Đầu ra của bước sửa tự động không đúng cấu trúc bắt buộc',
+    GEMINI_BLOCKED: 'Bước xử lý tự động bị hệ thống xử lý chặn nên không tạo được nội dung hợp lệ',
+    GEMINI_OUTPUT_TRUNCATED: 'Đầu ra của bước xử lý tự động bị cắt ngắn nên không thể dùng an toàn',
+    GEMINI_RESPONSE_INVALID: 'Bước xử lý tự động không trả về nội dung có thể sử dụng',
+    GEMINI_SCHEMA_INVALID: 'Đầu ra của bước xử lý tự động không đúng cấu trúc bắt buộc',
+});
+
+const STAGE_LABELS = Object.freeze({
+    translate: 'dịch',
+    medical_audit: 'kiểm định y khoa',
+    revise: 'hiệu chỉnh',
+    verify: 'xác minh',
+    repair: 'sửa lỗi',
+    reverify: 'xác minh lại',
 });
 
 // ponytail: Giới hạn 500 ký tự giữ header dễ đọc; tăng giới hạn hoặc cấu hình hóa nếu review thực tế cần thêm ngữ cảnh.
@@ -91,7 +100,20 @@ function reviewReasons(chunk, report) {
     }
     if (chunk?.qualityReviewReason) {
         reasons.push(TECHNICAL_REASON_LABELS[chunk.qualityReviewReason.errorCode]
-            || 'Đầu ra ở bước sửa tự động không hợp lệ nên không thể dùng an toàn');
+            || 'Đầu ra ở bước xử lý tự động không hợp lệ nên không thể dùng an toàn');
+        if (chunk.qualityReviewReason.kind === 'stage_content_retry_exhausted') {
+            const stage = STAGE_LABELS[chunk.qualityReviewReason.stage]
+                || 'xử lý tự động';
+            const count = Number.isInteger(chunk.qualityReviewReason.failureCount)
+                ? chunk.qualityReviewReason.failureCount
+                : null;
+            const limit = Number.isInteger(chunk.qualityReviewReason.failureLimit)
+                ? chunk.qualityReviewReason.failureLimit
+                : null;
+            reasons.push(
+                `bước ${stage} đã đạt giới hạn ${count && limit ? `${count}/${limit}` : 'retry'} lần lỗi nội dung`
+            );
+        }
     }
     return reasons.length
         ? `${reasons.join('; ')}.`

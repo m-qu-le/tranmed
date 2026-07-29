@@ -17,9 +17,9 @@ Các giới hạn quan trọng:
 - `MAX_UPLOAD_STORAGE_MB`: ngân sách disk cho PDF tạm, mặc định 400 MB.
 - `R2_SOURCE_RETENTION_DAYS`: giữ source của job lỗi cuối trước khi app tự xóa, mặc định 7 ngày. Cấu hình Cloudflare R2 Lifecycle 8 ngày cho prefix source chỉ là hàng rào chống object mồ côi; app vẫn xóa source ngay khi hoàn thành hoặc khi người dùng dọn hàng đợi.
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
-- `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa, mặc định 3.
-- `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận số nguyên từ `1` đến `5`, mặc định `5`.
-- `PARALLEL_SOURCE_BUDGET_MB`: chỉ nhận số nguyên từ `10` đến `100`, mặc định `100`. Đây là tổng `sourceSize` của các job chạy song song, không phải RAM thực tế.
+- `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa của pipeline legacy, mặc định 3. Quality job dùng giới hạn 7 cho lỗi cấp tài liệu; lỗi nội dung cấp chunk dùng chính sách riêng bên dưới.
+- `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận số nguyên từ `1` đến `3`, mặc định `3`.
+- `PARALLEL_SOURCE_BUDGET_MB`: chỉ nhận số nguyên từ `10` đến `100`, mặc định `15`. Đây là tổng `sourceSize` của các job chạy song song, không phải RAM thực tế.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
 - `GEMINI_MODEL`: mặc định `gemini-3.5-flash-lite`. Khi deploy, đặt rõ biến này trên Render; không dựa vào fallback để có thể truy vết model đang chạy.
 - `MAINTENANCE_CONTROL_TOKEN`: mã riêng để tạm dừng hàng đợi trước redeploy; đặt một chuỗi ngẫu nhiên dài trên Render, không đặt trong biến `VITE_*` hay commit vào Git.
@@ -57,7 +57,7 @@ sau khi chẩn đoán xong.
 
 - `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.
 - `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; không công khai ID hay tên file active.
-- Tối đa 5 lane có thể chạy đồng thời. Sau job đầu, lane tiếp theo chỉ nhận đúng job FIFO kế tiếp khi mọi job active có `sourceSize` hợp lệ và tổng không vượt `PARALLEL_SOURCE_BUDGET_MB`; job lớn hoặc thiếu size chạy một mình.
+- Tối đa 3 lane có thể chạy đồng thời. Sau job đầu, lane tiếp theo chỉ nhận đúng job FIFO kế tiếp khi mọi job active có `sourceSize` hợp lệ và tổng không vượt `PARALLEL_SOURCE_BUDGET_MB`; job lớn hoặc thiếu size chạy một mình.
 - Ngưỡng source bytes là proxy, không phải phép đo RAM thực. Nếu cần rollback tải xử lý, đặt rõ `TRANSLATION_WORKER_CONCURRENCY=2` và `PARALLEL_SOURCE_BUDGET_MB=10` (hoặc `1` / `10`), rồi restart Render.
 - P008 không đổi schema và không cần migration.
 
@@ -107,6 +107,17 @@ npm run migrate:p003
 
 P003 không rewrite nội dung cũ. Migration chỉ đếm dữ liệu và đồng bộ index của `Job`/`TranslationChunk`; job legacy không có quality artifact vẫn preview/download như trước.
 
+Trước deploy chính sách lỗi nội dung theo chunk, dùng **“Tạm dừng để redeploy”** và chờ `worker.activeJobs=0`; migration thực thi sẽ từ chối chạy nếu MongoDB còn job `processing`. Sau đó chạy backup P003, dry-run và migration:
+
+```powershell
+$env:P003_BACKUP_DIR='D:\duong-dan-backup'
+npm run backup:p003
+npm run migrate:quality-content-failure:dry
+npm run migrate:quality-content-failure
+```
+
+Migration này additive và idempotent: thêm `stageContentFailures`, đưa job quality đang chờ lỗi nội dung về cơ chế stage-deferred không tăng `attemptCount`, và đồng bộ `maxAttempts=7`. Với chunk cũ đang mắc lỗi nội dung, migration chỉ seed ở mức `2/3`; hệ thống vẫn yêu cầu thêm một lỗi thật sau deploy trước khi chuyển chunk sang `needs_review`. Migration không xóa hoặc reset draft, audit, revised content, report hay chunk đã terminal.
+
 ## Quality pipeline P003
 
 Khi `TRANSLATION_PIPELINE_MODE=quality`, job tạo một context passport có cấu trúc từ toàn PDF rồi mỗi chunk 2 trang chạy tuần tự:
@@ -127,9 +138,11 @@ translate → medical_audit → revise → verify
 - Artifact mới dùng pipeline version `p010-v1`, prompt version `p003-prompts-v3` và context version `p003-context-v1`; đổi version sẽ reset riêng chunk dở, không rewrite chunk terminal. P010 dùng version mới để chunk dở của Gemini 3.1 không tiếp tục nửa chừng bằng Gemini 3.5.
 - Context passport bị giới hạn kích thước, chỉ hỗ trợ nhất quán thuật ngữ; PDF chunk luôn là nguồn quyết định. Passport được persist một lần/job để resume không upload lại toàn PDF và không được trả qua API công khai.
 - Audit/verify phải trả checklist coverage có trích đoạn nguồn–đích. Audit thiếu coverage sẽ xoay key; verify/reverify thiếu coverage kết thúc chunk ở `needs_review`, không được PASS.
+- Mỗi `chunk + stage` có ngân sách riêng 3 lỗi nội dung đã thực sự phát request. Hai lỗi đầu backoff 5 và 15 phút; trong lúc chờ, dispatcher tiếp tục các chunk khác và có thể giải phóng source lane mà không tăng `attemptCount` của cả PDF. Lỗi 429/quota, suspension và lỗi trước khi phát request không tiêu ngân sách này.
+- Khi stage chạm lỗi nội dung thứ ba, chunk chuyển `needs_review` với bản tốt nhất đã persist. Nếu ngay stage `translate` chưa có bản dịch nào, output chứa placeholder cảnh báo và page range rõ ràng thay vì âm thầm bỏ mất phần đó. Raw response, prompt và stack trace không được persist.
 - Chỉ `content` cuối được trả qua result/download API. Draft, audit và verify report không public.
 - Chỉ báo cáo cuối `PASS` với coverage đầy đủ mới được gắn `passed`. Mọi lỗi có bằng chứng, kể cả minor, đều kích hoạt repair; `repairCount <= 2`. Sau vòng hai vẫn FAIL thì chunk thành `needs_review` và UI cảnh báo page range.
-- Revision/repair phải giữ tối thiểu 80% ký tự có nghĩa của bản trước. Output co rút bất thường bị xem là response lỗi để xoay key; nếu repair vẫn không hợp lệ sau rotation, pipeline giữ bản revised đầy đủ và đặt `needs_review`.
+- Revision/repair phải giữ tối thiểu 80% ký tự có nghĩa của bản trước. Output co rút bất thường bị xem là response lỗi để xoay project. Repair là bước cải thiện tùy chọn nên nếu toàn bộ rotation vẫn không tạo được output hợp lệ, pipeline giữ ngay bản revised đầy đủ và đặt `needs_review`; các stage bắt buộc khác áp dụng ngân sách 3 lỗi ở trên.
 - Scheduler xoay 7 key theo request, giữ headroom 12 RPM/200k TPM/400 RPD mỗi key index, chuyển key ngay khi 429/invalid JSON/5xx và loại key 401/403.
 - `/api/translate/metrics` trả counter key index, không trả giá trị key hay nội dung tài liệu.
 

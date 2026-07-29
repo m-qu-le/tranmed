@@ -175,6 +175,47 @@ test('quota-deferred resume does not increment job attempt or retry counters', a
     assert.equal(claimUpdate.$set.schedulerDeferred, false);
 });
 
+test('content-stage deferral preserves the content error and never opens the quota hibernation path', async context => {
+    const originalUpdateOne = Job.updateOne;
+    const originalFindOneAndUpdate = Job.findOneAndUpdate;
+    let deferUpdate;
+    Job.updateOne = async (_filter, update) => {
+        deferUpdate = update;
+        return { modifiedCount: 1 };
+    };
+    context.after(() => {
+        Job.updateOne = originalUpdateOne;
+        Job.findOneAndUpdate = originalFindOneAndUpdate;
+    });
+
+    const queue = new QueueManager();
+    let hibernated = false;
+    queue.triggerHibernation = async () => { hibernated = true; };
+    const deferred = new ProcessingError(
+        ErrorCodes.STAGE_DEFERRED,
+        'content stage retry',
+        { retryable: true, quotaRelated: false }
+    );
+    deferred.stageErrorCode = ErrorCodes.GEMINI_RESPONSE_INVALID;
+    deferred.deferredReason = 'content_retry';
+    deferred.nextAvailableAt = new Date(Date.now() + 60_000);
+
+    await queue.handleProcessingFailure(
+        {
+            jobId: 'content-deferred',
+            processingToken: 'token',
+            attemptCount: 4,
+            translationMode: 'quality',
+            maxAttempts: 7,
+        },
+        deferred
+    );
+    assert.equal(deferUpdate.$set.schedulerDeferred, true);
+    assert.equal(deferUpdate.$set.errorCode, ErrorCodes.GEMINI_RESPONSE_INVALID);
+    assert.equal(deferUpdate.$set.failureCategory, 'content');
+    assert.equal(hibernated, false);
+});
+
 test('an idle worker stops after one empty claim instead of polling in a microtask loop', async () => {
     const queue = new QueueManager();
     let claims = 0;

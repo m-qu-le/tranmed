@@ -23,6 +23,8 @@
     "migrate:project-pool": "node scripts/migrate-project-pool.js",
     "migrate:quota-dead-time:dry": "node scripts/migrate-quota-dead-time.js --dry-run",
     "migrate:quota-dead-time": "node scripts/migrate-quota-dead-time.js",
+    "migrate:quality-content-failure:dry": "node scripts/migrate-quality-content-failure.js --dry-run",
+    "migrate:quality-content-failure": "node scripts/migrate-quality-content-failure.js",
     "smoke:fixture": "node scripts/create-smoke-pdf.js",
     "smoke:r2": "node scripts/smoke-r2.js",
     "smoke:r2-presign": "node scripts/smoke-r2-presign.js",

@@ -3,6 +3,10 @@ import test from 'node:test';
 import { QualityPipelineService } from '../src/services/qualityPipelineService.js';
 import { QUALITY_PIPELINE_VERSION } from '../src/services/qualityPipelineState.js';
 import { ErrorCodes, ProcessingError } from '../src/utils/processingError.js';
+import {
+    QUALITY_STAGE_CONTENT_FAILURE_LIMIT,
+    qualityStageRetryAt,
+} from '../src/services/qualityStageFailurePolicy.js';
 
 function clone(value) {
     return value == null ? value : structuredClone(value);
@@ -192,6 +196,12 @@ async function run(service, options = {}) {
     });
 }
 
+test('quality content failures back off for five then fifteen minutes', () => {
+    const now = Date.parse('2026-07-30T00:00:00.000Z');
+    assert.equal(qualityStageRetryAt(1, now).getTime(), now + (5 * 60 * 1000));
+    assert.equal(qualityStageRetryAt(2, now).getTime(), now + (15 * 60 * 1000));
+});
+
 test('quality pipeline persists PASS stages and removes redundant full-text artifacts', async () => {
     const model = new MemoryChunkModel();
     const calls = [];
@@ -282,6 +292,174 @@ test('zero-physical quota deferral rolls back the stage attempt but persists its
     assert.equal(model.row.physicalAttemptCount, 0);
     assert.equal(model.row.lastStageErrorCode, ErrorCodes.GEMINI_RATE_LIMIT);
     assert.equal(new Date(model.row.deferredUntil).getTime(), nextAvailableAt.getTime());
+});
+
+test('issued content failures stay local to one chunk stage and exhaust into needs_review', async () => {
+    const model = new MemoryChunkModel(baseRow('audited', { draftContent: 'safe draft' }));
+    const calls = [];
+    const executorError = () => {
+        const error = new ProcessingError(
+            ErrorCodes.GEMINI_RESPONSE_INVALID,
+            'invalid response',
+            { retryable: true }
+        );
+        error.schedulerMetadata = { physicalAttempts: 1, projectIndex: 0, issuedAt: new Date() };
+        return error;
+    };
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: {
+            revise: async () => {
+                calls.push('revise');
+                throw executorError();
+            },
+        },
+    });
+
+    await assert.rejects(
+        run(service),
+        error => error.code === ErrorCodes.QUALITY_STAGE_RETRY
+            && error.deferredReason === 'content_retry'
+    );
+    assert.equal(model.row.stage, 'audited');
+    assert.equal(model.row.stageContentFailures.revise, 1);
+    assert.equal(model.row.stageAttempts.revise, 1);
+    assert.equal(model.row.physicalAttemptCount, 1);
+
+    await assert.rejects(
+        run(service),
+        error => error.code === ErrorCodes.QUALITY_STAGE_RETRY
+            && error.deferredReason === 'content_retry'
+    );
+    assert.equal(model.row.stageContentFailures.revise, 2);
+
+    const final = await run(service);
+    assert.equal(final.stage, 'needs_review');
+    assert.equal(final.qualityStatus, 'needs_review');
+    assert.equal(final.content, 'safe draft');
+    assert.equal(final.qualityReviewReason.kind, 'stage_content_retry_exhausted');
+    assert.equal(final.qualityReviewReason.stage, 'revise');
+    assert.equal(final.qualityReviewReason.failureCount, QUALITY_STAGE_CONTENT_FAILURE_LIMIT);
+    assert.equal(final.qualityReviewReason.failureLimit, QUALITY_STAGE_CONTENT_FAILURE_LIMIT);
+    assert.deepEqual(calls, ['revise', 'revise', 'revise']);
+});
+
+test('translate exhaustion emits a visible manual-review placeholder instead of silent missing output', async () => {
+    const model = new MemoryChunkModel(baseRow('pending'));
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: {
+            translate: async () => {
+                const error = new ProcessingError(
+                    ErrorCodes.GEMINI_OUTPUT_TRUNCATED,
+                    'truncated',
+                    { retryable: true }
+                );
+                error.schedulerMetadata = { physicalAttempts: 1 };
+                throw error;
+            },
+        },
+    });
+
+    await assert.rejects(run(service));
+    await assert.rejects(run(service));
+    const final = await run(service);
+    assert.equal(final.stage, 'needs_review');
+    assert.match(final.content, /chưa tạo được bản dịch tự động/);
+    assert.match(final.content, /trang 1–2/);
+});
+
+test('issued quota errors remain quota deferrals and never consume the content-failure budget', async () => {
+    const model = new MemoryChunkModel(baseRow('pending'));
+    const quotaError = new ProcessingError(
+        ErrorCodes.GEMINI_RATE_LIMIT,
+        'quota',
+        { retryable: true, quotaRelated: true }
+    );
+    quotaError.nextAvailableAt = new Date(Date.now() + 60_000);
+    quotaError.schedulerMetadata = { physicalAttempts: 1, projectIndex: 0 };
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: { translate: async () => { throw quotaError; } },
+    });
+
+    await assert.rejects(
+        run(service),
+        error => error.code === ErrorCodes.GEMINI_RATE_LIMIT
+    );
+    assert.equal(model.row.stageContentFailures, undefined);
+    assert.equal(model.row.stageAttempts.translate, 1);
+    assert.equal(model.row.physicalAttemptCount, 1);
+});
+
+test('a scheduler-reported unissued content error does not consume the chunk content budget', async () => {
+    const model = new MemoryChunkModel(baseRow('pending', { physicalAttemptCount: 0 }));
+    const contentError = new ProcessingError(
+        ErrorCodes.GEMINI_RESPONSE_INVALID,
+        'rejected before issuance',
+        { retryable: true }
+    );
+    contentError.schedulerMetadata = { physicalAttempts: 0, projectIndex: null };
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: { translate: async () => { throw contentError; } },
+    });
+
+    await assert.rejects(
+        run(service),
+        error => error.code === ErrorCodes.GEMINI_RESPONSE_INVALID
+    );
+    assert.equal(model.row.stageAttempts.translate, 0);
+    assert.equal(model.row.stageContentFailures, undefined);
+    assert.equal(model.row.physicalAttemptCount, 0);
+});
+
+test('a worker that loses its lease cannot consume the chunk content budget', async () => {
+    const model = new MemoryChunkModel(baseRow('pending', { physicalAttemptCount: 0 }));
+    const contentError = new ProcessingError(
+        ErrorCodes.GEMINI_RESPONSE_INVALID,
+        'invalid response from an expired worker',
+        { retryable: true }
+    );
+    contentError.schedulerMetadata = { physicalAttempts: 1, projectIndex: 0 };
+    let activeChecks = 0;
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: { translate: async () => { throw contentError; } },
+    });
+
+    await assert.rejects(
+        run(service, {
+            assertActive: async () => {
+                activeChecks += 1;
+                if (activeChecks === 2) {
+                    throw new ProcessingError(ErrorCodes.CANCELLED, 'worker token expired');
+                }
+            },
+        }),
+        error => error.code === ErrorCodes.CANCELLED
+    );
+    assert.equal(model.row.stageContentFailures, undefined);
+    assert.equal(model.row.physicalAttemptCount, 0);
+    assert.equal(model.row.lastStageErrorCode, undefined);
+});
+
+test('a persisted exhausted content stage is finalized without another Gemini call', async () => {
+    const model = new MemoryChunkModel(baseRow('pending', {
+        stageAttempts: { translate: 3 },
+        stageContentFailures: { translate: QUALITY_STAGE_CONTENT_FAILURE_LIMIT },
+        lastStageErrorCode: ErrorCodes.GEMINI_RESPONSE_INVALID,
+    }));
+    let calls = 0;
+    const service = new QualityPipelineService({
+        ChunkModel: model,
+        executors: { translate: async () => { calls += 1; throw new Error('must not call'); } },
+    });
+
+    const final = await run(service);
+    assert.equal(calls, 0);
+    assert.equal(final.stage, 'needs_review');
+    assert.match(final.content, /chưa tạo được bản dịch tự động/);
 });
 
 test('priority suspension happens only after the running stage artifact is persisted', async () => {

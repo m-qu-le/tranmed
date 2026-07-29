@@ -165,6 +165,27 @@ test('technical repair reasons are translated without exposing codes or raw diag
     }
 });
 
+test('exhausted stage retries explain the stage limit without exposing internal codes', () => {
+    const header = buildQualityReviewHeader({
+        job: qualityJob,
+        reviewChunks: [reviewChunk({
+            verificationReport: null,
+            qualityReviewReason: {
+                kind: 'stage_content_retry_exhausted',
+                stage: 'revise',
+                errorCode: 'GEMINI_RESPONSE_INVALID',
+                failureCount: 3,
+                failureLimit: 3,
+                rawMessage: 'secret prompt and stack trace',
+            },
+        })],
+    });
+    assert.match(header, /bước hiệu chỉnh đã đạt giới hạn 3\/3 lần lỗi nội dung/);
+    assert.match(header, /không trả về nội dung/);
+    assert.doesNotMatch(header, /GEMINI_RESPONSE_INVALID/);
+    assert.doesNotMatch(header, /secret prompt|stack trace/);
+});
+
 test('report excerpts cannot create headings, HTML, code blocks or emphasis', () => {
     const hostile = '<script>alert(1)</script>\n# injected\n```js\n*bold* [link](x)';
     const header = buildQualityReviewHeader({

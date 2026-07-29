@@ -54,7 +54,47 @@ export function qualityStageAttemptKey(action, chunk) {
     return action;
 }
 
+function manualReviewPlaceholder(chunk) {
+    const chunkNumber = Number.isInteger(chunk?.chunkIndex) ? chunk.chunkIndex + 1 : '?';
+    const pageStart = Number.isInteger(chunk?.pageStart) ? chunk.pageStart : null;
+    const pageEnd = Number.isInteger(chunk?.pageEnd) ? chunk.pageEnd : null;
+    const pageLabel = pageStart
+        ? (pageEnd && pageEnd !== pageStart ? `trang ${pageStart}–${pageEnd}` : `trang ${pageStart}`)
+        : 'các trang tương ứng';
+    return [
+        `## ⚠️ Phần ${chunkNumber} chưa tạo được bản dịch tự động`,
+        '',
+        `> Hệ thống không tạo được nội dung đủ an toàn sau nhiều lần thử. Vui lòng đối chiếu thủ công ${pageLabel} trong PDF gốc.`,
+    ].join('\n');
+}
+
+export function contentFailureReviewTransition(action, result, chunk) {
+    return {
+        nextStage: 'needs_review',
+        set: {
+            promptVersion: QUALITY_PROMPT_VERSION,
+            stageUpdatedAt: new Date(),
+            content: chunk.repairedContent
+                || chunk.revisedContent
+                || chunk.draftContent
+                || manualReviewPlaceholder(chunk),
+            qualityStatus: 'needs_review',
+            qualityReviewReason: {
+                kind: 'stage_content_retry_exhausted',
+                stage: action,
+                errorCode: result.errorCode,
+                failureCount: result.failureCount,
+                failureLimit: result.failureLimit,
+                occurredAt: new Date(),
+            },
+        },
+    };
+}
+
 export function transitionForAction(action, result, chunk, maxRepairCycles = QUALITY_MAX_REPAIR_CYCLES) {
+    if (result?.contentFailureExhausted) {
+        return contentFailureReviewTransition(action, result, chunk);
+    }
     const repairCount = Number(chunk.repairCount || 0);
     const cycle = action === 'repair' ? repairCount + 1 : repairCount;
     const usageKey = ['repair', 'reverify'].includes(action) && cycle > 1 ? `${action}_${cycle}` : action;
@@ -167,6 +207,7 @@ export function versionResetUpdate(pipelineVersion = QUALITY_PIPELINE_VERSION) {
             repairCount: 0,
             usageByStage: {},
             stageAttempts: {},
+            stageContentFailures: {},
             physicalAttemptCount: 0,
             nextStageRetryAt: null,
             lastStageErrorCode: null,

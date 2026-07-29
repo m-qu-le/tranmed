@@ -2,8 +2,16 @@ import mongoose from 'mongoose';
 import { QUALITY_STAGES, QUALITY_STATUSES } from '../services/qualityPipelineState.js';
 
 const qualityReviewReasonSchema = new mongoose.Schema({
-    kind: { type: String, enum: ['repair_output_invalid'], required: true },
-    stage: { type: String, enum: ['repair'], required: true },
+    kind: {
+        type: String,
+        enum: ['repair_output_invalid', 'stage_content_retry_exhausted'],
+        required: true,
+    },
+    stage: {
+        type: String,
+        enum: ['translate', 'medical_audit', 'revise', 'verify', 'repair', 'reverify'],
+        required: true,
+    },
     errorCode: {
         type: String,
         enum: [
@@ -13,6 +21,16 @@ const qualityReviewReasonSchema = new mongoose.Schema({
             'GEMINI_SCHEMA_INVALID',
         ],
         required: true,
+    },
+    failureCount: {
+        type: Number,
+        min: 1,
+        required() { return this.kind === 'stage_content_retry_exhausted'; },
+    },
+    failureLimit: {
+        type: Number,
+        min: 1,
+        required() { return this.kind === 'stage_content_retry_exhausted'; },
     },
     occurredAt: { type: Date, required: true },
 }, { _id: false });
@@ -39,6 +57,7 @@ const translationChunkSchema = new mongoose.Schema({
     qualityReviewReason: { type: qualityReviewReasonSchema, default: null },
     usageByStage: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     stageAttempts: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
+    stageContentFailures: { type: mongoose.Schema.Types.Mixed, default: () => ({}) },
     physicalAttemptCount: { type: Number, min: 0, default: 0 },
     lastStagePhysicalAttempts: { type: Number, min: 0, default: 0 },
     lastStageIssuedAt: { type: Date, default: null },

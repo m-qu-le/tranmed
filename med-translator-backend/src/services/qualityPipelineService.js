@@ -11,6 +11,12 @@ import {
     versionResetUpdate,
 } from './qualityPipelineState.js';
 import { operationalMetrics } from './operationalMetrics.js';
+import {
+    QUALITY_STAGE_CONTENT_FAILURE_LIMIT,
+    createQualityStageRetryError,
+    isQualityContentError,
+    qualityStageRetryAt,
+} from './qualityStageFailurePolicy.js';
 
 function plain(value) {
     return value?.toObject ? value.toObject() : value;
@@ -32,13 +38,6 @@ async function observeMongo(operation, metricName = null) {
         if (metricName) operationalMetrics.observe(metricName, duration);
     }
 }
-
-const INVALID_CONTENT_CODES = new Set([
-    ErrorCodes.GEMINI_BLOCKED,
-    ErrorCodes.GEMINI_OUTPUT_TRUNCATED,
-    ErrorCodes.GEMINI_RESPONSE_INVALID,
-    ErrorCodes.GEMINI_SCHEMA_INVALID,
-]);
 
 export class QualityPipelineService {
     constructor({ ChunkModel, executors, pipelineVersion = QUALITY_PIPELINE_VERSION }) {
@@ -78,6 +77,7 @@ export class QualityPipelineService {
                         repairCount: 0,
                         usageByStage: {},
                         stageAttempts: {},
+                        stageContentFailures: {},
                         physicalAttemptCount: 0,
                         stageUpdatedAt: new Date(),
                     },
@@ -100,6 +100,7 @@ export class QualityPipelineService {
                         repairCount: 0,
                         usageByStage: {},
                         stageAttempts: {},
+                        stageContentFailures: {},
                         physicalAttemptCount: 0,
                         stageUpdatedAt: new Date(),
                     },
@@ -107,6 +108,29 @@ export class QualityPipelineService {
                 { returnDocument: 'after' }
             ));
             chunk = initialized || plain(await this.ChunkModel.findOne({ jobId, chunkIndex }));
+        }
+
+        if (chunk && (
+            !Number.isInteger(chunk.pageStart)
+            || !Number.isInteger(chunk.pageEnd)
+            || !Number.isInteger(chunk.totalPages)
+        )) {
+            const withPageMetadata = plain(await this.ChunkModel.findOneAndUpdate(
+                {
+                    jobId,
+                    chunkIndex,
+                    pipelineVersion: this.pipelineVersion,
+                },
+                {
+                    $set: {
+                        pageStart,
+                        pageEnd,
+                        totalPages,
+                    },
+                },
+                { returnDocument: 'after' }
+            ));
+            chunk = withPageMetadata || chunk;
         }
 
         if (!chunk) {
@@ -123,21 +147,24 @@ export class QualityPipelineService {
         const transition = transitionForAction(action, result, chunk);
         const update = { $set: { ...transition.set, stage: transition.nextStage } };
         const scheduler = result?.metadata?.scheduler;
-        if (Number.isSafeInteger(scheduler?.projectIndex)) {
-            update.$set.lastProjectIndex = scheduler.projectIndex;
+        const schedulerAlreadyRecorded = result?.schedulerAlreadyRecorded === true;
+        if (!schedulerAlreadyRecorded) {
+            if (Number.isSafeInteger(scheduler?.projectIndex)) {
+                update.$set.lastProjectIndex = scheduler.projectIndex;
+            }
+            update.$set.lastStagePhysicalAttempts = Number.isSafeInteger(scheduler?.physicalAttempts)
+                ? scheduler.physicalAttempts
+                : 0;
+            update.$set.lastStageIssuedAt = scheduler?.issuedAt || null;
+            if (Number.isSafeInteger(scheduler?.physicalAttempts) && scheduler.physicalAttempts > 0) {
+                update.$inc = { physicalAttemptCount: scheduler.physicalAttempts };
+            }
         }
         update.$set.lastStageErrorCode = null;
         update.$set.nextStageRetryAt = null;
         update.$set.deferredUntil = null;
         update.$set.deferredReason = null;
         update.$set.schedulerExecutionVersion = PROJECT_POOL_EXECUTION_VERSION;
-        update.$set.lastStagePhysicalAttempts = Number.isSafeInteger(scheduler?.physicalAttempts)
-            ? scheduler.physicalAttempts
-            : 0;
-        update.$set.lastStageIssuedAt = scheduler?.issuedAt || null;
-        if (Number.isSafeInteger(scheduler?.physicalAttempts) && scheduler.physicalAttempts > 0) {
-            update.$inc = { physicalAttemptCount: scheduler.physicalAttempts };
-        }
         if (transition.unset?.length) {
             update.$unset = Object.fromEntries(transition.unset.map(field => [field, 1]));
         }
@@ -223,6 +250,59 @@ export class QualityPipelineService {
         ));
     }
 
+    async recordContentFailure(chunk, action, error) {
+        const scheduler = error?.schedulerMetadata || {};
+        const attemptKey = qualityStageAttemptKey(action, chunk);
+        const previousFailures = Number(chunk?.stageContentFailures?.[attemptKey] || 0);
+        const expectedFailureCount = previousFailures + 1;
+        const nextStageRetryAt = expectedFailureCount < QUALITY_STAGE_CONTENT_FAILURE_LIMIT
+            ? qualityStageRetryAt(expectedFailureCount)
+            : null;
+        const set = {
+            lastStageErrorCode: error.code,
+            nextStageRetryAt,
+            deferredUntil: nextStageRetryAt,
+            deferredReason: expectedFailureCount < QUALITY_STAGE_CONTENT_FAILURE_LIMIT
+                ? 'content_retry'
+                : null,
+            lastStagePhysicalAttempts: Number.isSafeInteger(scheduler.physicalAttempts)
+                ? scheduler.physicalAttempts
+                : 0,
+            lastStageIssuedAt: scheduler.issuedAt || null,
+            schedulerExecutionVersion: PROJECT_POOL_EXECUTION_VERSION,
+            stageUpdatedAt: new Date(),
+        };
+        if (Number.isSafeInteger(scheduler.projectIndex)) {
+            set.lastProjectIndex = scheduler.projectIndex;
+        }
+        const inc = { [`stageContentFailures.${attemptKey}`]: 1 };
+        if (Number.isSafeInteger(scheduler.physicalAttempts) && scheduler.physicalAttempts > 0) {
+            inc.physicalAttemptCount = scheduler.physicalAttempts;
+        }
+        const updated = plain(await observeMongo(() => this.ChunkModel.findOneAndUpdate(
+            {
+                jobId: chunk.jobId,
+                chunkIndex: chunk.chunkIndex,
+                pipelineVersion: this.pipelineVersion,
+                stage: chunk.stage,
+            },
+            { $set: set, $inc: inc },
+            { returnDocument: 'after' }
+        )));
+        if (!updated) {
+            throw new ProcessingError(
+                ErrorCodes.DATABASE_UNAVAILABLE,
+                `Không thể persist content failure cho stage ${action}.`,
+                { retryable: true }
+            );
+        }
+        operationalMetrics.increment('quality.stage_content_failures');
+        return {
+            chunk: updated,
+            failureCount: Number(updated?.stageContentFailures?.[attemptKey] || expectedFailureCount),
+        };
+    }
+
     async rollbackUnissuedStageAttempt(chunk, action) {
         const attemptKey = qualityStageAttemptKey(action, chunk);
         await observeMongo(() => this.ChunkModel.updateOne(
@@ -272,6 +352,24 @@ export class QualityPipelineService {
         let result = {};
         if (action !== 'complete_needs_review') {
             if (!executor) throw new Error(`Thiếu executor cho quality action ${action}`);
+            const attemptKey = qualityStageAttemptKey(action, chunk);
+            const persistedContentFailures = Number(chunk?.stageContentFailures?.[attemptKey] || 0);
+            if (persistedContentFailures >= QUALITY_STAGE_CONTENT_FAILURE_LIMIT
+                && isQualityContentError(chunk.lastStageErrorCode)) {
+                result = {
+                    contentFailureExhausted: true,
+                    errorCode: chunk.lastStageErrorCode,
+                    failureCount: persistedContentFailures,
+                    failureLimit: QUALITY_STAGE_CONTENT_FAILURE_LIMIT,
+                    schedulerAlreadyRecorded: true,
+                };
+                assertNotCancelled(signal);
+                await assertActive();
+                chunk = await this.persistTransition(chunk, action, result);
+                operationalMetrics.increment('quality.stage_content_failures.exhausted');
+                await onStage({ phase: 'completed', action, chunk });
+                return chunk;
+            }
             chunk = await this.markStageAttempt(chunk, action);
             await onStage({ phase: 'started', action, chunk });
             try {
@@ -282,7 +380,10 @@ export class QualityPipelineService {
                     signal,
                 });
             } catch (error) {
+                assertNotCancelled(signal);
+                await assertActive();
                 const physicalAttempts = Number(error?.schedulerMetadata?.physicalAttempts || 0);
+                const schedulerReportedIssuance = error?.schedulerMetadata != null;
                 if (physicalAttempts === 0) {
                     await this.rollbackUnissuedStageAttempt(chunk, action);
                 }
@@ -290,18 +391,39 @@ export class QualityPipelineService {
                     && physicalAttempts === 0) {
                     throw error;
                 }
-                if (action !== 'repair' || !INVALID_CONTENT_CODES.has(error?.code)) {
+                if (isQualityContentError(error?.code)
+                    && schedulerReportedIssuance
+                    && physicalAttempts === 0) {
                     await this.recordStageFailure(chunk, error);
                     throw error;
                 }
-                result = {
-                    invalid: true,
-                    errorCode: error.code,
-                    metadata: {
-                        ...(error.geminiMetadata || {}),
-                        scheduler: error.schedulerMetadata || {},
-                    },
-                };
+                if (action !== 'repair' && isQualityContentError(error?.code)) {
+                    const recorded = await this.recordContentFailure(chunk, action, error);
+                    chunk = recorded.chunk;
+                    if (recorded.failureCount < QUALITY_STAGE_CONTENT_FAILURE_LIMIT) {
+                        throw createQualityStageRetryError(error, recorded.failureCount);
+                    }
+                    result = {
+                        contentFailureExhausted: true,
+                        errorCode: error.code,
+                        failureCount: recorded.failureCount,
+                        failureLimit: QUALITY_STAGE_CONTENT_FAILURE_LIMIT,
+                        schedulerAlreadyRecorded: true,
+                    };
+                    operationalMetrics.increment('quality.stage_content_failures.exhausted');
+                } else if (action !== 'repair' || !isQualityContentError(error?.code)) {
+                    await this.recordStageFailure(chunk, error);
+                    throw error;
+                } else {
+                    result = {
+                        invalid: true,
+                        errorCode: error.code,
+                        metadata: {
+                            ...(error.geminiMetadata || {}),
+                            scheduler: error.schedulerMetadata || {},
+                        },
+                    };
+                }
             }
             assertNotCancelled(signal);
             await assertActive();

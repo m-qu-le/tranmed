@@ -41,6 +41,7 @@ import {
 import {
     CONTENT_MAX_ATTEMPTS,
     CONTENT_RETRY_DELAYS_MS,
+    CONTENT_ERROR_CODES,
     INFRASTRUCTURE_RETRY_WINDOW_MS,
     SOURCE_RETENTION_MS,
     classifyFailure,
@@ -416,7 +417,9 @@ export class QueueManager extends EventEmitter {
                 storageProvider: 'local',
                 sourceState: 'ready',
                 status: 'pending',
-                maxAttempts: MAX_JOB_ATTEMPTS,
+                maxAttempts: TRANSLATION_PIPELINE_MODE === 'quality'
+                    ? CONTENT_MAX_ATTEMPTS
+                    : MAX_JOB_ATTEMPTS,
                 nextRetryAt: new Date(),
                 translationMode: TRANSLATION_PIPELINE_MODE,
                 translationPipelineVersion: QUALITY_PIPELINE_VERSION
@@ -1183,34 +1186,47 @@ export class QueueManager extends EventEmitter {
 
                 setDepth();
                 if (ready.length === 0) {
-                    const wakeTimes = [...states.values()]
+                    const waitingChunks = [...states.values()]
                         .filter(chunk => !isChunkDone(chunk))
-                        .map(chunk => new Date(
-                            chunk.deferredUntil || chunk.nextStageRetryAt || 0
-                        ).getTime())
-                        .filter(wakeAt => Number.isFinite(wakeAt) && wakeAt > now);
-                    const nextWakeAt = wakeTimes.length ? Math.min(...wakeTimes) : now + 60_000;
+                        .map(chunk => ({
+                            wakeAt: new Date(
+                                chunk.deferredUntil || chunk.nextStageRetryAt || 0
+                            ).getTime(),
+                            reason: chunk.deferredReason || null,
+                            errorCode: chunk.lastStageErrorCode || null,
+                        }))
+                        .filter(entry => Number.isFinite(entry.wakeAt) && entry.wakeAt > now)
+                        .sort((left, right) => left.wakeAt - right.wakeAt);
+                    const earliestWait = waitingChunks[0] || null;
+                    const nextWakeAt = earliestWait?.wakeAt || now + 60_000;
                     if (continuousWaitStartedAt == null) continuousWaitStartedAt = now;
                     const waitedMs = now - continuousWaitStartedAt;
                     const remainingCacheMs = SOURCE_CACHE_WAIT_LIMIT_MS - waitedMs;
                     this.watchdogState.nextWakeTime = new Date(nextWakeAt);
                     if (remainingCacheMs <= 0 || nextWakeAt - now > remainingCacheMs) {
                         const availability = qualityKeyScheduler.availabilitySnapshot();
+                        const contentRetryWait = earliestWait?.reason === 'content_retry';
                         const error = new ProcessingError(
                             ErrorCodes.STAGE_DEFERRED,
-                            'Quality stage được trả lại hàng đợi để giải phóng source cache.',
+                            contentRetryWait
+                                ? 'Chunk content retry được trả lại hàng đợi để giải phóng source cache.'
+                                : 'Quality stage được trả lại hàng đợi để giải phóng source cache.',
                             {
                                 retryable: true,
-                                quotaRelated: true,
-                                poolExhausted: !availability.anyCapacity,
-                                publicMessage: 'Đang chờ Gemini quota; hệ thống sẽ tự tiếp tục.',
+                                quotaRelated: !contentRetryWait,
+                                poolExhausted: !contentRetryWait && !availability.anyCapacity,
+                                publicMessage: contentRetryWait
+                                    ? 'Một phần của tài liệu đang chờ thử lại; các phần đã xử lý vẫn được giữ.'
+                                    : 'Đang chờ Gemini quota; hệ thống sẽ tự tiếp tục.',
                             }
                         );
                         error.nextAvailableAt = new Date(nextWakeAt);
                         error.retryAfterMs = Math.max(1, nextWakeAt - now);
-                        error.deferredReason = availability.anyCapacity
-                            ? 'stage_quota'
-                            : 'quota_pool_exhausted';
+                        error.stageErrorCode = earliestWait?.errorCode
+                            || (contentRetryWait ? ErrorCodes.QUALITY_STAGE_RETRY : ErrorCodes.GEMINI_RATE_LIMIT);
+                        error.deferredReason = contentRetryWait
+                            ? 'content_retry'
+                            : (availability.anyCapacity ? 'stage_quota' : 'quota_pool_exhausted');
                         throw error;
                     }
                     await waitAbortably(
@@ -1245,7 +1261,7 @@ export class QueueManager extends EventEmitter {
                         continue;
                     }
                     const error = result.reason;
-                    if (error?.code === ErrorCodes.GEMINI_RATE_LIMIT) {
+                    if ([ErrorCodes.GEMINI_RATE_LIMIT, ErrorCodes.QUALITY_STAGE_RETRY].includes(error?.code)) {
                         const range = pageRanges[chunkIndex];
                         states.set(chunkIndex, await pipeline.prepareChunk({
                             jobId: job.jobId,
@@ -1418,6 +1434,11 @@ export class QueueManager extends EventEmitter {
         const quotaDeferral = error.code === ErrorCodes.GEMINI_RATE_LIMIT;
         if (error.code === ErrorCodes.STAGE_DEFERRED || quotaDeferral) {
             const now = Date.now();
+            const deferredErrorCode = error.code === ErrorCodes.STAGE_DEFERRED
+                ? (error.stageErrorCode || (error.quotaRelated
+                    ? ErrorCodes.GEMINI_RATE_LIMIT
+                    : ErrorCodes.STAGE_DEFERRED))
+                : ErrorCodes.GEMINI_RATE_LIMIT;
             const nextRetryAt = error.nextAvailableAt
                 ? new Date(error.nextAvailableAt)
                 : new Date(now + Math.max(1000, Number(error.retryAfterMs) || 30_000));
@@ -1429,7 +1450,8 @@ export class QueueManager extends EventEmitter {
                         schedulerSuspended: false,
                         schedulerDeferred: true,
                         error: error.publicMessage,
-                        errorCode: ErrorCodes.GEMINI_RATE_LIMIT,
+                        errorCode: deferredErrorCode,
+                        failureCategory: CONTENT_ERROR_CODES.has(deferredErrorCode) ? 'content' : null,
                         nextRetryAt,
                         processingToken: null,
                         leaseExpiresAt: null,
@@ -1441,7 +1463,7 @@ export class QueueManager extends EventEmitter {
                 schedulerDeferred: true,
                 schedulerExecutionVersion: SCHEDULER_EXECUTION_VERSION,
                 error: error.publicMessage,
-                errorCode: ErrorCodes.GEMINI_RATE_LIMIT,
+                errorCode: deferredErrorCode,
                 nextRetryAt,
                 deferredReason: error.deferredReason || 'quota',
             });
@@ -1476,9 +1498,16 @@ export class QueueManager extends EventEmitter {
         const now = new Date();
         const retryStartedAt = job.retryStartedAt ? new Date(job.retryStartedAt) : now;
         const infrastructureDeadline = new Date(retryStartedAt.getTime() + INFRASTRUCTURE_RETRY_WINDOW_MS);
+        const contentAttemptLimit = job.translationMode === 'quality'
+            ? CONTENT_MAX_ATTEMPTS
+            : job.translationMode === 'legacy'
+                ? (Number.isSafeInteger(job.maxAttempts) && job.maxAttempts > 0
+                    ? job.maxAttempts
+                    : CONTENT_MAX_ATTEMPTS)
+                : CONTENT_MAX_ATTEMPTS;
         const shouldRetry = category === 'infrastructure'
             ? now < infrastructureDeadline
-            : category === 'content' && job.attemptCount < CONTENT_MAX_ATTEMPTS;
+            : category === 'content' && job.attemptCount < contentAttemptLimit;
         if (shouldRetry) {
             const calculatedRetryAt = this.calculateRetryAt(error, job, category, now.getTime());
             const nextRetryAt = category === 'infrastructure' && calculatedRetryAt > infrastructureDeadline
@@ -1504,7 +1533,7 @@ export class QueueManager extends EventEmitter {
                 error: error.publicMessage,
                 errorCode: error.code,
                 attemptCount: job.attemptCount,
-                maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : null,
+                maxAttempts: category === 'content' ? contentAttemptLimit : null,
                 nextRetryAt
             });
             return;
@@ -1537,7 +1566,7 @@ export class QueueManager extends EventEmitter {
             error: error.publicMessage,
             errorCode: error.code,
             attemptCount: job.attemptCount,
-            maxAttempts: category === 'content' ? CONTENT_MAX_ATTEMPTS : job.maxAttempts,
+            maxAttempts: category === 'content' ? contentAttemptLimit : job.maxAttempts,
             failureCategory: terminalCategory,
             terminalAt,
             sourceRetentionUntil,

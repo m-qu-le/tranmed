@@ -5,8 +5,15 @@ import { redactError } from '../utils/redactSecrets.js';
 import { appEvents } from './appEvents.js';
 import { operationalMetrics } from './operationalMetrics.js';
 import { ErrorCodes } from '../utils/processingError.js';
+import { CONTENT_MAX_ATTEMPTS } from './jobFailurePolicy.js';
 
 export const PRIORITY_FOLDER_NAME = 'Ưu tiên';
+
+function configuredMaxAttempts(config) {
+    return config.translationMode === 'quality'
+        ? CONTENT_MAX_ATTEMPTS
+        : config.maxJobAttempts;
+}
 
 export class UploadBatchError extends Error {
     constructor(code, message, status = 400) {
@@ -138,7 +145,7 @@ export class UploadBatchService {
                 sourceSize: file.size,
                 sourceState: 'prepared',
                 uploadBatchId: batchId,
-                maxAttempts: this.config.maxJobAttempts,
+                maxAttempts: configuredMaxAttempts(this.config),
                 ...(this.config.translationMode ? {
                     translationMode: this.config.translationMode,
                     translationPipelineVersion: this.config.translationPipelineVersion,
@@ -440,7 +447,7 @@ export class UploadBatchService {
                                 sourceEtag,
                                 uploadBatchId: batch.batchId,
                                 uploadConfirmedAt,
-                                maxAttempts: this.config.maxJobAttempts,
+                                maxAttempts: configuredMaxAttempts(this.config),
                                 nextRetryAt: status === 'pending' ? new Date() : null,
                                 error,
                                 errorCode,
