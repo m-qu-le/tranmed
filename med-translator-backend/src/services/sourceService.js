@@ -67,7 +67,7 @@ export class SourceService {
         if (job.storageProvider !== 'r2') {
             if (!job.filePath) throw new ProcessingError(ErrorCodes.FILE_MISSING, 'Job legacy không có filePath.');
             try { await fs.access(job.filePath); }
-            catch { throw new ProcessingError(ErrorCodes.FILE_MISSING, 'File gốc bị mất trên Render.', { publicMessage: 'File gốc đã bị mất trên Render.' }); }
+            catch { throw new ProcessingError(ErrorCodes.FILE_MISSING, 'File gốc không còn trên máy chủ.', { publicMessage: 'File gốc không còn trên máy chủ.' }); }
             return { filePath: job.filePath, temporary: false };
         }
         if (!job.storageKey || job.sourceState !== 'ready') {
@@ -81,7 +81,7 @@ export class SourceService {
             await this.assertCapacity(job.sourceSize);
         } catch (error) {
             throw new ProcessingError(ErrorCodes.DISK_CAPACITY, error.message, {
-                retryable: true, publicMessage: 'Render chưa đủ dung lượng tạm; hệ thống sẽ thử lại.',
+                retryable: true, publicMessage: 'Máy chủ chưa đủ dung lượng tạm; hệ thống sẽ thử lại.',
             });
         }
         try {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:legacy-notice": "vite build --mode legacy-notice",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -120,7 +120,7 @@ test('automation confirmation is explicit and never changes the interactive defa
 test('ledger makes confirmed files idempotent and refuses corrupt state', async t => {
     const root = await createTempRoot(t);
     const ledgerPath = path.join(root, 'state-v1.json');
-    const apiUrl = 'https://tranmed.onrender.com/api/translate';
+    const apiUrl = 'https://tranmed-api.duckdns.org/api/translate';
     const file = {
         bookName: 'Nội khoa',
         fileName: 'Bài 1.pdf',
@@ -218,7 +218,7 @@ test('upload operation refreshes expired signatures, limits concurrency and conf
     const root = await createTempRoot(t);
     await addBook(root, 'Tim mạch', 'Split', ['A.pdf', 'B.pdf', 'C.pdf']);
     const scan = await scanSource(root);
-    const apiUrl = 'https://tranmed.onrender.com/api/translate';
+    const apiUrl = 'https://tranmed-api.duckdns.org/api/translate';
     const ledger = createEmptyLedger();
     const { plan, operation } = createOperationFixture(scan, apiUrl, ledger);
     const ledgerPath = path.join(root, 'state.json');
@@ -261,7 +261,7 @@ test('a partial upload persists confirmations and rerun uploads only the unfinis
     const root = await createTempRoot(t);
     await addBook(root, 'Huyết học', 'Split', ['A.pdf', 'B.pdf']);
     const scan = await scanSource(root);
-    const apiUrl = 'https://tranmed.onrender.com/api/translate';
+    const apiUrl = 'https://tranmed-api.duckdns.org/api/translate';
     const ledger = createEmptyLedger();
     const { plan, operation } = createOperationFixture(scan, apiUrl, ledger);
     const ledgerPath = path.join(root, 'state.json');

@@ -48,9 +48,10 @@ app.get('/api/health', async (req, res) => {
         // Thao tác này cực nhẹ và không tốn nhiều tài nguyên
         await mongoose.connection.db.admin().ping();
         
+        res.set('Cache-Control', 'no-store');
         res.status(200).json({ 
             status: 'success', 
-            message: 'Render server is awake and MongoDB connection is active!' 
+            message: 'Máy chủ đang hoạt động và MongoDB đã kết nối.'
         });
     } catch (error) {
         console.error('Database connection failed during health check:', redactError(error));
@@ -67,6 +68,7 @@ app.get('/api/readiness', async (req, res) => {
     try {
         await mongoose.connection.db.admin().ping();
         await r2Service.checkReadiness();
+        res.set('Cache-Control', 'no-store');
         res.status(200).json({
             status: 'ready',
             database: { available: true },
@@ -74,6 +76,7 @@ app.get('/api/readiness', async (req, res) => {
         });
     } catch (error) {
         console.error('Readiness check failed:', redactError(error));
+        res.set('Cache-Control', 'no-store');
         res.status(503).json({
             status: 'not_ready',
             database: { available: mongoose.connection.readyState === 1 },

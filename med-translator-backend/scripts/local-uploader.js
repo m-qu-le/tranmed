@@ -20,7 +20,7 @@ import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_SOURCE_PATH = String.raw`D:\1. File chờ dịch`;
-export const DEFAULT_API_URL = 'https://tranmed.onrender.com/api/translate';
+export const DEFAULT_API_URL = 'https://tranmed-api.duckdns.org/api/translate';
 export const MAX_FILES_PER_BATCH = 500;
 export const MAX_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_FILE_BYTES = 350 * 1024 * 1024;

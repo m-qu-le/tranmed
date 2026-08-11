@@ -54,7 +54,7 @@ const diagnosticProbeRateLimit = rateLimit({
 function requireMaintenanceControl(req, res, next) {
     const expected = runtimeConfig.maintenanceControlToken;
     const received = req.get('X-Maintenance-Token') || '';
-    if (!expected) return res.status(503).json({ error: 'Chưa cấu hình MAINTENANCE_CONTROL_TOKEN trên Render.' });
+    if (!expected) return res.status(503).json({ error: 'Chưa cấu hình MAINTENANCE_CONTROL_TOKEN trên máy chủ.' });
     const expectedBuffer = Buffer.from(expected);
     const receivedBuffer = Buffer.from(received);
     if (expectedBuffer.length !== receivedBuffer.length || !timingSafeEqual(expectedBuffer, receivedBuffer)) {
@@ -63,12 +63,20 @@ function requireMaintenanceControl(req, res, next) {
     next();
 }
 
+function requireWorkerEnabled(_req, res, next) {
+    if (runtimeConfig.workerEnabled) return next();
+    return res.status(503).json({
+        error: 'Hệ thống đang ở chế độ cutover và chưa nhận công việc mới.',
+        code: 'WORKER_DISABLED',
+    });
+}
+
 // Frontend có thể giữ hàng trăm file trong Local Queue, nhưng backend chỉ nhận một file/lần.
-router.post('/', uploadRateLimit, reserveUploadCapacity, upload.array('files', 1), validatePdf, enforceStorageBudget, uploadFiles);
+router.post('/', requireWorkerEnabled, uploadRateLimit, reserveUploadCapacity, upload.array('files', 1), validatePdf, enforceStorageBudget, uploadFiles);
 router.get('/capacity', getCapacity);
-router.post('/upload-batches/prepare', uploadRateLimit, prepareUploadBatch);
-router.post('/upload-batches/:batchId/confirm', uploadRateLimit, confirmUploadBatch);
-router.post('/upload-batches/:batchId/abandon', uploadRateLimit, abandonUploadBatchItems);
+router.post('/upload-batches/prepare', requireWorkerEnabled, uploadRateLimit, prepareUploadBatch);
+router.post('/upload-batches/:batchId/confirm', requireWorkerEnabled, uploadRateLimit, confirmUploadBatch);
+router.post('/upload-batches/:batchId/abandon', requireWorkerEnabled, abandonUploadBatchItems);
 router.get('/upload-batches', listUploadBatches);
 router.get('/upload-batches/:batchId', getUploadBatchStatus);
 
@@ -88,16 +96,16 @@ router.get('/stream', streamLogs);
 
 // 4. API Xóa tiến trình hàng loạt 
 // Định tuyến POST /bulk-delete (Nhận mảng jobIds qua req.body)
-router.post('/bulk-delete', bulkDeleteJobs);
-router.post('/jobs/retry-terminal', retryTerminalFailures);
+router.post('/bulk-delete', requireWorkerEnabled, bulkDeleteJobs);
+router.post('/jobs/retry-terminal', requireWorkerEnabled, retryTerminalFailures);
 
 // 5. API Xóa tiến trình đơn lẻ
 // Định tuyến DELETE /jobs/:jobId
-router.delete('/jobs/:jobId', deleteJob);
+router.delete('/jobs/:jobId', requireWorkerEnabled, deleteJob);
 
 // [THÊM MỚI] 6. API Ép hệ thống thức dậy thủ công
 // Gọi POST /force-wakeup để hủy trạng thái ngủ đông
-router.post('/force-wakeup', forceWakeUpSystem);
+router.post('/force-wakeup', requireWorkerEnabled, forceWakeUpSystem);
 router.post('/maintenance/pause', requireMaintenanceControl, pauseForRedeploy);
 router.post('/maintenance/cancel', requireMaintenanceControl, cancelRedeployPause);
 router.post(
@@ -108,6 +116,6 @@ router.post(
 );
 
 // [THÊM MỚI] 7. API Xóa toàn bộ hàng đợi thư mục (Nhận folderName qua URL params)
-router.delete('/folder/:folderName', deleteFolderQueue);
+router.delete('/folder/:folderName', requireWorkerEnabled, deleteFolderQueue);
 
 export default router;

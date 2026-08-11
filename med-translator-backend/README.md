@@ -21,8 +21,9 @@ Các giới hạn quan trọng:
 - `TRANSLATION_WORKER_CONCURRENCY`: chỉ nhận số nguyên từ `1` đến `3`, mặc định `3`.
 - `PARALLEL_SOURCE_BUDGET_MB`: chỉ nhận số nguyên từ `10` đến `100`, mặc định `15`. Đây là tổng `sourceSize` của các job chạy song song, không phải RAM thực tế.
 - `GEMINI_TIMEOUT_MS`: timeout một request Gemini, mặc định 180 giây.
-- `GEMINI_MODEL`: mặc định `gemini-3.5-flash-lite`. Khi deploy, đặt rõ biến này trên Render; không dựa vào fallback để có thể truy vết model đang chạy.
-- `MAINTENANCE_CONTROL_TOKEN`: mã riêng để tạm dừng hàng đợi trước redeploy; đặt một chuỗi ngẫu nhiên dài trên Render, không đặt trong biến `VITE_*` hay commit vào Git.
+- `GEMINI_MODEL`: mặc định `gemini-3.5-flash-lite`. Khi deploy, đặt rõ biến này trên máy chủ; không dựa vào fallback để có thể truy vết model đang chạy.
+- `MAINTENANCE_CONTROL_TOKEN`: mã riêng để tạm dừng hàng đợi trước redeploy; đặt một chuỗi ngẫu nhiên dài trên máy chủ, không đặt trong biến `VITE_*` hay commit vào Git.
+- `WORKER_ENABLED`: chỉ đặt `false` trong cold cutover P014 trước purge. Khi tắt, backend không recovery, cleanup hay claim job và API thay đổi queue trả `503`.
 - `TRANSLATION_PIPELINE_MODE`: mặc định `quality` sau khi chủ dự án chốt B4; đặt rõ `legacy` để rollback.
 - `PDF_PAGES_PER_CHUNK`: số trang mỗi chunk, mặc định 2.
 - `GEMINI_THINKING_LEVEL`: P003 bắt buộc `HIGH` cho quality mode.
@@ -30,11 +31,11 @@ Các giới hạn quan trọng:
 
 ## Redeploy có kiểm soát
 
-Sau khi mọi batch upload đã báo an toàn trên Cloud, chọn nút nhỏ **“Tạm dừng để redeploy”** ở góc trên trái, nhập `MAINTENANCE_CONTROL_TOKEN`, rồi chờ banner báo không còn job đang chạy. Khi đó có thể redeploy Render. Chế độ tạm dừng chỉ tồn tại trong instance cũ; server mới tự nhận queue và chạy bình thường, không cần bấm nút khởi động lại.
+Sau khi mọi batch upload đã báo an toàn trên Cloud, chọn nút nhỏ **“Tạm dừng để redeploy”** ở góc trên trái, nhập `MAINTENANCE_CONTROL_TOKEN`, rồi chờ banner báo không còn job đang chạy. Khi đó có thể redeploy máy chủ. Chế độ tạm dừng chỉ tồn tại trong instance cũ; server mới tự nhận queue và chạy bình thường, không cần bấm nút khởi động lại.
 
-## Chẩn đoán Gemini trên Render Free
+## Chẩn đoán Gemini có kiểm soát
 
-Khi Render không có Shell, có thể tạm bật `GEMINI_DIAGNOSTIC_PROBE_ENABLED=true`
+Khi cần chẩn đoán từ chính máy chủ, có thể tạm bật `GEMINI_DIAGNOSTIC_PROBE_ENABLED=true`
 và gọi `POST /api/translate/diagnostics/gemini-probe` với header
 `X-Maintenance-Token`. Body chỉ nhận một trong hai model:
 
@@ -58,7 +59,7 @@ sau khi chẩn đoán xong.
 - `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.
 - `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; không công khai ID hay tên file active.
 - Tối đa 3 lane có thể chạy đồng thời. Sau job đầu, lane tiếp theo chỉ nhận đúng job FIFO kế tiếp khi mọi job active có `sourceSize` hợp lệ và tổng không vượt `PARALLEL_SOURCE_BUDGET_MB`; job lớn hoặc thiếu size chạy một mình.
-- Ngưỡng source bytes là proxy, không phải phép đo RAM thực. Nếu cần rollback tải xử lý, đặt rõ `TRANSLATION_WORKER_CONCURRENCY=2` và `PARALLEL_SOURCE_BUDGET_MB=10` (hoặc `1` / `10`), rồi restart Render.
+- Ngưỡng source bytes là proxy, không phải phép đo RAM thực. Nếu cần rollback tải xử lý, đặt rõ `TRANSLATION_WORKER_CONCURRENCY=2` và `PARALLEL_SOURCE_BUDGET_MB=10` (hoặc `1` / `10`), rồi restart backend.
 - P008 không đổi schema và không cần migration.
 
 ## Kiểm tra và migration
@@ -94,7 +95,7 @@ npm run migrate:p002:dry
 npm run migrate:p002
 ```
 
-P002 upload trực tiếp PDF vào R2 bằng presigned URL, MongoDB giữ trạng thái queue, còn Render chỉ stream một source về disk tạm khi xử lý. Các lệnh `benchmark:p002-source`, `benchmark:p002-upload` và `reconcile:r2` lần lượt kiểm tra streaming, throughput R2 và object mồ côi.
+P002 upload trực tiếp PDF vào R2 bằng presigned URL, MongoDB giữ trạng thái queue, còn backend chỉ stream một source về disk tạm khi xử lý. Các lệnh `benchmark:p002-source`, `benchmark:p002-upload` và `reconcile:r2` lần lượt kiểm tra streaming, throughput R2 và object mồ côi.
 
 Trước deploy P003, sao lưu ra ngoài repository và chạy migration additive:
 

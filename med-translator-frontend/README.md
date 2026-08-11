@@ -10,7 +10,8 @@ npm install
 npm run dev
 ```
 
-`VITE_API_URL` phải bao gồm `/api/translate`, ví dụ `http://localhost:8080/api/translate`.
+`VITE_API_URL` phải bao gồm `/api/translate`. Production dùng `/api/translate` cùng
+origin qua Caddy; Vite dev tự proxy `/api` sang `http://127.0.0.1:8080`.
 
 ## Kiểm tra
 
@@ -20,7 +21,10 @@ npm run lint
 npm run build
 ```
 
-Không F5 hoặc đóng tab khi còn batch chưa được backend xác nhận `canCloseClient=true`. Khi banner “Đã lưu an toàn trên Cloud” xuất hiện, có thể đóng máy; Render tiếp tục dịch và giao diện sẽ phục hồi batch/job từ MongoDB khi mở lại.
+Không F5 hoặc đóng tab khi còn batch chưa được backend xác nhận `canCloseClient=true`. Khi banner “Đã lưu an toàn trên Cloud” xuất hiện, có thể đóng máy; máy chủ tiếp tục dịch và giao diện sẽ phục hồi batch/job từ MongoDB khi mở lại.
+
+Khi Vercel build với mode `legacy-notice`, frontend chỉ hiện thông báo địa chỉ Oracle
+mới. Mode này không mount ứng dụng, không mở SSE và không gọi production API.
 
 Với quality mode P003, card công việc hiển thị stage `Đang đọc ngữ cảnh toàn tài liệu`, `Đang dịch`, `Đang kiểm định`, `Đang hiệu chỉnh`, `Đang xác minh`, `Đang sửa lỗi` hoặc `Đang xác minh lại`. Chỉ chunk có báo cáo cuối PASS và coverage đầy đủ mới được tính `passed`; mọi lỗi kể cả minor được sửa tối đa hai vòng. Job có chunk không vượt qua coverage/reverify vẫn tải được bản cuối nhưng hiện `Hoàn thành có cảnh báo`, số chunk cần xem lại và phạm vi trang. Với P004, API đặt cùng một header rà soát ở đầu chuỗi dùng cho Preview, Copy Markdown và Download; frontend không tự dựng hoặc lưu header. Đây là cảnh báo kiểm tra thủ công, không phải tuyên bố bản dịch đã được kiểm chứng hoàn toàn.
 

@@ -24,3 +24,50 @@ body {
 #root {
   min-height: 100svh;
 }
+
+.legacy-notice {
+  box-sizing: border-box;
+  display: grid;
+  min-height: 100svh;
+  padding: 24px;
+  place-items: center;
+}
+
+.legacy-notice section {
+  max-width: 560px;
+  padding: 40px;
+  border: 1px solid #dfdfd7;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 6%);
+}
+
+.legacy-notice h1 {
+  margin: 0 0 16px;
+  color: #18334d;
+}
+
+.legacy-notice p {
+  color: #3f4c57;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.legacy-notice a {
+  color: #005ea8;
+  font-weight: 700;
+}
+
+.legacy-notice__eyebrow {
+  margin: 0 0 8px;
+  color: #5b7080 !important;
+  font-size: .875rem !important;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.legacy-notice__detail {
+  margin-bottom: 0;
+  font-size: .9rem !important;
+}

@@ -133,6 +133,10 @@ function readBoolean(name, fallback, source = process.env) {
     throw new Error(`${name} chỉ nhận true hoặc false.`);
 }
 
+export function readWorkerEnabled(source = process.env) {
+    return readBoolean('WORKER_ENABLED', true, source);
+}
+
 function readEnum(name, accepted, fallback, source = process.env) {
     const normalized = source[name]?.trim().toLowerCase() || fallback;
     if (!accepted.includes(normalized)) {
@@ -161,6 +165,7 @@ export const GEMINI_DIAGNOSTIC_PROBE_ENABLED = readBoolean(
     'GEMINI_DIAGNOSTIC_PROBE_ENABLED',
     false
 );
+export const WORKER_ENABLED = readWorkerEnabled();
 export const TRANSLATION_WORKER_CONCURRENCY = readTranslationWorkerConcurrency();
 export const PARALLEL_SOURCE_BUDGET_BYTES = readParallelSourceBudgetMb() * 1024 * 1024;
 export const GEMINI_SCHEDULER_MODE = readEnum(
@@ -242,7 +247,7 @@ export function validateRuntimeEnv() {
                 throw new Error('GEMINI_MAX_CONCURRENCY không được vượt quá 100.');
             }
             if (GEMINI_PROJECT_MAX_IN_FLIGHT > 2) {
-                throw new Error('GEMINI_PROJECT_MAX_IN_FLIGHT không được vượt quá 2 trên Render miễn phí.');
+                throw new Error('GEMINI_PROJECT_MAX_IN_FLIGHT không được vượt quá 2 trong cấu hình vận hành hiện tại.');
             }
         }
     }
@@ -279,6 +284,7 @@ export function validateRuntimeEnv() {
         mongodbUri,
         frontendUrl: process.env.FRONTEND_URL?.trim() || null,
         maintenanceControlToken: process.env.MAINTENANCE_CONTROL_TOKEN?.trim() || null,
+        workerEnabled: WORKER_ENABLED,
         maxUploadStorageMb: MAX_UPLOAD_STORAGE_MB,
         maxFileSizeMb: MAX_FILE_SIZE_MB,
         maxJobAttempts: MAX_JOB_ATTEMPTS,

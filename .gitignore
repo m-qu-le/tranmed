@@ -1,3 +1,5 @@
 # P003 local benchmark inputs and raw model artifacts must never be committed.
 samplepdf/
 .p003-local/
+/deployment/*.env
+!/deployment/*.env.example

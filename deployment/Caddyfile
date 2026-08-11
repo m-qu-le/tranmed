@@ -1,0 +1,40 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    route {
+        @publicReadiness {
+            method GET
+            path /api/health /api/readiness
+        }
+        @protected {
+            not {
+                method GET
+                path /api/health /api/readiness
+            }
+        }
+
+        basic_auth @protected {
+            {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+        }
+
+        handle @publicReadiness {
+            header Cache-Control "no-store"
+            reverse_proxy backend:8080
+        }
+
+        @api path /api/*
+        handle @api {
+            reverse_proxy backend:8080
+        }
+
+        handle {
+            root * /srv
+            try_files {path} /index.html
+            file_server
+        }
+    }
+}

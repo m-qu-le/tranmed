@@ -322,6 +322,7 @@ function App() {
   const priorityFileInputRef = useRef(null);
   const uploadStartLock = useRef(null);
   if (hiddenUploadBatchIds.current === null) hiddenUploadBatchIds.current = readHiddenUploadBatchIds();
+  const workerDisabled = sysStatus.worker?.enabled === false;
 
   const rememberJobStatuses = items => {
     for (const job of items) jobStatusById.current.set(job.jobId, job.status);
@@ -546,7 +547,7 @@ function App() {
         files: [],
         confirmedFiles: result.confirmedFiles,
         confirmedBytes: result.confirmedBytes,
-        progressMsg: '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Render sẽ tiếp tục dịch.',
+        progressMsg: '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Máy chủ sẽ tiếp tục dịch.',
       });
       void refreshJobStats();
     } catch (error) {
@@ -570,6 +571,10 @@ function App() {
   };
 
   const enqueueFilesForUpload = (inputFiles, { priority = false, targetFolderName = '' } = {}) => {
+    if (workerDisabled) {
+      alert('Hệ thống đang ở chế độ cutover và chưa nhận công việc mới.');
+      return false;
+    }
     const files = Array.from(inputFiles || []);
     if (files.length === 0) return false;
     if (files.length > 500) {
@@ -604,8 +609,10 @@ function App() {
   };
 
   const handleAddToQueue = () => {
-    if (sysStatus.isMaintenancePaused) {
-      alert('Hệ thống đang tạm dừng để redeploy; hãy chờ Render deploy xong rồi upload.');
+    if (sysStatus.isMaintenancePaused || workerDisabled) {
+      alert(workerDisabled
+        ? 'Hệ thống đang ở chế độ cutover và chưa nhận công việc mới.'
+        : 'Hệ thống đang tạm dừng để redeploy; hãy chờ deploy hoàn tất rồi upload.');
       return;
     }
     if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
@@ -617,12 +624,12 @@ function App() {
 
   const handlePriorityDrop = (event) => {
     event.preventDefault();
-    if (sysStatus.isMaintenancePaused) return;
+    if (sysStatus.isMaintenancePaused || workerDisabled) return;
     enqueueFilesForUpload(event.dataTransfer.files, { priority: true });
   };
 
   const handlePriorityFileChange = (event) => {
-    if (sysStatus.isMaintenancePaused) return;
+    if (sysStatus.isMaintenancePaused || workerDisabled) return;
     if (enqueueFilesForUpload(event.target.files, { priority: true })) event.target.value = '';
   };
 
@@ -946,7 +953,7 @@ function App() {
       alert('Hãy chờ toàn bộ batch được xác nhận an toàn trên Cloud trước khi tạm dừng để redeploy.');
       return;
     }
-    if (!window.confirm('Dừng nhận job mới để redeploy? Job đang chạy sẽ được hoàn tất; khi Render deploy bản mới, hàng đợi tự hoạt động lại.')) return;
+    if (!window.confirm('Dừng nhận job mới để redeploy? Job đang chạy sẽ được hoàn tất; bản deploy mới sẽ tự tiếp tục hàng đợi sau khi khởi động.')) return;
     const token = requestMaintenanceToken();
     if (!token) return;
     try {
@@ -1033,7 +1040,7 @@ function App() {
               onClick={handlePauseForRedeploy}
               disabled={sysStatus.maintenance?.controlEnabled === false}
               title={sysStatus.maintenance?.controlEnabled === false
-                ? 'Cần cấu hình MAINTENANCE_CONTROL_TOKEN trên Render'
+                ? 'Cần cấu hình MAINTENANCE_CONTROL_TOKEN trên máy chủ'
                 : 'Tạm dừng nhận job mới trước khi redeploy'}
             >
               ⏸ Tạm dừng để redeploy
@@ -1193,7 +1200,7 @@ function App() {
                 ? `Còn ${sysStatus.worker.activeJobs} job đang hoàn tất; đừng redeploy trước khi về 0.`
                 : 'Không có job đang chạy; có thể redeploy ngay.'}
             </div>
-            <small>Bản Render mới sẽ tự tiếp tục hàng đợi sau khi khởi động.</small>
+            <small>Bản deploy mới sẽ tự tiếp tục hàng đợi sau khi khởi động.</small>
           </aside>
         )}
 
@@ -1206,7 +1213,7 @@ function App() {
               placeholder="📁 Tên thư mục (Vd: USMLE Step 1)" 
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
-              disabled={sysStatus.isMaintenancePaused}
+              disabled={sysStatus.isMaintenancePaused || workerDisabled}
               style={{ padding: '14px 18px', borderRadius: '12px', border: '1.5px solid #e0e0e0', flex: 1, minWidth: '250px', fontSize: '15px', outline: 'none', transition: 'border-color 0.2s', backgroundColor: '#fafafa', color: '#333' }}
               onFocus={(e) => { e.target.style.borderColor = '#007bff'; e.target.style.backgroundColor = '#fff'; }}
               onBlur={(e) => { e.target.style.borderColor = '#e0e0e0'; e.target.style.backgroundColor = '#fafafa'; }}
@@ -1219,7 +1226,7 @@ function App() {
                 accept="application/pdf" 
                 multiple 
                 onChange={handleFileChange} 
-                disabled={sysStatus.isMaintenancePaused}
+                disabled={sysStatus.isMaintenancePaused || workerDisabled}
                 className="file-input"
                 style={{ width: '100%', padding: '12px 15px', background: '#f0f4f8', border: '1.5px dashed #a0aec0', borderRadius: '12px', cursor: 'pointer', color: '#4a5568', transition: 'background 0.2s', fontSize: '14px' }}
                 onMouseEnter={(e) => e.target.style.background = '#e2e8f0'}
@@ -1230,7 +1237,7 @@ function App() {
 
           <button 
             onClick={handleAddToQueue} 
-            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId) || sysStatus.isMaintenancePaused}
+            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId) || sysStatus.isMaintenancePaused || workerDisabled}
             className="upload-btn"
             style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', background: (!selectedFiles || selectedFiles.length === 0) ? '#e9ecef' : '#007bff', color: (!selectedFiles || selectedFiles.length === 0) ? '#adb5bd' : '#ffffff', border: 'none', cursor: (!selectedFiles || selectedFiles.length === 0) ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: (!selectedFiles || selectedFiles.length === 0) ? 'none' : '0 4px 12px rgba(0, 123, 255, 0.3)' }}
           >
@@ -1240,7 +1247,7 @@ function App() {
           {localQueue.some(task => task.canCloseClient) && (
             <div className="cloud-safe-banner" role="status">
               <strong>✅ Đã lưu an toàn trên Cloud — có thể tắt máy</strong>
-              <span>Render sẽ tiếp tục dịch các tài liệu đã xác nhận, không cần giữ tab này mở.</span>
+              <span>Máy chủ sẽ tiếp tục dịch các tài liệu đã xác nhận, không cần giữ tab này mở.</span>
             </div>
           )}
 
@@ -1303,7 +1310,7 @@ function App() {
           <button
             type="button"
             onClick={() => priorityFileInputRef.current?.click()}
-            disabled={sysStatus.isMaintenancePaused}
+            disabled={sysStatus.isMaintenancePaused || workerDisabled}
           >
             Chọn PDF ưu tiên
           </button>
@@ -1313,7 +1320,7 @@ function App() {
             accept="application/pdf"
             multiple
             onChange={handlePriorityFileChange}
-            disabled={sysStatus.isMaintenancePaused}
+            disabled={sysStatus.isMaintenancePaused || workerDisabled}
             className="sr-only"
             aria-label="Chọn các file PDF ưu tiên"
           />

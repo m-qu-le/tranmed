@@ -65,7 +65,7 @@ export async function enforceStorageBudget(req, res, next) {
 
         await Promise.all((req.files || []).map(file => unlink(file.path).catch(() => {})));
         return res.status(507).json({
-            error: 'Upload đã bị hủy vì vượt ngân sách ổ đĩa của Render.'
+            error: 'Upload đã bị hủy vì vượt ngân sách ổ đĩa tạm của máy chủ.'
         });
     } catch (error) {
         next(error);

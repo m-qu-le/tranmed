@@ -18,7 +18,8 @@ import {
     MAX_JOB_ATTEMPTS,
     PARALLEL_SOURCE_BUDGET_BYTES,
     TRANSLATION_PIPELINE_MODE,
-    TRANSLATION_WORKER_CONCURRENCY
+    TRANSLATION_WORKER_CONCURRENCY,
+    WORKER_ENABLED,
 } from '../config/env.js';
 import {
     getNextQualityAction,
@@ -104,9 +105,11 @@ export class QueueManager extends EventEmitter {
         sourceCleanupService = runtimeSourceCleanupService,
         jobDeletionService = runtimeJobDeletionService,
         concurrency = TRANSLATION_WORKER_CONCURRENCY,
+        workerEnabled = WORKER_ENABLED,
     } = {}) {
         super();
         this.concurrency = Math.min(3, concurrency);
+        this.workerEnabled = workerEnabled === true;
         this.activeJobs = new Map();
         this.activeSourceBytes = 0;
         this.pumpPromise = null;
@@ -140,6 +143,10 @@ export class QueueManager extends EventEmitter {
     }
 
     async initDB() {
+        if (!this.workerEnabled) {
+            console.log('⏸️ [QUEUE] Worker disabled by configuration; startup will not recover, clean up, or claim jobs.');
+            return;
+        }
         const now = new Date();
         const cancelledJobs = await Job.find(
             {
@@ -243,6 +250,7 @@ export class QueueManager extends EventEmitter {
                     ? 'draining'
                     : 'drained',
             worker: {
+                enabled: this.workerEnabled,
                 concurrency: this.concurrency,
                 activeJobs: this.activeJobs.size,
                 activeSourceBytes: this.activeSourceBytes,
@@ -1636,7 +1644,7 @@ export class QueueManager extends EventEmitter {
     }
 
     async startWorker() {
-        if (this.isHibernating || this.isMaintenancePaused) return;
+        if (!this.workerEnabled || this.isHibernating || this.isMaintenancePaused) return;
         if (this.pumpPromise) {
             this.pumpRequested = true;
             return this.pumpPromise;

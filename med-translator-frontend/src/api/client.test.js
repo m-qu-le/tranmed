@@ -26,7 +26,7 @@ describe('putPdfToR2', () => {
 
   it('refuses backend or non-R2 upload destinations', async () => {
     const file = new File(['%PDF'], 'source.pdf', { type: 'application/pdf' })
-    await expect(putPdfToR2('https://tranmed.onrender.com/api/upload', file))
+    await expect(putPdfToR2('https://api.example.invalid/api/upload', file))
       .rejects.toThrow(/URL upload R2 không hợp lệ/)
     expect(axiosPut).not.toHaveBeenCalled()
   })

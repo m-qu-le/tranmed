@@ -4,6 +4,7 @@ import {
     getGeminiProjects,
     readParallelSourceBudgetMb,
     readTranslationWorkerConcurrency,
+    readWorkerEnabled,
     validateRuntimeEnv,
 } from '../src/config/env.js';
 
@@ -46,6 +47,16 @@ test('translation worker concurrency defaults to three and never exceeds three s
             /chỉ nhận số nguyên từ 1 đến 3/
         );
     }
+});
+
+test('worker can be explicitly disabled for a cold cutover without changing safe limits', () => {
+    assert.equal(readWorkerEnabled({}), true);
+    assert.equal(readWorkerEnabled({ WORKER_ENABLED: 'false' }), false);
+    assert.equal(readWorkerEnabled({ WORKER_ENABLED: 'true' }), true);
+    assert.throws(
+        () => readWorkerEnabled({ WORKER_ENABLED: 'later' }),
+        /WORKER_ENABLED chỉ nhận true hoặc false/
+    );
 });
 
 test('parallel source budget defaults to the fixed 15 MiB operating budget', () => {

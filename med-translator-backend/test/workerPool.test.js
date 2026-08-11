@@ -269,10 +269,26 @@ test('worker status exposes only aggregate pool observations', () => {
     queue.activeSourceBytes = 3 * MiB;
 
     assert.deepEqual(queue.getSystemStatus().worker, {
+        enabled: true,
         concurrency: 2,
         activeJobs: 1,
         activeSourceBytes: 3 * MiB,
         parallelSourceBudgetBytes: 15 * MiB,
     });
     assert.equal(JSON.stringify(queue.getSystemStatus()).includes('private-job-id'), false);
+});
+
+test('a disabled cutover worker does not recover or claim any queue work at startup', async () => {
+    const queue = new QueueManager({ workerEnabled: false });
+    let claims = 0;
+    queue.claimAdmissibleJob = async () => {
+        claims += 1;
+        return null;
+    };
+
+    await queue.initDB();
+    await queue.startWorker();
+
+    assert.equal(claims, 0);
+    assert.equal(queue.getSystemStatus().worker.enabled, false);
 });
