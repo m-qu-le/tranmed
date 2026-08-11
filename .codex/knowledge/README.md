@@ -1,10 +1,19 @@
 # Knowledge base — StudyMed Translator
 
-Tài liệu kỹ thuật và vận hành dành cho người sửa hệ thống. Nội dung này được đối chiếu với mã nguồn và bằng chứng vận hành trong workspace ngày 25-07-2026; khi khác nhau, **mã nguồn và cấu hình runtime thực tế luôn ưu tiên**. Không ghi secret, URL presigned, PDF, prompt/response Gemini thô, nội dung bản dịch hoặc dữ liệu MongoDB thật vào đây.
+Tài liệu kỹ thuật và vận hành dành cho người sửa hệ thống. Nội dung này được đối
+chiếu với code và lịch sử Git trong workspace ngày 11-08-2026; khi khác nhau,
+**mã nguồn của branch đang checkout và cấu hình runtime được xác minh luôn ưu tiên**.
+Không ghi secret, URL presigned, PDF, prompt/response Gemini thô, nội dung bản dịch
+hoặc dữ liệu MongoDB thật vào đây.
 
 ## Hệ thống hiện tại trong một đoạn
 
-StudyMed Translator nhận PDF y khoa, đưa file trực tiếp từ trình duyệt lên Cloudflare R2, ghi trạng thái bền vững vào MongoDB, rồi một backend Express trên Render lấy job từ hàng đợi để dịch sang Markdown tiếng Việt. Mặc định, mỗi job chạy quality pipeline Gemini: tạo ngữ cảnh toàn tài liệu, dịch theo chunk PDF, audit y khoa, revise, verify và tối đa hai vòng repair/reverify. Kết quả được lưu theo chunk trong MongoDB, có thể xem/copy/tải về; các chunk không đạt chuẩn vẫn có kết quả cuối nhưng được gắn `needs_review` và nhận header cảnh báo khi đọc.
+Code hiện tại vẫn là kiến trúc cloud từng chạy trên Render: browser upload PDF trực
+tiếp lên Cloudflare R2, MongoDB giữ queue/stage/result và backend Express xử lý quality
+pipeline Gemini. Render đã bị suspend vì hết free bandwidth; không có production
+backend đang hoạt động được xác minh. P014 Oracle đã đóng mà không deploy. P015 đang
+ở trạng thái kế hoạch để chuyển trọn frontend/API/worker/source/database mới về máy
+Windows của owner; **local runtime chưa được triển khai trong code**.
 
 ## Thứ tự đọc
 
@@ -14,8 +23,12 @@ StudyMed Translator nhận PDF y khoa, đưa file trực tiếp từ trình duy�
 4. [local-uploader.md](local-uploader.md) — công cụ upload một chạm, cấu trúc nguồn, ledger chống trùng và recovery.
 5. [operations.md](operations.md) — cấu hình, kiểm tra, deploy/redeploy, migration và an toàn dữ liệu.
 6. [known-gaps.md](known-gaps.md) — giới hạn đã biết; không diễn giải chúng là tính năng đã hoàn tất.
-7. `../../project-011/` — hồ sơ P011 đang mở để theo dõi capacity rollout hậu P012.
-8. `../../archive/project-001/` đến `../../archive/project-013/`, trừ P011 đang mở — quyết định và bằng chứng lịch sử. Archive không phải runtime và không thay thế tài liệu này.
+7. `../../project-015/` — authority kế hoạch local-first đang hoạt động; không được
+   diễn giải kế hoạch thành code đã có.
+8. `../../project-011/` — hồ sơ capacity lịch sử vẫn đang mở, nhưng không rollout khi
+   chưa có runtime production/P015 được nghiệm thu.
+9. `../../archive/project-001/` đến `../../archive/project-014/`, trừ P011 đang mở —
+   quyết định và bằng chứng lịch sử. Archive không phải runtime.
 
 ## Snapshot kỹ thuật đang áp dụng
 
@@ -29,20 +42,31 @@ StudyMed Translator nhận PDF y khoa, đưa file trực tiếp từ trình duy�
 | Chunk PDF mặc định | 2 trang (`PDF_PAGES_PER_CHUNK`) |
 | Gemini thinking | bắt buộc `HIGH`, không gửi thoughts ra client |
 | Output ceiling | text 65,536 token; JSON audit/verify/context 16,384 token |
-| Worker config code fallback | 5 job song song, source budget 100 MiB; runtime có thể đặt 1–5 và 10–100 MiB |
+| Worker config code fallback | 3 job song song; source budget 15 MiB; accepted 1–3 và 10–100 MiB |
 | Upload browser → R2 | concurrency 4, presigned URL, prepare/confirm idempotent |
 | Upload laptop → R2 | BAT/Node CLI, concurrency 4, ledger SHA-256 trong LocalAppData |
-| Hạ tầng production | Backend Render Ohio; MongoDB Atlas `tranmed-us-prod` Free/AWS N. Virginia `US_EAST_1`; Cloudflare R2 giữ nguyên |
+| Trạng thái hosting | Render suspended; Oracle P014 không deploy; chưa có backend production đang hoạt động được xác minh |
+| P015 target (chưa có trong code) | Native Node + frontend static + MongoDB/filesystem local trên Windows, loopback-only, vẫn gọi Gemini qua Internet |
 
-Các fallback trên không chứng minh cấu hình Render đang chạy. Muốn biết runtime, gọi `/api/translate/status`, `/api/translate/metrics`, `/api/readiness` và endpoint key status theo hướng dẫn trong `operations.md`; không suy đoán từ `.env` local hoặc archive.
+Không có endpoint live nào hiện được coi là source of truth. Các endpoint status chỉ
+có giá trị sau khi một runtime cụ thể được khởi động và xác minh. Không suy đoán từ
+`.env`, Render URL cũ, tài liệu archive hoặc mục tiêu P015.
 
 ## Quy ước cập nhật
 
 - Nếu thay API, schema, biến môi trường, model/SDK Gemini, queue, R2, chính sách quality hay UI state, cập nhật tối thiểu tài liệu liên quan trong thư mục này cùng thay đổi mã.
 - Mô tả hành vi public phải dựa vào route/controller/public-view, không dựa vào field private trong MongoDB.
 - Không ghi một kết quả smoke/canary cũ thành khẳng định production hiện tại. Ghi rõ đó là bằng chứng lịch sử và thời điểm nếu cần.
-- Không tự chạy migration, smoke dùng Gemini, reconcile R2 hoặc thay đổi Render chỉ để “cập nhật tài liệu”. Đây là thao tác vận hành chủ động.
+- Không tự chạy migration, smoke dùng Gemini, reconcile/purge R2, cài MongoDB local
+  hoặc thay đổi dịch vụ chỉ để “cập nhật tài liệu”. Đây là thao tác vận hành chủ động.
 
 ## Trạng thái lịch sử ngắn gọn
 
-P001–P007 đặt nền queue, R2, quality, warning, dashboard và priority. P008 mở rộng code để cấu hình tối đa 5 worker/100 MiB nhưng thử nghiệm 5/100 trên Render Free từng gây tràn bộ nhớ; không xem đó là cấu hình production an toàn. P009 thêm danh mục thư mục toàn cục và lazy-load job theo thư mục. P010 nâng SDK/model lên Gemini 3.5, bỏ `temperature`, tăng text ceiling lên 65,536 và đổi pipeline version thành `p010-v1`. P011 sửa quota dead-time, thêm project-group rotation/global stage dispatcher; dự án vẫn mở cho mục tiêu capacity 5× dài hạn. P012 chủ động bỏ lịch sử giao diện, bootstrap database trắng và cutover MongoDB từ Hong Kong sang N. Virginia; canary ghi nhận Mongo p95 31 ms so với khoảng 598–757 ms trước đó. P013 khắc phục retry storm 429 bằng dispatcher theo current limit, global rate-limit circuit, adaptive project cooldown, gate re-check, persistence qua restart và safe maintenance drain; production nghiệm thu commit `0f739b1` với 225 logical-issued/226 physical, 0 response 429 và amplification 1,0044. Các hồ sơ trong archive chỉ ghi nhận lịch sử, không thay trạng thái live.
+P001–P007 đặt nền queue, R2, quality, warning, dashboard và priority. P008 từng thử
+5 worker/100 MiB trên Render Free và gây tràn bộ nhớ; code hiện đã khóa 1–3 worker,
+fallback 3 và budget fallback 15 MiB. P009–P013 bổ sung folder/lazy loading, Gemini
+3.5 quality pipeline, project scheduler, Mongo US East và containment retry storm.
+Render stable trước P014 được khóa tại commit `e442641`, branch/tag
+`archive/render-stable-2026-08-11` / `render-stable-2026-08-11`. P014 Oracle đóng vì
+không tạo được tài khoản; snapshot chưa deploy nằm tại `748bdd4`, branch/tag archive
+tương ứng. P015 plan baseline là `3b0d9a4` trên `feature/project-015-local-first`.

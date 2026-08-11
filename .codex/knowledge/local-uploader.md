@@ -1,5 +1,10 @@
 # Local uploader — upload PDF không cần mở giao diện
 
+> **Legacy cloud tool, không phải P015 local runtime.** Code hiện vẫn dùng giao thức
+> prepare/R2/confirm và default API Render đã bị suspend. Chỉ `--dry-run` là kiểm tra
+> local hoàn toàn. P015 sẽ thay đường upload mặc định bằng localhost/filesystem, nhưng
+> thay đổi đó chưa tồn tại.
+
 ## Mục tiêu và phạm vi
 
 Local uploader là công cụ Windows chạy trên laptop của chủ hệ thống. Công cụ quét
@@ -12,9 +17,10 @@ Entry point dành cho người dùng là `../../Upload file chờ dịch.bat`. P
 nằm tại `../../med-translator-backend/scripts/local-uploader.js`; npm script tương
 đương là `npm run upload:staging -- <tham số>`.
 
-Công cụ không tải kết quả dịch, không theo dõi quality pipeline, không xóa PDF
-nguồn và không tự dọn job lỗi trên server. Thành công của uploader chỉ có nghĩa là
-backend đã trả `canCloseClient=true`; quá trình dịch tiếp tục độc lập trên Render.
+Công cụ không tải kết quả dịch, không theo dõi quality pipeline, không xóa PDF nguồn
+và không tự dọn job lỗi trên server. Thành công chỉ có nghĩa backend cloud được cấu
+hình đã trả `canCloseClient=true`; hiện không có backend live được xác minh để quá
+trình dịch tiếp tục độc lập.
 
 ## Cấu trúc nguồn bắt buộc
 
@@ -40,6 +46,9 @@ D:\1. File chờ dịch\
 - Preflight kiểm tra toàn bộ cây trước request ghi: cấu trúc, giới hạn tên, file
   không rỗng, tối đa 350 MB và chữ ký đầu file `%PDF-`. Một lỗi làm dừng toàn bộ
   lượt chạy để không tạo một đợt upload thiếu âm thầm.
+
+350 MB là giới hạn của CLI cloud hiện tại. P015 target dùng upload gate 159 MB và
+workload thực khoảng 10 MB; target đó chưa được áp dụng vào script.
 
 ## Kiến trúc và data flow
 
@@ -157,6 +166,9 @@ node scripts/local-uploader.js --source "D:\Nguồn khác" --api-url "http://loc
 HTTP chỉ được phép cho `localhost`; đích từ xa bắt buộc HTTPS. Dùng
 `node scripts/local-uploader.js --help` để xem interface hiện hành.
 
+Trỏ `--api-url` vào localhost chỉ đổi nơi đặt API. Backend đó vẫn phải hỗ trợ cloud
+batch và R2; lệnh này không biến script thành local-storage uploader của P015.
+
 `--yes` bỏ qua câu hỏi xác nhận và chỉ dành cho automation đã được chủ hệ thống
 phê duyệt rõ. BAT mặc định không truyền cờ này, nên thao tác nhấp đúp vẫn luôn yêu
 cầu nhập `Y`.
@@ -166,7 +178,7 @@ cầu nhập `Y`.
 | Triệu chứng | Hành động |
 | --- | --- |
 | Preflight liệt kê sai cấu trúc | Sửa đúng đường dẫn được báo; chưa có job nào được tạo |
-| Readiness/storage unavailable | Chờ Render/R2 phục hồi rồi chạy lại |
+| Readiness/storage unavailable | Kiểm backend/R2 đã cấu hình; Render default hiện suspended |
 | Maintenance paused | Hoàn tất/cancel quy trình redeploy rồi chạy lại |
 | Batch chưa an toàn | Giữ nguyên nguồn và ledger, chạy lại để resume |
 | File batch dở bị mất/đổi | Khôi phục đúng file cũ trước; không reset ledger |

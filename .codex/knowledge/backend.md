@@ -1,5 +1,10 @@
 # Backend: queue, API, storage và quality
 
+> **Trạng thái 11-08-2026:** tài liệu phần lớn mô tả code cloud baseline `e442641`.
+> Render đang suspended và P015 local-first chưa được triển khai. `src/server.js` vẫn
+> bind `0.0.0.0`, yêu cầu Mongo/Gemini/R2 và khởi động cloud worker; không gọi đây là
+> local runtime cho tới khi P015 thay đổi/test các contract đó.
+
 ## Khởi động
 
 `src/server.js` nạp `runtimeConfig`, khởi tạo Gemini key scheduler, cấu hình CORS/body parser, đăng ký health/readiness và router `/api/translate`, rồi mới mở HTTP sau khi MongoDB kết nối. Sau Mongo connect, `translationQueue.initDB()` phục hồi lease hết hạn, dọn cancel dở, nạp trạng thái circuit breaker, quét local orphan, khởi chạy source-cleanup sweeper và worker; `uploadBatchService.startReconciler()` xử lý batch upload tồn đọng.
@@ -13,12 +18,22 @@ Startup fail-fast nếu thiếu Mongo/Gemini/R2 required env, R2 endpoint không
 - `MAX_JOB_ATTEMPTS` kiểm soát retry xử lý. Queue phân loại infrastructure/content/terminal, đặt `nextRetryAt` và lập timer để thức dậy đúng hạn.
 - Nếu key pool không cấp phát được, circuit breaker persist trạng thái hibernate trong `System`; wake-up tự động hoặc `/force-wakeup` sẽ chạy lại worker. Hibernation không chặn cloud upload. Quota pool exhaustion đi theo deadline authoritative của scheduler, không đợi bộ đếm retry job.
 - `pauseForRedeploy()` ngừng claim mới/retry timer, cho physical request đang chạy hoàn tất rồi suspend job ở ranh giới stage về pending. API pause/cancel bắt buộc header `X-Maintenance-Token` khớp `MAINTENANCE_CONTROL_TOKEN` bằng `timingSafeEqual`; chỉ deploy khi status là `maintenanceState=drained` và active/waiting/processing đều bằng 0.
-- Pool nhận từ 1 đến 5 job. Job đầu có thể chạy độc lập; lane tiếp chỉ nhận đúng job FIFO tiếp theo khi mọi active job có `sourceSize` hợp lệ và `activeSourceBytes + candidate.sourceSize` không vượt `PARALLEL_SOURCE_BUDGET_BYTES`. Unknown/large source chặn parallel admission, không bị bỏ qua.
-- `sourceSize` là proxy cho RAM. P008 đã ghi nhận 5 worker/100 MiB làm Render Free tràn bộ nhớ; đừng nâng runtime worker/budget dựa trên fallback code mà không có quyết định và kiểm chứng vận hành mới.
+- Pool nhận strict từ 1 đến 3 job, fallback code là 3. Job đầu có thể chạy độc lập;
+  lane tiếp chỉ nhận đúng job FIFO tiếp theo khi mọi active job có `sourceSize` hợp lệ
+  và tổng không vượt `PARALLEL_SOURCE_BUDGET_BYTES`. Budget nhận 10–100 MiB, fallback
+  15 MiB. Unknown/large source chặn parallel admission khi đã có active job, không bị
+  bỏ qua vĩnh viễn.
+- `sourceSize` chỉ là proxy cho RAM. Code hiện chưa có P015 RSS/system-CPU admission,
+  PDF split serialization hay hard 50%-RAM governor. Các mục đó là target trong
+  `../../project-015/`, không phải hành vi hiện hành.
 
-## R2, upload batch và cleanup
+## R2, upload batch và cleanup hiện hành
 
 `UploadBatch` + `Job` tạo durable manifest trước khi browser upload. Manifest hiện nhận 1–500 PDF, mỗi file không vượt `MAX_FILE_SIZE_MB` và tổng batch không vượt 2 GiB. Prepare/repeat prepare với `clientBatchId`/`clientUploadId` phải reuse an toàn; confirm chỉ chuyển item sau khi backend HEAD object và so size/ETag. Abandon dùng cho item lỗi và cố gắng dọn object. Priority manifest là boolean: true ép folder reserved `Ưu tiên` và persist `priority=1`; client không thể giả priority bằng tên folder.
+
+P015 dự kiến thêm `storageProvider=local` và MongoDB local, nhưng code baseline vẫn
+bắt buộc cấu hình R2 khi startup. Endpoint multipart legacy có local file path không
+đồng nghĩa P015 local storage/data-root safety đã hoàn thành.
 
 Khi xử lý, `sourceService` stream object R2 xuống file `.part`, kiểm byte và rename atomically rồi mới PDF split; file local luôn được dọn trong `finally`. Completed, cancel và delete gọi `SourceCleanupService` ngay. Nếu delete R2 lỗi, Job chuyển `delete_pending`/`retry`, lưu retry deadline theo exponential backoff (tối đa 6 giờ) và sweeper 60 giây sẽ thử lại. Failed job có `sourceState=ready` được giữ theo `R2_SOURCE_RETENTION_DAYS` để UI có thể retry; sweeper sẽ dọn sau retention.
 
@@ -35,9 +50,12 @@ Quality mode có version `p010-v1`, prompt version `p003-prompts-v3` và context
 - Audit/verify JSON phải pass validator và coverage checklist. Verify/reverify `PASS` chỉ hợp lệ khi coverage `COMPLETE`; bất kỳ FAIL nào có thể repair tối đa hai vòng. Output revision/repair co rút dưới guard coverage 80% bị từ chối để không thay bản đầy đủ bằng bản mất nội dung.
 - `needs_review` giữ final content tốt nhất hiện có. Nếu repair output invalid, reason private chỉ lưu mã lỗi cấu trúc, không lưu raw Gemini response/prompt. Job quality completed có review chunk nhận header Markdown P004 dựng khi đọc.
 
-## API public
+## API của cloud baseline
 
-Base: `/api/translate`. API không có authentication người dùng; CORS, rate limit upload, validation, request-size limit và không lộ dữ liệu private là boundary bắt buộc.
+Base: `/api/translate`. API không có authentication người dùng; CORS, rate limit
+upload, validation, request-size limit và không lộ dữ liệu private là boundary bắt
+buộc nếu deploy web. Với P015, boundary dự kiến là loopback-only, nhưng code hiện vẫn
+listen `0.0.0.0`; phải sửa và test trước khi coi an toàn trên máy cá nhân.
 
 | Method | Path | Hành vi |
 | --- | --- | --- |

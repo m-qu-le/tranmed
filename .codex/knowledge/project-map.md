@@ -1,5 +1,9 @@
 # Bản đồ kiến trúc và luồng dữ liệu
 
+> **Phân lớp trạng thái:** “cloud baseline” dưới đây là code `e442641` vẫn đang có,
+> không phải service live (Render đang suspended). “P015 target” là thiết kế đã chốt
+> nhưng chưa implement. Không trộn hai lớp khi sửa code hoặc chẩn đoán.
+
 ## Thành phần
 
 | Khu vực | Trách nhiệm | Điểm vào/chính |
@@ -14,8 +18,9 @@
 | MongoDB | nguồn sự thật về upload, queue, lease, stage, artifact kết quả và cleanup retry | `Job`, `TranslationChunk`, `UploadBatch`, `System` |
 | Cloudflare R2 | lưu source PDF trong khi upload/chờ/xử lý/retry | object storage |
 | `archive/` | hồ sơ đã đóng, không có import runtime | chỉ đọc |
+| `project-015/` | kế hoạch chuyển trọn runtime/data mới về Windows | tài liệu, chưa import runtime |
 
-## Luồng chính
+## Luồng cloud baseline hiện có
 
 ```text
 Người dùng chọn PDF + folder (hoặc priority)
@@ -28,7 +33,7 @@ Người dùng chọn PDF + folder (hoặc priority)
   → backend HEAD object, kiểm size/ETag, chuyển Job sang pending/sourceState=ready
   → queue atomic claim theo priority, thời điểm tạo, ID
   → Job processing có processingToken + lease heartbeat
-  → Render stream đúng một R2 object xuống cache local tạm
+  → backend process stream R2 object xuống cache local tạm
   → PDF worker chia PDF thành chunk, mặc định 2 trang/chunk
   → quality: document_context một lần/job, rồi xử lý chunk
   → persist stage/kết quả từng chunk vào MongoDB
@@ -36,6 +41,26 @@ Người dùng chọn PDF + folder (hoặc priority)
   → xóa source R2 ngay khi completed/cancelled; lỗi xóa được retry bằng sweeper
   → frontend nhận SSE public; khi mất kết nối thì HTTP resync
 ```
+
+Render URL cũ hiện bị suspend. Luồng trên chỉ chạy khi backend cloud tương thích được
+deploy lại và cấu hình Atlas/R2/Gemini hợp lệ.
+
+## P015 target chưa triển khai
+
+```text
+Browser cùng máy
+  → Node/Express tại 127.0.0.1 phục vụ frontend + API
+  → upload PDF thẳng vào D:\StudyMedData qua file .part + validation + atomic rename
+  → MongoDB local mới giữ queue/lease/quota/stage/result
+  → tối đa 3 source lane như Render; PDF parse/split chỉ 1 lane CPU tại một thời điểm
+  → resource governor tạm dừng admission khi RSS/system RAM/CPU/disk bị áp lực
+  → Gemini API qua Internet
+  → restart/sleep recovery từ local lease/artifact
+```
+
+P015 giữ cloud adapter để tạo branch web về sau, nhưng local runtime mặc định không
+được phụ thuộc Render, Vercel, R2 hoặc Atlas. Upload cap target 159 MB; workload nghiệm
+thu chính khoảng 10 MB. Không khẳng định các behavior này tồn tại trước khi code/test.
 
 ### Quality pipeline
 
@@ -53,8 +78,12 @@ document_context (một lần mỗi quality job)
 
 ## Ranh giới dữ liệu và bảo mật
 
-- Browser không nhận credential MongoDB, R2 hay Gemini. Browser chỉ nhận presigned R2 URL từ backend và URL này được kiểm HTTPS/R2 domain trước PUT.
-- R2 chứa PDF gốc có thời hạn xử lý; Render local filesystem chỉ là cache một source job đang chạy. Không coi filesystem Render là persistent storage.
+- Browser không nhận credential MongoDB, R2 hay Gemini. Trong cloud baseline, browser
+  chỉ nhận presigned R2 URL từ backend và URL này được kiểm HTTPS/R2 domain trước PUT;
+  P015 target không cấp R2 URL cho browser.
+- Trong cloud baseline, R2 chứa PDF gốc có thời hạn; filesystem backend chỉ là cache
+  tạm. Trong P015 target, filesystem dưới data root mới là source bền của local job,
+  nhưng contract/path safety đó chưa có trong code.
 - MongoDB giữ metadata/artifact để resume. SSE chỉ là tín hiệu thời gian thực, không phải nguồn trạng thái.
 - API public chỉ trả summary, result cuối và public quality summary/header. Không trả PDF base64, prompt, draft, audit/reverify raw, context passport, API key hay stack trace.
 - Quality text transient được dọn khi chunk passed; artifact review private chỉ phục vụ resume/triage. Header P004 được dựng lúc đọc, không ghi ngược vào `TranslationChunk.content`.
@@ -70,8 +99,10 @@ document_context (một lần mỗi quality job)
 7. Mỗi stage quality persist atomically; pipeline-version mismatch chỉ reset chunk dở dang, không rewrite chunk terminal có content.
 8. `repairCount` không quá 2; coverage thiếu không bao giờ thành PASS; revision/repair phải qua guard giữ ít nhất 80% meaningful text của bản trước.
 9. Global rate-limit circuit phải được re-check ngay trước Gemini reservation/API call. Generic 429 không đủ để kết luận RPD hết hoặc IP bị block; không tăng concurrency/project pool để dò lỗi quota.
-9. Preview, Copy và Download phải nhận cùng header review do backend dựng, tránh UI tự tái diễn giải report private.
-10. Cleanup source phải idempotent. Failed job R2 giữ source đến `sourceRetentionUntil` để cho phép retry; completed/cancel/delete dọn sớm. Thất bại xóa R2 phải có state/retry thay vì bỏ quên object.
+10. Preview, Copy và Download phải nhận cùng header review do backend dựng, tránh UI tự tái diễn giải report private.
+11. Cleanup source phải idempotent. Failed job R2 giữ source đến `sourceRetentionUntil` để cho phép retry; completed/cancel/delete dọn sớm. Thất bại xóa R2 phải có state/retry thay vì bỏ quên object.
+12. P015 local cleanup chỉ được xóa path đã resolve bên dưới data root; không chấp
+   nhận symlink/junction/path traversal. Đây là planned invariant cần test trước cutover.
 
 ## Vòng đời trạng thái
 
@@ -86,4 +117,6 @@ document_context (một lần mỗi quality job)
 
 ## Không thuộc runtime
 
-Scripts migration/backup/reconcile/smoke là công cụ vận hành được gọi tay. `uploads/` là cache/tạm. `archive/` là tài liệu lịch sử. Không import hoặc build dựa vào các khu vực này.
+Scripts migration/backup/reconcile/smoke là công cụ vận hành được gọi tay. `uploads/`
+hiện là cache/tạm; P015 data root dự kiến nằm ngoài repository. `archive/` và
+`project-015/` là tài liệu, không import hoặc build runtime từ đó.

@@ -1,12 +1,21 @@
 # Frontend: upload, trạng thái và kết quả
 
+> **Trạng thái 11-08-2026:** phần dưới mô tả frontend cloud baseline. Render URL mặc
+> định hiện không usable vì workspace Render bị suspend. P015 sẽ phục vụ production
+> build và API cùng origin trên localhost, nhưng behavior đó chưa được code/test.
+
 Frontend là React 19/Vite. `src/App.jsx` hiện là nơi tập trung phần lớn state/UI; `src/api/client.js` chuẩn hóa base URL và direct R2 PUT; `src/cloudUploader.js` chứa giao thức cloud batch có thể test độc lập.
 
 ## Kết nối backend
 
-`VITE_API_URL` phải là base đã gồm `/api/translate`. Nếu không có biến này, client fallback `https://tranmed.onrender.com/api/translate`. Axios API timeout 30 giây; PUT R2 timeout 15 phút. `putPdfToR2` từ chối URL không HTTPS hoặc không kết thúc bằng `.r2.cloudflarestorage.com`, vì frontend chỉ được PUT vào URL do backend cấp.
+`VITE_API_URL` phải là base đã gồm `/api/translate`. Nếu không có biến này, code hiện
+fallback `https://tranmed.onrender.com/api/translate`; đây là legacy default cần được
+loại bỏ/thay bằng same-origin trong P015, không phải endpoint hoạt động. Axios API
+timeout 30 giây; PUT R2 timeout 15 phút. `putPdfToR2` từ chối URL không HTTPS hoặc
+không kết thúc bằng `.r2.cloudflarestorage.com`, vì cloud mode chỉ được PUT vào URL
+do backend cấp.
 
-## Cloud uploader và close-safe
+## Cloud uploader và close-safe hiện hành
 
 1. Người dùng chọn từ 1 đến 500 PDF cho batch thường hoặc vùng **Hàng đợi ưu tiên**. Backend cũng chặn manifest quá 500 file, file vượt `MAX_FILE_SIZE_MB`, và tổng batch vượt 2 GiB. Batch thường dùng folder người dùng nhập; batch priority luôn gửi `priority: true` và hiển thị group `Ưu tiên`.
 2. UI tạo UUID `clientBatchId` và `clientUploadId` cho từng file; các ID giữ idempotency khi prepare/retry.
@@ -16,6 +25,11 @@ Frontend là React 19/Vite. `src/App.jsx` hiện là nơi tập trung phần l�
 6. Item thất bại hoặc confirm lỗi phải giữ trạng thái lỗi; frontend không được giả đã an toàn. Backend có endpoint abandon để dọn item hỏng khi luồng UI gọi nó.
 
 Không preempt một browser upload đang chạy: priority task mới được xếp local và sẽ bắt đầu sau task local hiện tại. Đây là khác với **worker claim priority** ở backend, vốn ưu tiên tuyệt đối giữa job pending eligible.
+
+P015 target sẽ upload thẳng vào localhost/filesystem và giữ upload gate 159 MB, tối
+ưu cho PDF thực tế khoảng 10 MB. Code hiện vẫn dùng prepare/presigned PUT/confirm R2,
+max file lấy từ backend cloud (fallback hiện 350 MB); không ghi target 159 MB thành
+hành vi đã có.
 
 ### Ẩn batch local
 
@@ -47,6 +61,10 @@ Card/hành động folder chỉ thao tác trên page đã load. Download folder 
 - UI cho phép xem danh sách terminal failures và gọi `/jobs/retry-terminal`. Chỉ failed job còn R2 source ready và thuộc loại retryable mới quay về pending; file đã bị dọn cần upload lại PDF gốc.
 - Nút **Tạm dừng để redeploy** yêu cầu người vận hành nhập `MAINTENANCE_CONTROL_TOKEN`, gửi riêng trong `X-Maintenance-Token`, rồi chờ status có `worker.activeJobs=0` trước deploy. Token không lưu local storage, không đưa vào `VITE_*` và không hiển thị/log.
 - Khi status maintenance paused, UI phải chặn bắt đầu upload mới. Huỷ pause dùng endpoint cancel với token.
+
+Các control redeploy trên thuộc cloud baseline. P015 cần launcher start/stop local và
+shutdown/resume semantics riêng; chưa có launcher, PID lock hoặc local readiness flow
+trong code hiện tại.
 
 ## Test và khoản nợ
 
