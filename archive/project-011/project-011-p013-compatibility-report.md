@@ -10,6 +10,10 @@
 | Commit diagnostic P013 | `5b1dbdf` — `Add protected Gemini diagnostic probe` |
 | Commit khắc phục P013 | `0f739b1` — `Stop Gemini 429 retry storms` |
 | Kết luận | **TƯƠNG THÍCH CÓ ĐIỀU KIỆN** |
+
+> **ARCHIVE NOTE — 23-08-2026:** P011 đã retired/superseded bởi P015 local-first.
+> Kết luận và gate dưới đây là evidence lịch sử; canary `5 → 6` không được thực hiện
+> và không tạo một yêu cầu rollout đang hoạt động.
 | Quyết định | Giữ P013; tiếp tục mở P011; NO-GO cho 7–10 hoặc đóng dự án |
 | Trạng thái remediation | **Đã hoàn thành cập nhật hồ sơ P0 ngày 25-07-2026; canary và bằng chứng đóng dự án vẫn pending** |
 
@@ -66,7 +70,7 @@ Sau audit, các thay đổi tài liệu P0 đã được áp dụng:
   maintenance drain và trình tự canary/containment.
 - `project-011-input-audit.md` được gắn nhãn baseline lịch sử, có bảng supersession
   P011/P012/P013 và không còn được dùng như mô tả code hiện hành.
-- `../med-translator-backend/PROJECT_POOL_ROLLOUT.md` được đồng bộ gate hậu P013,
+- `../../med-translator-backend/PROJECT_POOL_ROLLOUT.md` được đồng bộ gate hậu P013,
   canary 5 → 6 và hai profile rollback/containment.
 
 Remediation này chỉ sửa hồ sơ/runbook P011. Nó không tự triển khai canary, không thay
@@ -81,8 +85,8 @@ code/config production và không làm mục tiêu ≥5× trở thành đã đ�
    - `project-011-handoff.md`;
    - `project-011-input-audit.md`.
 2. Hồ sơ sự cố và fix plan đã đóng của P013:
-   - `../archive/project-013/project-013.md`;
-   - `../archive/project-013/project-013-fix-plan.md`.
+   - `../project-013/project-013.md`;
+   - `../project-013/project-013-fix-plan.md`.
 3. Diff code:
    - `ab15301..5b1dbdf` cho diagnostic probe;
    - commit `0f739b1` cho containment/circuit/maintenance;
@@ -461,7 +465,7 @@ supersession đã hoàn thành ngày 25-07-2026.
 
 ### Runbook và knowledge base
 
-`../med-translator-backend/PROJECT_POOL_ROLLOUT.md` cùng `.codex/knowledge/backend.md`
+`../../med-translator-backend/PROJECT_POOL_ROLLOUT.md` cùng `.codex/knowledge/backend.md`
 và `.codex/knowledge/operations.md` đã phản ánh phần lớn P013:
 
 - dispatcher theo current limit;

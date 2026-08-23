@@ -33,11 +33,12 @@
 - Render stable được khóa tại commit `e442641`, branch/tag
   `archive/render-stable-2026-08-11` / `render-stable-2026-08-11`.
 - P014 Oracle snapshot chưa deploy nằm tại `748bdd4`, branch/tag archive P014. P015
-  plan baseline là `3b0d9a4`, phát triển trên `feature/project-015-local-first`.
+  local-first đã đóng và được archive ngày 23-08-2026.
 
 ### Capacity P011/P013 — bằng chứng lịch sử
 
-- P011 vẫn có hồ sơ mở, nhưng không rollout/canary khi không có runtime production.
+- P011 đã retired và archive cùng quyết định owner ngày 23-08-2026; không chạy canary
+  capacity còn lại hay dùng cấu hình cloud lịch sử cho P015 local.
 - Kiểm tra live 16:56–16:58 ICT: Mongo operation p95 98 ms/3.610 mẫu, quota
   reserve/release p95 97/95 ms, RSS khoảng 47% và event-loop p95 20 ms; Mongo/resource
   gate đạt.
@@ -51,7 +52,7 @@
   không tăng chỉ vì Mongo p95 xanh; phải điều tra quota
   thật và lặp lại gate ≥200 logical-issued/≥20 chunk terminal với amplification
   ≤1,15, 429 <1%, không lỗi persist/lease/duplicate/mất stage trước mỗi lần tăng.
-- Hồ sơ tham chiếu đang mở: `../../project-011/project-011.md`; runbook:
+- Hồ sơ tham chiếu lịch sử: `../../archive/project-011/project-011.md`; runbook lịch sử:
   `../../med-translator-backend/PROJECT_POOL_ROLLOUT.md`.
 - Hồ sơ sự cố đã đóng: `../../archive/project-013/project-013.md`.
 

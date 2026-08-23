@@ -9,7 +9,7 @@
 | Production backend | `https://tranmed.onrender.com` — Render Ohio (US East) |
 | MongoDB nguồn | Atlas Free, AWS Hong Kong `ap-east-1` |
 | MongoDB đích | Project `TranMed-US`, Free cluster `tranmed-us-prod`, AWS Northern Virginia `us-east-1` / `US_EAST_1` |
-| Dự án tiền nhiệm đang mở lại | `../../project-011/project-011.md` |
+| Dự án tiền nhiệm (archive) | `../project-011/project-011.md` |
 | Mục tiêu | Giữ backend ở Ohio để gọi Google API như hiện tại, đồng thời đưa MongoDB về gần backend để giảm Mongo p95 và tăng throughput |
 | Phạm vi | Controlled cold start trên DB trắng, bootstrap, cutover và rollback URI; không restore lịch sử, không chuyển R2 và không thay đổi quality pipeline |
 

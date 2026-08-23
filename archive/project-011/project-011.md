@@ -5,7 +5,7 @@
 | Mã dự án | `P011` |
 | Ngày mở | 24-07-2026 |
 | Ngày mở lại | 24-07-2026 |
-| Trạng thái | **ĐANG MỞ — P013 là safety authority; gate hậu P013 cho phép đúng một canary 5 → 6, chờ owner triển khai; NO-GO cho 7–10 hoặc đóng P011** |
+| Trạng thái | **ĐÃ ARCHIVE — RETIRED/SUPERSEDED bởi P015 local-first; canary 5 → 6 không thực hiện, không tuyên bố mục tiêu throughput 5× đạt** |
 | Nhánh | `main` |
 | Commit nền P011 | `ab15301` — `Fix Gemini quota dead-time and add group dispatcher` |
 | Production code baseline đã xác minh | `0f739b1` — `Stop Gemini 429 retry storms` |
@@ -14,11 +14,16 @@
 | Mục tiêu | Khi maintenance chạy bình thường và P013 circuit đóng, không để backlog idle quá 2 phút nếu broker còn capacity admissible; khi circuit mở, không issue trước `nextAvailableAt` và tự thức trong 30 giây sau deadline; tăng throughput tối thiểu 5× mà không hạ quality |
 | Báo cáo phân tích đầu vào | `project-011-input-audit.md` |
 | Báo cáo tương thích P013 | `project-011-p013-compatibility-report.md` |
-| Runbook | `../med-translator-backend/PROJECT_POOL_ROLLOUT.md` |
+| Runbook lịch sử | `../../med-translator-backend/PROJECT_POOL_ROLLOUT.md` |
 | Handoff ngắn | `project-011-handoff.md` |
-| Vị trí khi đang mở | `project-011/project-011.md` |
-| Vị trí sau khi đóng | `archive/project-011/project-011.md` |
+| Vị trí archive | `archive/project-011/project-011.md` |
 
+> **Quyết định archive ngày 23-08-2026:** Owner dừng capacity rollout cloud vì P015 đã
+> chuyển runtime sang local-first. Canary `5 → 6` chưa chạy và toàn bộ điều kiện đóng
+> theo throughput 5× chưa có bằng chứng; archive này thể hiện quyết định **retired**,
+> không phải hoàn thành P011. Không chạy lại canary hoặc áp cấu hình P011 cho P015 từ
+> tài liệu này; một yêu cầu capacity mới phải được mở thành dự án mới.
+>
 > P011 từng được đóng ngày 24-07-2026 sau khi scheduler đạt gate volume/reliability và
 > P012 xử lý MongoDB liên vùng. Cùng ngày, P011 được mở lại vì kiểm tra production hậu
 > P012 cho thấy Mongo gate đã đạt nhưng 429/amplification chưa đủ an toàn. P013 sau đó
@@ -30,8 +35,8 @@
 > Dữ liệu trước P012 vẫn không có baseline workload tương đương để chứng minh trung thực
 > mức tăng throughput ≥5×.
 >
-> `../project 006.md` vẫn là kế hoạch hardening lịch sử chưa được đóng bằng hồ sơ riêng;
-> P011 không tự động hoàn tất, thay thế hoặc archive P006 ngoài phạm vi scheduler.
+> `../project-006/project-006.md` cũng được archive cùng quyết định owner; việc chuyển
+> vị trí không khẳng định bất kỳ checklist hardening P006 nào đã hoàn thành.
 
 ## 1. Bất biến đã khóa
 
@@ -286,9 +291,8 @@ hoặc rollback additive schema bằng thao tác destructive.
   khi chuyển hồ sơ vào archive.
 
 Lần đóng trước đã ghi nhận volume/reliability đạt nhưng không chứng minh được điều kiện
-“≥5× pages/giờ”. P011 hiện được mở lại; chỉ chuyển lại vào archive khi toàn bộ điều kiện
-trên có bằng chứng hậu P012 **và hậu P013**. Không sử dụng hồ sơ này để tuyên bố đã đạt
-con số 5×.
+“≥5× pages/giờ”. Owner đã archive P011 ngày 23-08-2026 mà không chạy canary còn lại;
+không sử dụng hồ sơ này để tuyên bố đã đạt con số 5×.
 
 ## 10. Nhật ký mở lại ngày 24-07-2026 — mốc lịch sử trước P013
 

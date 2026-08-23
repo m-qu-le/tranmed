@@ -1,5 +1,9 @@
 # Báo cáo audit luồng dịch StudyMed Translator — baseline lịch sử trước P011/P013
 
+> **ARCHIVE NOTE — 23-08-2026:** P011 đã retired/superseded bởi P015 local-first.
+> Tài liệu này chỉ giữ audit lịch sử; không mở lại capacity rollout hoặc diễn giải
+> checklist cũ là trạng thái runtime hiện hành.
+
 > **Trạng thái tài liệu:** đầu vào lịch sử cho P011. Các vấn đề quota dead-time và
 > project-group scheduler đã được P011 xử lý; nút thắt MongoDB liên vùng được P012 xử
 > lý bằng controlled cold start tại US East; retry amplification/circuit/maintenance

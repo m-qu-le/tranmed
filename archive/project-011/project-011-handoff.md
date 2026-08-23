@@ -1,11 +1,10 @@
-# Bàn giao đang hoạt động — Project 011
+# Bàn giao lịch sử — Project 011
 
 **Cập nhật:** 25-07-2026
 
-**Trạng thái:** P011 đang mở để tiếp tục capacity rollout hậu P012/P013. P013 là
-safety authority. Cửa sổ hậu P013 đã đạt gate cho đúng một canary max concurrency
-`5 → 6`, nhưng owner chưa được ghi nhận là đã triển khai. **NO-GO cho 7–10 hoặc đóng
-P011.**
+> **ARCHIVE NOTE — 23-08-2026:** P011 đã retired/superseded bởi P015 local-first.
+> Canary `5 → 6` không được thực hiện và không có bằng chứng throughput 5×. Nội dung
+> bên dưới là handoff lịch sử, không phải runbook để rollout cấu hình cloud.
 
 ## Điểm tiếp tục chính xác
 
@@ -22,7 +21,7 @@ P011.**
 - Hồ sơ đầy đủ: `project-011.md`.
 - Báo cáo tương thích bắt buộc đọc:
   `project-011-p013-compatibility-report.md`.
-- Runbook hiện hành: `../med-translator-backend/PROJECT_POOL_ROLLOUT.md`.
+- Runbook lịch sử: `../../med-translator-backend/PROJECT_POOL_ROLLOUT.md`.
 
 Không dùng `project-011-input-audit.md` như mô tả code hiện hành. Đó là baseline lịch
 sử trước P011/P013.

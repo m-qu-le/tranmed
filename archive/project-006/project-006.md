@@ -6,16 +6,18 @@
 | --- | --- |
 | Mã kế hoạch | P006 |
 | Ngày lập | 19-07-2026 |
-| Trạng thái tổng | **KẾ HOẠCH — chưa triển khai sửa lỗi; baseline audit đã hoàn tất** |
+| Trạng thái tổng | **ĐÃ ARCHIVE — RETIRED/SUPERSEDED; kế hoạch chưa được triển khai/đóng theo checklist** |
 | Baseline mã nguồn | Nhánh `main`, commit `3926a63bb7e4` |
 | Nguồn yêu cầu | Rà soát toàn dự án, mô tả lỗi, lập lộ trình sửa toàn bộ và bổ sung khả năng theo dấu khi hệ thống thực thi |
-| Tài liệu tham chiếu | `archive/README.md`, `archive/project-001` đến `archive/project-005`, ưu tiên quy ước theo dõi và nghiệm thu của P005 |
+| Tài liệu tham chiếu | `../README.md`, `../project-001` đến `../project-005`, ưu tiên quy ước theo dõi và nghiệm thu của P005 |
 | Phạm vi chính | Backend Express/MongoDB/R2/Gemini, frontend React/Vite, upload/download, queue/lease, quality pipeline, migration, launcher, observability và vận hành |
 | Nguyên tắc sửa | Sửa nguyên nhân gốc tại điểm dùng chung; thay đổi nhỏ nhất đủ đúng; không thêm dependency nếu Node.js hoặc hạ tầng hiện có đã đáp ứng |
-| Vị trí tài liệu khi đang mở | `project 006.md` tại thư mục gốc dự án |
-| Vị trí sau khi đóng | `archive/project-006/project-006.md`, chỉ chuyển khi mọi cổng đóng dự án đạt |
+| Vị trí archive | `archive/project-006/project-006.md` |
 
-> Tài liệu này là nguồn sự thật vận hành của P006. Các số dòng bên dưới được chụp tại baseline và có thể dịch chuyển sau khi sửa; mã lỗi, mã bước, test và bằng chứng mới là định danh bền vững.
+> **Quyết định archive ngày 23-08-2026:** Owner đã chọn retired kế hoạch P006 vì nó
+> lỗi thời sau P015 local-first. Không có xác nhận các lỗi/rủi ro/checklist bên dưới đã
+> được triển khai, waived hoặc qua cổng G11. Tài liệu chỉ là audit lịch sử; không dùng
+> nó làm nguồn sự thật vận hành hay thực thi trực tiếp trên runtime hiện hành.
 
 ## 2. Cách theo dõi kế hoạch
 
@@ -843,6 +845,7 @@ Rollback hoặc dừng traffic ngay khi có một trong các dấu hiệu:
 | `P006-D005` | Chờ chốt | Audit sink, retention đề xuất 90 ngày, quyền đọc, action nào fail-closed. | Security/data owner | — | Schema/storage/privacy |
 | `P006-D006` | Chờ chốt | Canary window, error budget, cleanup freshness/backlog và rollback threshold. | Ops owner | — | G10 gate |
 | `P006-D007` | Đã chốt | Project đang mở giữ tài liệu ở root; chỉ archive sau G11. | Quy ước repository | 19-07-2026 | Vị trí `project 006.md` |
+| `P006-D008` | Đã chốt | Owner archive P006 ở trạng thái retired/superseded; G11 không hoàn tất và không có checklist nào tự được xem là pass hoặc waived. | Owner | 23-08-2026 | `archive/project-006/project-006.md` |
 
 ### 19.2. Nhật ký bằng chứng
 
@@ -852,6 +855,7 @@ Nhật ký append-only; nếu bằng chứng sai, thêm mục đính chính thay
 | --- | --- | --- | --- | --- | --- |
 | `P006-E001` | 19-07-2026 | Baseline audit tại `3926a63bb7e4` | Backend 118/118; frontend 22/22; syntax/lint/build pass; audit 0; coverage backend 84,69%, frontend 66,5% | Các npm gate hiện có, kết quả phiên audit lập kế hoạch | Không chạy live Mongo/R2/Gemini/migration; không phải production evidence |
 | `P006-E002` | — | G0 runtime/worktree snapshot | Chưa chạy | `.p006-local/runs/<runId>/metadata.json` | Chỉ điền sau G0-S01 |
+| `P006-E003` | 23-08-2026 | Quyết định archive | P006 được chuyển vào archive ở trạng thái retired/superseded | Commit archive; không có runtime/test evidence mới | Không phải bằng chứng hoàn thành G11 |
 
 Mẫu mục mới:
 

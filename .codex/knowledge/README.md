@@ -24,8 +24,8 @@ trì fallback web. P014 Oracle vẫn là snapshot chưa deploy.
 6. [known-gaps.md](known-gaps.md) — giới hạn đã biết; không diễn giải chúng là tính năng đã hoàn tất.
 7. `../../archive/project-015/` — hồ sơ local-first đã đóng, gồm quyết định nghiệm thu và
    giới hạn vận hành còn hiệu lực.
-8. `../../project-011/` — hồ sơ capacity lịch sử; không tự rollout lại giả định cũ.
-9. `../../archive/project-001/` đến `../../archive/project-014/`, trừ P011 đang mở —
+8. `../../archive/project-011/` — hồ sơ capacity đã retired; không rollout lại giả định cũ.
+9. `../../archive/project-001/` đến `../../archive/project-015/` —
    quyết định và bằng chứng lịch sử. Archive không phải runtime.
 
 ## Snapshot kỹ thuật đang áp dụng

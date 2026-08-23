@@ -1,13 +1,13 @@
-# P011 — Rollout quota dead-time / Gemini project groups
+# P011 — Historical quota dead-time / Gemini project groups
 
-> **Trạng thái:** P011 đã được mở lại ngày 24-07-2026 để tiếp tục capacity rollout
-> hậu P012. P013 đã xử lý retry storm; cửa sổ hậu P013 tại P011 §11 đạt gate cho đúng
-> một canary max `5 → 6`, đang chờ owner triển khai. P011 vẫn mở và NO-GO cho 7–10/
-> đóng dự án vì chưa có baseline tương đương để chứng minh throughput 5×.
+> **ARCHIVE NOTE — 23-08-2026:** P011 đã retired/superseded bởi P015 local-first.
+> Không chạy canary `5 → 6` và không dùng cấu hình cloud lịch sử dưới đây để vận hành
+> P015. Tài liệu được giữ để giải thích scheduler/P013 containment, không phải runbook
+> rollout đang hoạt động.
 >
-> Hồ sơ: `../project-011/project-011.md`
-> Handoff: `../project-011/project-011-handoff.md`
-> Báo cáo tương thích: `../project-011/project-011-p013-compatibility-report.md`
+> Hồ sơ: `../archive/project-011/project-011.md`
+> Handoff: `../archive/project-011/project-011-handoff.md`
+> Báo cáo tương thích: `../archive/project-011/project-011-p013-compatibility-report.md`
 > Sự cố đã đóng: `../archive/project-013/project-013.md`
 
 Commit nền `ab15301` và bản containment P013 `0f739b1` đã được push/deploy; backup và hai migration production đã hoàn tất.
