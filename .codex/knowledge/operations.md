@@ -96,7 +96,7 @@ Tạo `.env` từ `.env.example` chỉ khi chạy/test **cloud mode** và đặt
 
 Local có `RUNTIME_MODE`, `APP_HOST`, `DATA_ROOT`, disk reserve và CPU admission gate;
 RAM/RSS chỉ là telemetry.
-Xem `../../project-015/project-015-local-setup.md`; cài MongoDB hoặc sửa env vẫn là
+Xem `../../archive/project-015/project-015-local-setup.md`; cài MongoDB hoặc sửa env vẫn là
 thay đổi hệ thống cần làm chủ động, không tự chạy trong một lượt kiểm tra.
 
 `GEMINI_MODEL` nên được đặt rõ trong mọi runtime dù mã có fallback để truy vết model.
@@ -192,7 +192,7 @@ Không có migration bắt buộc riêng cho P004–P010 trong mã hiện tại.
 
 Chỉ bắt đầu từ một branch mới tạo từ
 `origin/archive/render-stable-2026-08-11`; xem
-`../../project-015/project-015-git-recovery.md`. Không deploy P014/P015 nguyên khối.
+`../../archive/project-015/project-015-git-recovery.md`. Không deploy P014/P015 nguyên khối.
 
 1. Kiểm tra batch upload: người dùng phải đã thấy `canCloseClient=true`; đừng redeploy giữa một upload browser chưa được confirm.
 2. Kiểm tra `/api/translate/status`. Dùng UI hoặc `POST /maintenance/pause` với `X-Maintenance-Token` để ngừng claim mới.

@@ -20,7 +20,7 @@
 | Filesystem `DATA_ROOT` | lưu source PDF P015 trong khi upload/chờ/xử lý/retry | `D:\StudyMedData` trên máy owner |
 | Cloudflare R2 | object storage của cloud baseline, chỉ dùng khi đặt explicit cloud mode | object storage |
 | `archive/` | hồ sơ đã đóng, không có import runtime | chỉ đọc |
-| `project-015/` | hồ sơ P015 local-first đã đóng | tài liệu archive |
+| `archive/project-015/` | hồ sơ P015 local-first đã đóng | tài liệu archive |
 
 ## Luồng cloud baseline hiện có
 
@@ -121,4 +121,4 @@ document_context (một lần mỗi quality job)
 
 Scripts migration/backup/reconcile/smoke là công cụ vận hành được gọi tay. `uploads/`
 hiện là cache/tạm; P015 data root dự kiến nằm ngoài repository. `archive/` và
-`project-015/` là tài liệu, không import hoặc build runtime từ đó.
+`archive/project-015/` là tài liệu, không import hoặc build runtime từ đó.

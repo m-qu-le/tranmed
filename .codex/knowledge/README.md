@@ -22,7 +22,7 @@ trì fallback web. P014 Oracle vẫn là snapshot chưa deploy.
 4. [local-uploader.md](local-uploader.md) — công cụ upload một chạm, cấu trúc nguồn, ledger chống trùng và recovery.
 5. [operations.md](operations.md) — cấu hình, kiểm tra, deploy/redeploy, migration và an toàn dữ liệu.
 6. [known-gaps.md](known-gaps.md) — giới hạn đã biết; không diễn giải chúng là tính năng đã hoàn tất.
-7. `../../project-015/` — hồ sơ local-first đã đóng, gồm quyết định nghiệm thu và
+7. `../../archive/project-015/` — hồ sơ local-first đã đóng, gồm quyết định nghiệm thu và
    giới hạn vận hành còn hiệu lực.
 8. `../../project-011/` — hồ sơ capacity lịch sử; không tự rollout lại giả định cũ.
 9. `../../archive/project-001/` đến `../../archive/project-014/`, trừ P011 đang mở —
@@ -67,5 +67,6 @@ fallback 3, budget cloud 15 MiB và budget local 48 MiB. P009–P013 bổ sung f
 Render stable trước P014 được khóa tại commit `e442641`, branch/tag
 `archive/render-stable-2026-08-11` / `render-stable-2026-08-11`. P014 Oracle đóng vì
 không tạo được tài khoản; snapshot chưa deploy nằm tại `748bdd4`, branch/tag archive
-tương ứng. P015 được nghiệm thu và đóng ngày 23-08-2026; tag archive bất biến của
-đợt đóng là `project-015-local-first-2026-08-23`.
+tương ứng. P015 được nghiệm thu và đóng ngày 23-08-2026; tag delivery bất biến là
+`project-015-local-first-2026-08-23`, còn tag tổ chức hồ sơ archive là
+`project-015-archive-2026-08-23`.

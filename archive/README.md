@@ -14,6 +14,8 @@ Thư mục này chỉ chứa bằng chứng và báo cáo lịch sử của các
   US East và canary đạt.
 - `project-013/`: hồ sơ sự cố Gemini 429 trên Render, bản vá rate-limit circuit,
   adaptive cooldown, safe maintenance drain và nghiệm thu production phục hồi.
+- `project-015/`: hồ sơ local-first đã nghiệm thu và đóng; runtime local dùng loopback,
+  MongoDB/filesystem trên máy owner, không có fallback web được hỗ trợ.
 
 Kiến trúc, vận hành và giới hạn đang hiệu lực nằm trong `../.codex/knowledge/`.
 
