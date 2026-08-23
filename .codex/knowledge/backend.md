@@ -1,15 +1,19 @@
 # Backend: queue, API, storage và quality
 
-> **Trạng thái 11-08-2026:** tài liệu phần lớn mô tả code cloud baseline `e442641`.
-> Render đang suspended và P015 local-first chưa được triển khai. `src/server.js` vẫn
-> bind `0.0.0.0`, yêu cầu Mongo/Gemini/R2 và khởi động cloud worker; không gọi đây là
-> local runtime cho tới khi P015 thay đổi/test các contract đó.
+> **Trạng thái P015:** local runtime đã triển khai trên branch
+> `feature/project-015-local-first`; MongoDB Community và launcher trên máy owner đã
+> được owner nghiệm thu với PDF/batch thực ngày 23-08-2026. Phần lịch sử cloud bên
+> dưới chỉ để tham chiếu kỹ thuật; P015 không duy trì fallback web.
 
 ## Khởi động
 
-`src/server.js` nạp `runtimeConfig`, khởi tạo Gemini key scheduler, cấu hình CORS/body parser, đăng ký health/readiness và router `/api/translate`, rồi mới mở HTTP sau khi MongoDB kết nối. Sau Mongo connect, `translationQueue.initDB()` phục hồi lease hết hạn, dọn cancel dở, nạp trạng thái circuit breaker, quét local orphan, khởi chạy source-cleanup sweeper và worker; `uploadBatchService.startReconciler()` xử lý batch upload tồn đọng.
+`RUNTIME_MODE=local` chỉ nhận `APP_HOST=127.0.0.1`, không yêu cầu R2 và phục vụ
+frontend production cùng origin. `DATA_ROOT` sở hữu `sources`, `temp`, `logs`; local
+upload stream vào `.part`, kiểm PDF magic bytes rồi rename atomically. Cloud mode phải
+đặt rõ `RUNTIME_MODE=cloud` và vẫn khởi tạo CORS/R2 như baseline.
 
-Startup fail-fast nếu thiếu Mongo/Gemini/R2 required env, R2 endpoint không HTTPS, hoặc `MAX_FILE_SIZE_MB >= MAX_UPLOAD_STORAGE_MB`. Không đưa secret vào thông báo lỗi public/log không redacted.
+Startup fail-fast nếu thiếu Mongo/Gemini; R2 chỉ bắt buộc ở cloud mode. Local giới hạn
+upload 159 MB, kiểm reserve 10 GB và từ chối symlink/junction/path ngoài data root.
 
 ## Queue và khả năng phục hồi
 
@@ -21,19 +25,19 @@ Startup fail-fast nếu thiếu Mongo/Gemini/R2 required env, R2 endpoint không
 - Pool nhận strict từ 1 đến 3 job, fallback code là 3. Job đầu có thể chạy độc lập;
   lane tiếp chỉ nhận đúng job FIFO tiếp theo khi mọi active job có `sourceSize` hợp lệ
   và tổng không vượt `PARALLEL_SOURCE_BUDGET_BYTES`. Budget nhận 10–100 MiB, fallback
-  15 MiB. Unknown/large source chặn parallel admission khi đã có active job, không bị
-  bỏ qua vĩnh viễn.
-- `sourceSize` chỉ là proxy cho RAM. Code hiện chưa có P015 RSS/system-CPU admission,
-  PDF split serialization hay hard 50%-RAM governor. Các mục đó là target trong
-  `../../project-015/`, không phải hành vi hiện hành.
+  cloud là 15 MiB, local là 48 MiB; máy owner dùng 50 MiB. Unknown/large source chặn
+  parallel admission khi đã có active job, không bị bỏ qua vĩnh viễn.
+- Local resource governor quan sát RSS, available RAM và sampled system CPU, nhưng chỉ
+  CPU sustained mới stop claim mới và resume bằng hysteresis. PDF parse/copy được
+  serialize, còn mỗi lane chỉ materialize một chunk tại một thời điểm.
 
 ## R2, upload batch và cleanup hiện hành
 
 `UploadBatch` + `Job` tạo durable manifest trước khi browser upload. Manifest hiện nhận 1–500 PDF, mỗi file không vượt `MAX_FILE_SIZE_MB` và tổng batch không vượt 2 GiB. Prepare/repeat prepare với `clientBatchId`/`clientUploadId` phải reuse an toàn; confirm chỉ chuyển item sau khi backend HEAD object và so size/ETag. Abandon dùng cho item lỗi và cố gắng dọn object. Priority manifest là boolean: true ép folder reserved `Ưu tiên` và persist `priority=1`; client không thể giả priority bằng tên folder.
 
-P015 dự kiến thêm `storageProvider=local` và MongoDB local, nhưng code baseline vẫn
-bắt buộc cấu hình R2 khi startup. Endpoint multipart legacy có local file path không
-đồng nghĩa P015 local storage/data-root safety đã hoàn thành.
+Ở local mode, upload batch R2 trả `410`; frontend dùng multipart trực tiếp với cùng
+`clientUploadId` để idempotent. Một response thành công nghĩa source đã nằm an toàn
+dưới `DATA_ROOT` và Job đã persist. Cloud flow R2 vẫn không đổi trong cloud mode.
 
 Khi xử lý, `sourceService` stream object R2 xuống file `.part`, kiểm byte và rename atomically rồi mới PDF split; file local luôn được dọn trong `finally`. Completed, cancel và delete gọi `SourceCleanupService` ngay. Nếu delete R2 lỗi, Job chuyển `delete_pending`/`retry`, lưu retry deadline theo exponential backoff (tối đa 6 giờ) và sweeper 60 giây sẽ thử lại. Failed job có `sourceState=ready` được giữ theo `R2_SOURCE_RETENTION_DAYS` để UI có thể retry; sweeper sẽ dọn sau retention.
 
@@ -61,6 +65,7 @@ listen `0.0.0.0`; phải sửa và test trước khi coi an toàn trên máy cá
 | --- | --- | --- |
 | GET | `/api/health` | ping Mongo; heartbeat cơ bản |
 | GET | `/api/readiness` | ping Mongo + HeadBucket R2; 503 nếu không ready |
+| GET | `/api/translate/jobs/active` | tối đa 3 file `processing`, chỉ metadata progress an toàn cho dashboard local |
 | POST | `/upload-batches/prepare` | validate manifest, tạo/reuse batch/job và cấp presigned URLs |
 | POST | `/upload-batches/:batchId/confirm` | xác nhận items trên R2, job ready trở thành pending |
 | POST | `/upload-batches/:batchId/abandon` | bỏ item không upload được và cleanup object nếu có |

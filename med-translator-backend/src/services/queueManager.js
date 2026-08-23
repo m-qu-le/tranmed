@@ -30,9 +30,12 @@ import { PROJECT_POOL_EXECUTION_VERSION } from './geminiKeyScheduler.js';
 import { cleanupOrphanUploads } from './storageService.js';
 import {
     sourceCleanupService as runtimeSourceCleanupService,
-    sourceService as runtimeSourceService
+    sourceService as runtimeSourceService,
+    localStorageService,
+    runtimeConfig,
 } from './runtimeServices.js';
 import { jobDeletionService as runtimeJobDeletionService } from './jobDeletionService.js';
+import { LocalResourceGovernor } from './localResourceGovernor.js';
 import {
     ErrorCodes,
     ProcessingError,
@@ -63,7 +66,16 @@ const SOURCE_CACHE_WAIT_LIMIT_MS = 60_000;
 const WATCHDOG_INTERVAL_MS = 30_000;
 const WATCHDOG_IDLE_LIMIT_MS = 2 * 60_000;
 
+function hasRetryableSource(job) {
+    return job?.sourceState === 'ready'
+        && (
+            (job.storageProvider === 'r2' && Boolean(job.storageKey))
+            || (job.storageProvider === 'local' && Boolean(job.filePath))
+        );
+}
+
 const JOB_SUMMARY_FIELDS = 'jobId originalName folderName priority status error errorCode attemptCount maxAttempts quotaRetryCount retryCount nextRetryAt failureCategory terminalAt sourceRetentionUntil failureAdvice chunkCount completedChunks uploadBatchId uploadConfirmedAt createdAt translationMode translationPipelineVersion currentQualityStage passedChunks needsReviewChunks qualityWarnings processingStartedAt completedAt schedulerSuspended schedulerDeferred schedulerExecutionVersion';
+const ACTIVE_JOB_FIELDS = 'jobId originalName folderName priority processingStartedAt chunkCount completedChunks passedChunks currentQualityStage translationMode';
 const VISIBLE_JOB_FILTER = Object.freeze({ status: { $ne: 'deleted' } });
 
 export function qualityDispatcherWidth(readyCount, limiterSnapshot = {}) {
@@ -104,6 +116,7 @@ export class QueueManager extends EventEmitter {
         sourceCleanupService = runtimeSourceCleanupService,
         jobDeletionService = runtimeJobDeletionService,
         concurrency = TRANSLATION_WORKER_CONCURRENCY,
+        resourceGovernor = new LocalResourceGovernor({ config: runtimeConfig.resourceGovernor }),
     } = {}) {
         super();
         this.concurrency = Math.min(3, concurrency);
@@ -122,6 +135,8 @@ export class QueueManager extends EventEmitter {
         this.sourceService = sourceService;
         this.sourceCleanupService = sourceCleanupService;
         this.jobDeletionService = jobDeletionService;
+        this.resourceGovernor = resourceGovernor;
+        this.resourceTransitionHandler = transition => this.handleResourceTransition(transition);
         this.cleanupTimer = null;
         this.priorityDemandCache = { checkedAt: 0, value: false };
         this.priorityDemandPromise = null;
@@ -141,6 +156,18 @@ export class QueueManager extends EventEmitter {
 
     async initDB() {
         const now = new Date();
+        // P015 local jobs do not have an R2 storage key. Older documents were
+        // written with storageKey=null, which occupies the sole null entry in
+        // MongoDB's unique sparse index and blocks every later local upload.
+        // Unsetting only local records is additive, idempotent, and leaves all
+        // R2 storage keys untouched.
+        const normalizedLocalStorageKeys = await Job.updateMany(
+            { storageProvider: 'local', storageKey: null },
+            { $unset: { storageKey: 1 } }
+        );
+        if (normalizedLocalStorageKeys.modifiedCount > 0) {
+            console.log(`♻️ [DATABASE] Đã chuẩn hóa ${normalizedLocalStorageKeys.modifiedCount} local job storage key.`);
+        }
         const cancelledJobs = await Job.find(
             {
                 status: 'processing',
@@ -210,7 +237,9 @@ export class QueueManager extends EventEmitter {
             }
         }
 
-        const orphanCount = await cleanupOrphanUploads();
+        const orphanCount = localStorageService
+            ? await localStorageService.cleanupOrphanParts()
+            : await cleanupOrphanUploads();
         if (orphanCount > 0) {
             console.log(`🧹 [GC] Đã xóa ${orphanCount} PDF mồ côi khi khởi động.`);
         }
@@ -218,6 +247,8 @@ export class QueueManager extends EventEmitter {
         await this.runSourceCleanupSweep();
         this.startSourceCleanupSweeper();
         this.startDeadTimeWatchdog();
+        this.resourceGovernor.on('transition', this.resourceTransitionHandler);
+        this.resourceGovernor.start();
 
         await this.startWorker();
     }
@@ -242,6 +273,7 @@ export class QueueManager extends EventEmitter {
                 : this.activeJobs.size > 0 || limiter.activeCount > 0
                     ? 'draining'
                     : 'drained',
+            resourceGovernor: this.resourceGovernor.getStatus(),
             worker: {
                 concurrency: this.concurrency,
                 activeJobs: this.activeJobs.size,
@@ -329,6 +361,19 @@ export class QueueManager extends EventEmitter {
         return this.getSystemStatus();
     }
 
+    async shutdown() {
+        this.pauseForRedeploy();
+        if (this.activeJobs.size > 0) {
+            await new Promise(resolve => this.once('workerIdle', resolve));
+        }
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+        if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+        if (this.hibernationTimer) clearTimeout(this.hibernationTimer);
+        this.resourceGovernor.off('transition', this.resourceTransitionHandler);
+        this.resourceGovernor.stop();
+    }
+
     async triggerHibernation(retryAfterMs = null) {
         if (this.isHibernating) return;
         if (!Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return;
@@ -387,6 +432,7 @@ export class QueueManager extends EventEmitter {
                 if (existing.status === 'failed' && existing.errorCode === ErrorCodes.FILE_MISSING) {
                     existing.filePath = file.path;
                     existing.sourceSize = Number.isSafeInteger(file.size) && file.size > 0 ? file.size : null;
+                    existing.sourceSha256 = typeof file.sha256 === 'string' ? file.sha256 : null;
                     existing.status = 'pending';
                     existing.error = null;
                     existing.errorCode = null;
@@ -414,6 +460,7 @@ export class QueueManager extends EventEmitter {
                 priority: priority ? 1 : 0,
                 filePath: file.path,
                 sourceSize: Number.isSafeInteger(file.size) && file.size > 0 ? file.size : null,
+                sourceSha256: typeof file.sha256 === 'string' ? file.sha256 : null,
                 storageProvider: 'local',
                 sourceState: 'ready',
                 status: 'pending',
@@ -453,6 +500,25 @@ export class QueueManager extends EventEmitter {
             items,
             nextCursor: hasMore ? String(items.at(-1)._id) : null
         };
+    }
+
+    async getActiveJobs() {
+        const rows = await Job.find({ status: 'processing' }, ACTIVE_JOB_FIELDS)
+            .sort({ processingStartedAt: 1, _id: 1 })
+            .limit(3)
+            .lean();
+        return rows.map(job => ({
+            jobId: job.jobId,
+            originalName: job.originalName,
+            folderName: job.folderName || 'Mặc định',
+            priority: job.priority === 1,
+            processingStartedAt: job.processingStartedAt || null,
+            chunkCount: Number.isInteger(job.chunkCount) ? job.chunkCount : 0,
+            completedChunks: Number.isInteger(job.completedChunks) ? job.completedChunks : 0,
+            passedChunks: Number.isInteger(job.passedChunks) ? job.passedChunks : 0,
+            currentQualityStage: job.currentQualityStage || null,
+            translationMode: job.translationMode || null,
+        }));
     }
 
     async getFolderJobsSummary({ folderName, limit = 100, cursor = null } = {}) {
@@ -560,23 +626,18 @@ export class QueueManager extends EventEmitter {
             terminalAt: job.terminalAt || job.updatedAt,
             failureCategory: job.failureCategory || classifyFailure(job.errorCode),
             failureAdvice: job.failureAdvice || failureAdvice(job),
-            canRetry: isTerminalRetryable(job.errorCode)
-                && job.storageProvider === 'r2'
-                && job.sourceState === 'ready',
+            canRetry: isTerminalRetryable(job.errorCode) && hasRetryableSource(job),
         }));
         return { items, nextCursor: hasMore ? String(items.at(-1)._id) : null };
     }
 
     async retryTerminalFailures() {
-        const jobs = await Job.find({ status: 'failed' }, 'jobId errorCode storageProvider storageKey sourceState').lean();
+        const jobs = await Job.find({ status: 'failed' }, 'jobId errorCode storageProvider storageKey filePath sourceState').lean();
         let retried = 0;
         let skipped = 0;
         const now = new Date();
         for (const job of jobs) {
-            if (!isTerminalRetryable(job.errorCode)
-                || job.storageProvider !== 'r2'
-                || job.sourceState !== 'ready'
-                || !job.storageKey) {
+            if (!isTerminalRetryable(job.errorCode) || !hasRetryableSource(job)) {
                 skipped += 1;
                 continue;
             }
@@ -710,6 +771,17 @@ export class QueueManager extends EventEmitter {
     }
 
     async claimAdmissibleJob() {
+        const resourceStatus = this.resourceGovernor.evaluate();
+        if (!resourceStatus.canClaim) {
+            this.watchdogState.status = 'blocked';
+            this.watchdogState.blockedReason = resourceStatus.reason || 'LOCAL_RESOURCE_PRESSURE';
+            this.emit('systemStatusChanged', this.getSystemStatus());
+            return null;
+        }
+        if (this.watchdogState.blockedReason?.startsWith('LOCAL_RESOURCE')) {
+            this.watchdogState.status = 'monitoring';
+            this.watchdogState.blockedReason = null;
+        }
         const availability = qualityKeyScheduler.availabilitySnapshot();
         if (availability.gated) {
             if (availability.anyCapacity) qualityKeyScheduler.clearStaleGate();
@@ -927,6 +999,14 @@ export class QueueManager extends EventEmitter {
 
     async assertStageAdmission(job) {
         await this.assertJobActive(job);
+        const resourceStatus = this.resourceGovernor.evaluate();
+        if (!this.resourceGovernor.canStartStage()) {
+            throw new ProcessingError(
+                ErrorCodes.LOCAL_RESOURCE_PRESSURE,
+                'Resource governor đang chặn Gemini stage mới.',
+                { retryable: true, publicMessage: 'Máy đang chịu áp lực tài nguyên; tác vụ sẽ tự tiếp tục khi ổn định.' }
+            );
+        }
         if (this.isMaintenancePaused) {
             this.maintenanceSuspendedJobs.add(job.jobId);
             qualityKeyScheduler.suspendJob(job.jobId);
@@ -975,16 +1055,18 @@ export class QueueManager extends EventEmitter {
     }
 
     async processQualityChunks(job, splitResult, sourcePath, emitLog, signal) {
-        const { chunkBuffers, totalPages, pageRanges } = splitResult;
+        const { totalPages, pageRanges } = splitResult;
+        const chunkCount = pageRanges.length;
         qualityKeyScheduler.resumeJob(job.jobId);
         // Encode lazily when a stage is actually issued, retain it across that
         // chunk's stages, then release it at the terminal boundary.
         const chunkPayloads = new Map();
-        const getChunkPayload = chunkIndex => {
+        const getChunkPayload = async chunkIndex => {
             if (!chunkPayloads.has(chunkIndex)) {
+                const chunkBuffer = await splitResult.getChunk(chunkIndex);
                 chunkPayloads.set(
                     chunkIndex,
-                    Buffer.from(chunkBuffers[chunkIndex]).toString('base64')
+                    Buffer.from(chunkBuffer).toString('base64')
                 );
             }
             return chunkPayloads.get(chunkIndex);
@@ -1017,7 +1099,7 @@ export class QueueManager extends EventEmitter {
             },
         });
         const pipeline = new QualityPipelineService({ ChunkModel: TranslationChunk, executors });
-        const indexes = chunkBuffers.map((_, index) => index);
+        const indexes = Array.from({ length: chunkCount }, (_, index) => index);
         const states = new Map();
         const lastServed = new Map();
         let dispatchSequence = 0;
@@ -1095,7 +1177,7 @@ export class QueueManager extends EventEmitter {
                 pageStart: range.pageStart,
                 pageEnd: range.pageEnd,
                 totalPages,
-                pdfBuffer: () => getChunkPayload(chunkIndex),
+                pdfBuffer: () => chunkPayloads.get(chunkIndex),
                 documentContext,
                 signal,
                 assertActive: () => this.assertJobActive(job),
@@ -1237,14 +1319,17 @@ export class QueueManager extends EventEmitter {
                 }
 
                 this.watchdogState.nextWakeTime = null;
-                const width = qualityDispatcherWidth(
+                // A source lane holds at most one encoded PDF chunk. Gemini
+                // concurrency remains global across the three source lanes.
+                const width = Math.min(1, qualityDispatcherWidth(
                     ready.length,
                     qualityGeminiLimiter.snapshot()
-                );
+                ));
                 const selected = ready.slice(0, width);
                 for (const entry of selected) {
                     lastServed.set(entry.chunkIndex, ++dispatchSequence);
                 }
+                await Promise.all(selected.map(entry => getChunkPayload(entry.chunkIndex)));
                 const batchStartedAt = Date.now();
                 const settled = await Promise.allSettled(selected.map(entry => (
                     pipeline.runOneStage(stageOptions(entry.chunkIndex))
@@ -1297,6 +1382,7 @@ export class QueueManager extends EventEmitter {
         };
 
         let resolvedSource = null;
+        let splitResult = null;
         try {
             resolvedSource = await this.sourceService.resolve(job);
             const sourcePath = resolvedSource.filePath;
@@ -1305,10 +1391,20 @@ export class QueueManager extends EventEmitter {
                 throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
             }
 
-        let splitResult;
         try {
             emitLog('Đang băm PDF...');
-            splitResult = await processPdf(sourcePath, signal);
+            const active = this.activeJobs.get(job.jobId);
+            const splitAbortController = new AbortController();
+            if (active) active.pdfSplitAbortController = splitAbortController;
+            const splitSignal = AbortSignal.any
+                ? AbortSignal.any([signal, splitAbortController.signal])
+                : signal;
+            splitResult = await processPdf(sourcePath, splitSignal, {
+                onSplitActivity: isSplitting => {
+                    const current = this.activeJobs.get(job.jobId);
+                    if (current) current.isSplitting = isSplitting;
+                },
+            });
         } catch (error) {
             if (error instanceof ProcessingError) throw error;
             throw new ProcessingError(
@@ -1322,9 +1418,9 @@ export class QueueManager extends EventEmitter {
             throw new ProcessingError(ErrorCodes.CANCELLED, 'Tác vụ đã được hủy.');
         }
 
-        const { chunkBuffers } = splitResult;
+        const chunkCount = splitResult.pageRanges.length;
 
-        job.chunkCount = chunkBuffers.length;
+        job.chunkCount = chunkCount;
         const translationMode = job.translationMode || 'legacy';
         const existingRows = await TranslationChunk.find({ jobId: job.jobId }, 'chunkIndex content stage qualityStatus').lean();
         const existingChunks = new Map(existingRows
@@ -1334,7 +1430,7 @@ export class QueueManager extends EventEmitter {
             { jobId: job.jobId, processingToken: job.processingToken },
             {
                 $set: {
-                    chunkCount: chunkBuffers.length,
+                    chunkCount,
                     completedChunks: existingChunks.size,
                     translationMode,
                     translationPipelineVersion: translationMode === 'quality'
@@ -1348,12 +1444,15 @@ export class QueueManager extends EventEmitter {
         if (translationMode === 'quality') {
             qualityProgress = await this.processQualityChunks(job, splitResult, sourcePath, emitLog, signal);
         } else {
-            await processTranslation(chunkBuffers, emitLog, {
-                signal,
-                mode: 'legacy',
-                existingChunks,
-                onChunkTranslated: (chunkIndex, content) => this.saveTranslatedChunk(job, chunkIndex, content)
-            });
+            for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+                if (existingChunks.has(chunkIndex)) continue;
+                const chunkBuffer = await splitResult.getChunk(chunkIndex);
+                await processTranslation([chunkBuffer], emitLog, {
+                    signal,
+                    mode: 'legacy',
+                    onChunkTranslated: (_index, content) => this.saveTranslatedChunk(job, chunkIndex, content),
+                });
+            }
         }
 
         if (signal.aborted) {
@@ -1378,7 +1477,7 @@ export class QueueManager extends EventEmitter {
                     nextRetryAt: null,
                     schedulerSuspended: false,
                     schedulerDeferred: false,
-                    completedChunks: chunkBuffers.length,
+                    completedChunks: chunkCount,
                     currentQualityStage: null,
                     ...(qualityProgress || {})
                 }
@@ -1396,18 +1495,47 @@ export class QueueManager extends EventEmitter {
                 translationMode: 'quality',
                 translationPipelineVersion: QUALITY_PIPELINE_VERSION,
             } : {}),
-            completedChunks: chunkBuffers.length,
-            chunkCount: chunkBuffers.length,
+            completedChunks: chunkCount,
+            chunkCount,
             ...(qualityProgress || {})
         });
         emitLog('🎉 Đã dịch xong toàn bộ!');
         } finally {
+            if (resolvedSource && splitResult) await splitResult.close?.();
             await this.sourceService.cleanup(resolvedSource);
         }
     }
 
     async handleProcessingFailure(job, rawError) {
         const error = normalizeProcessingError(rawError);
+        if (error.code === ErrorCodes.LOCAL_RESOURCE_PRESSURE) {
+            const nextRetryAt = new Date(Date.now() + 30_000);
+            await Job.updateOne(
+                { jobId: job.jobId, processingToken: job.processingToken },
+                {
+                    $set: {
+                        status: 'pending',
+                        schedulerDeferred: true,
+                        error: error.publicMessage,
+                        errorCode: ErrorCodes.LOCAL_RESOURCE_PRESSURE,
+                        nextRetryAt,
+                        processingToken: null,
+                        leaseExpiresAt: null,
+                    },
+                }
+            );
+            this.watchdogState.status = 'blocked';
+            this.watchdogState.blockedReason = 'LOCAL_RESOURCE_PRESSURE';
+            this.watchdogState.nextWakeTime = nextRetryAt;
+            this.emitJobUpdate(job.jobId, 'pending', {
+                schedulerDeferred: true,
+                error: error.publicMessage,
+                errorCode: ErrorCodes.LOCAL_RESOURCE_PRESSURE,
+                nextRetryAt,
+            });
+            this.emit('systemStatusChanged', this.getSystemStatus());
+            return;
+        }
         if (error.code === ErrorCodes.SCHEDULER_SUSPENDED) {
             await Job.updateOne(
                 { jobId: job.jobId, processingToken: job.processingToken },
@@ -1600,6 +1728,7 @@ export class QueueManager extends EventEmitter {
             if (current === active) {
                 this.activeJobs.delete(job.jobId);
                 this.activeSourceBytes -= active.sourceSize || 0;
+                if (this.activeJobs.size === 0) this.emit('workerIdle');
             }
             await this.refreshPriorityGate().catch(error => {
                 console.error('❌ [PRIORITY GATE] Không thể làm mới trạng thái:', error.message);
@@ -1668,11 +1797,26 @@ export class QueueManager extends EventEmitter {
     async safeUnlink(filePath) {
         if (!filePath) return;
         try {
-            await fs.unlink(filePath);
+            if (localStorageService) await localStorageService.removeManagedFile(filePath);
+            else await fs.unlink(filePath);
         } catch (error) {
             if (error.code !== 'ENOENT') {
                 console.error(`[GC] Không thể xóa ${filePath}:`, error.message);
             }
+        }
+    }
+
+    handleResourceTransition({ state, reason }) {
+        this.watchdogState.blockedReason = reason;
+        this.watchdogState.status = state === 'normal' ? 'monitoring' : 'resource_governor';
+        if (state === 'suspended') {
+            for (const active of this.activeJobs.values()) {
+                if (active.isSplitting) active.pdfSplitAbortController?.abort(ErrorCodes.LOCAL_RESOURCE_PRESSURE);
+            }
+        }
+        this.emit('systemStatusChanged', this.getSystemStatus());
+        if (state === 'normal' && !this.isMaintenancePaused && !this.isHibernating) {
+            void this.startWorker();
         }
     }
 

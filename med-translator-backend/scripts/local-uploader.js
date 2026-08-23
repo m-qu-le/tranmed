@@ -62,6 +62,7 @@ export class HttpError extends UploaderError {
     constructor(message, status = null, options = {}) {
         super(message, { code: 'HTTP_ERROR', status, ...options });
         this.name = 'HttpError';
+        this.retryAfterMs = Number.isFinite(options.retryAfterMs) ? options.retryAfterMs : 0;
     }
 }
 
@@ -548,7 +549,7 @@ export async function retryOperation(
         } catch (error) {
             lastError = error;
             if (attempt === attempts || !retryWhen(error)) throw error;
-            await sleep(300 * (2 ** (attempt - 1)));
+            await sleep(Math.max(300 * (2 ** (attempt - 1)), error?.retryAfterMs || 0));
         }
     }
     throw lastError;
@@ -564,6 +565,14 @@ async function readResponseJson(response) {
             cause: error,
         });
     }
+}
+
+export function retryAfterMs(response, payload) {
+    const header = response?.headers?.get?.('retry-after');
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const suppliedSeconds = Number(payload?.retryAfterSeconds);
+    return Number.isFinite(suppliedSeconds) && suppliedSeconds >= 0 ? suppliedSeconds * 1000 : 0;
 }
 
 export function createApiClient({
@@ -594,7 +603,8 @@ export function createApiClient({
         if (!response.ok) {
             throw new HttpError(
                 typeof payload?.error === 'string' ? payload.error : `StudyMed trả HTTP ${response.status}.`,
-                response.status
+                response.status,
+                { retryAfterMs: retryAfterMs(response, payload) }
             );
         }
         return payload;

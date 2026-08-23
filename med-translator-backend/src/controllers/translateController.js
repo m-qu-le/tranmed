@@ -3,7 +3,11 @@ import TranslationChunk from '../models/translationChunkModel.js';
 import mongoose from 'mongoose';
 import Job from '../models/jobModel.js';
 import UploadBatch from '../models/uploadBatchModel.js';
-import { r2Service, runtimeConfig, uploadBatchService } from '../services/runtimeServices.js';
+import {
+    runtimeConfig,
+    storageReadiness,
+    uploadBatchService,
+} from '../services/runtimeServices.js';
 import { PRIORITY_FOLDER_NAME, UploadBatchError } from '../services/uploadBatchService.js';
 import { appEvents } from '../services/appEvents.js';
 import { operationalMetrics } from '../services/operationalMetrics.js';
@@ -213,6 +217,14 @@ export const getJobStats = async (_req, res) => {
     }
 };
 
+export const getActiveJobs = async (_req, res) => {
+    try {
+        res.status(200).json({ items: await translationQueue.getActiveJobs() });
+    } catch {
+        res.status(500).json({ error: 'Không thể đọc các file đang dịch.' });
+    }
+};
+
 // API 3: Trích xuất qua ID từ Database
 export const getJobResult = async (req, res) => {
     try {
@@ -371,7 +383,7 @@ export const bulkDeleteJobs = async (req, res) => {
 export const getSystemStatus = async (req, res) => {
     try {
         const [readiness, cleanupBacklog, uploadBacklog] = await Promise.all([
-            r2Service.checkReadiness().catch(() => ({ configured: true, available: false })),
+            storageReadiness().catch(() => ({ configured: true, available: false, mode: runtimeConfig.storage.mode })),
             Job.countDocuments({ sourceCleanupState: { $in: ['pending', 'retry'] } }),
             UploadBatch.countDocuments({ status: { $in: ['uploading', 'partial'] } }),
         ]);
@@ -381,6 +393,11 @@ export const getSystemStatus = async (req, res) => {
             storage: {
                 configured: readiness.configured,
                 available: readiness.available,
+                mode: readiness.mode || runtimeConfig.storage.mode,
+                ...(runtimeConfig.runtimeMode === 'local' ? {
+                    freeBytes: readiness.freeBytes,
+                    diskReserveBytes: readiness.diskReserveBytes,
+                } : {}),
                 cleanupBacklog,
                 uploadBacklog,
             },

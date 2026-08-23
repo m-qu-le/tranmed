@@ -1,20 +1,37 @@
 import { MAX_UPLOAD_STORAGE_MB } from '../config/env.js';
 import { getCapacityStatus, getUploadStorageUsage } from '../services/storageService.js';
 import { unlink } from 'fs/promises';
-import { r2Service } from '../services/runtimeServices.js';
+import {
+    localStorageService,
+    runtimeConfig,
+    storageReadiness,
+} from '../services/runtimeServices.js';
 
 const budgetBytes = MAX_UPLOAD_STORAGE_MB * 1024 * 1024;
 let uploadInProgress = false;
 
 export async function getCapacity(req, res) {
     try {
-        const [capacity, storageReadiness] = await Promise.all([
+        if (runtimeConfig.runtimeMode === 'local') {
+            const readiness = await storageReadiness();
+            return res.status(200).json({
+                canAcceptUpload: !uploadInProgress && readiness.freeBytes >= readiness.diskReserveBytes,
+                reason: uploadInProgress ? 'UPLOAD_IN_PROGRESS' : null,
+                uploadInProgress,
+                freeBytes: readiness.freeBytes,
+                diskReserveBytes: readiness.diskReserveBytes,
+                maxFileSizeBytes: runtimeConfig.maxFileSizeMb * 1024 * 1024,
+                storageMode: 'local',
+                localStorageAvailable: true,
+            });
+        }
+        const [capacity, cloudStorageReadiness] = await Promise.all([
             getCapacityStatus(uploadInProgress),
-            r2Service.checkReadiness().catch(() => ({ configured: true, available: false })),
+            storageReadiness().catch(() => ({ configured: true, available: false })),
         ]);
         res.status(200).json({
             ...capacity,
-            r2UploadAvailable: storageReadiness.available,
+            r2UploadAvailable: cloudStorageReadiness.available,
             renderWorkerDiskAvailable: capacity.usedBytes < capacity.budgetBytes,
         });
     } catch (error) {
@@ -33,6 +50,13 @@ export async function reserveUploadCapacity(req, res, next) {
             });
         }
         uploadInProgress = true;
+
+        if (runtimeConfig.runtimeMode === 'local') {
+            await localStorageService.assertCapacity(0);
+            res.once('finish', release);
+            res.once('close', release);
+            return next();
+        }
 
         const contentLength = Number.parseInt(req.headers['content-length'] || '0', 10);
         if (Number.isFinite(contentLength) && contentLength > budgetBytes) {
@@ -60,6 +84,18 @@ export async function reserveUploadCapacity(req, res, next) {
 
 export async function enforceStorageBudget(req, res, next) {
     try {
+        if (runtimeConfig.runtimeMode === 'local') {
+            try {
+                // The file has already been atomically placed in sources. Check
+                // the real post-upload free space, not an untrusted multipart
+                // Content-Length header.
+                await localStorageService.assertCapacity(0);
+                return next();
+            } catch (error) {
+                await Promise.all((req.files || []).map(file => localStorageService.removeManagedFile(file.path).catch(() => {})));
+                return res.status(507).json({ error: error.publicMessage || 'Ổ dữ liệu local không còn đủ dung lượng dự phòng.' });
+            }
+        }
         const usedBytes = await getUploadStorageUsage();
         if (usedBytes <= budgetBytes) return next();
 

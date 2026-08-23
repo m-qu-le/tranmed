@@ -12,6 +12,7 @@ test('legacy local jobs and prepared R2 jobs coexist in the additive schema', as
         status: 'pending',
     });
     await legacy.validate();
+    assert.equal(Object.hasOwn(legacy.toObject(), 'storageKey'), false);
 
     const r2 = new Job({
         jobId: 'r2-job',

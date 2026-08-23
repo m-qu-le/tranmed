@@ -6,10 +6,11 @@
 - Không chạy migration, backup, reconcile/purge R2, smoke Gemini, cài MongoDB local
   hay thay env dịch vụ chỉ để kiểm tra thông thường. Đây là thao tác chủ động có tác
   động dữ liệu/chi phí/hệ thống.
-- `/api/health` là heartbeat Mongo. `/api/readiness` là readiness Mongo + R2. Cả hai đều cần thành công trước và sau deploy; health không chứng minh R2 usable.
-- Không có runtime production đang hoạt động được xác minh ngày 11-08-2026. Render
-  bị suspend do hết free bandwidth; Oracle P014 không deploy; P015 chưa implement.
-  Chỉ dùng status endpoint sau khi biết chính xác process/branch/config đang chạy.
+- `/api/health` là heartbeat Mongo. `/api/readiness` kiểm Mongo + local data root ở
+  local mode, hoặc Mongo + R2 ở cloud mode.
+- Render vẫn suspended và Oracle P014 không deploy. P015 local (MongoDB, launcher và
+  PDF thực) đã được owner nghiệm thu ngày 23-08-2026; không có fallback web được hỗ
+  trợ. Chỉ dùng status endpoint sau khi biết chính xác process/branch/config đang chạy.
 
 ## Trạng thái deployment và checkpoint
 
@@ -78,9 +79,9 @@
 
 ## Biến môi trường backend
 
-Tạo `.env` từ `.env.example` chỉ khi chạy/test **cloud baseline trên máy phát triển**.
-Đây chưa phải P015 local mode: `validateRuntimeEnv()` hiện vẫn yêu cầu R2 và server
-vẫn bind `0.0.0.0`.
+Tạo `.env` từ `.env.example` chỉ khi chạy/test **cloud mode** và đặt
+`RUNTIME_MODE=cloud`. Local dùng `.env.local` từ `.env.local.example`; local bắt buộc
+`APP_HOST=127.0.0.1`, không yêu cầu R2 và mặc định data root `D:\StudyMedData`.
 
 | Nhóm | Biến | Ghi chú |
 | --- | --- | --- |
@@ -93,9 +94,10 @@ vẫn bind `0.0.0.0`.
 | Pipeline | `TRANSLATION_PIPELINE_MODE`, `PDF_PAGES_PER_CHUNK`, `GEMINI_THINKING_LEVEL`, `QUALITY_MAX_REPAIR_CYCLES` | mode `quality|legacy`; thinking phải `HIGH`; repair 0–2 |
 | Maintenance | `MAINTENANCE_CONTROL_TOKEN` | token riêng cho pause/cancel redeploy; nếu không có, endpoint trả 503 và UI vô hiệu hóa control |
 
-Các biến P015 như `RUNTIME_MODE`, `APP_HOST`, `DATA_ROOT`, memory/CPU/disk gate chưa
-tồn tại trong code/env parser. Không thêm chúng vào `.env` rồi giả định hệ thống đã
-đổi behavior; phải triển khai contract và test trước.
+Local có `RUNTIME_MODE`, `APP_HOST`, `DATA_ROOT`, disk reserve và CPU admission gate;
+RAM/RSS chỉ là telemetry.
+Xem `../../project-015/project-015-local-setup.md`; cài MongoDB hoặc sửa env vẫn là
+thay đổi hệ thống cần làm chủ động, không tự chạy trong một lượt kiểm tra.
 
 `GEMINI_MODEL` nên được đặt rõ trong mọi runtime dù mã có fallback để truy vết model.
 `GEMINI_THINKING_LEVEL=HIGH` là yêu cầu của parser hiện tại, không hạ xuống để giảm

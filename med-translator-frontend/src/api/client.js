@@ -1,7 +1,9 @@
 import axios from 'axios'
 
 export const API_BASE_URL = (
-  import.meta.env.VITE_API_URL || 'https://tranmed.onrender.com/api/translate'
+  // P015 serves the production SPA and API from the same loopback origin.
+  // Cloud deployments keep an explicit VITE_API_URL in their deployment config.
+  import.meta.env.VITE_API_URL || '/api/translate'
 ).replace(/\/+$/, '')
 
 const api = axios.create({

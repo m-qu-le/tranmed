@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     getGeminiProjects,
+    readAppHost,
     readParallelSourceBudgetMb,
+    readRuntimeMode,
     readTranslationWorkerConcurrency,
     validateRuntimeEnv,
 } from '../src/config/env.js';
@@ -36,6 +38,15 @@ test('runtime validation names every missing R2 variable without printing values
     }
 });
 
+test('local runtime defaults to loopback and rejects accidental LAN binding', () => {
+    assert.equal(readRuntimeMode({}), 'local');
+    assert.equal(readAppHost({ RUNTIME_MODE: 'local' }), '127.0.0.1');
+    assert.throws(
+        () => readAppHost({ RUNTIME_MODE: 'local', APP_HOST: '0.0.0.0' }),
+        /127\.0\.0\.1/
+    );
+});
+
 test('translation worker concurrency defaults to three and never exceeds three source jobs', () => {
     assert.equal(readTranslationWorkerConcurrency({}), 3);
     assert.equal(readTranslationWorkerConcurrency({ TRANSLATION_WORKER_CONCURRENCY: '1' }), 1);
@@ -49,7 +60,8 @@ test('translation worker concurrency defaults to three and never exceeds three s
 });
 
 test('parallel source budget defaults to the fixed 15 MiB operating budget', () => {
-    assert.equal(readParallelSourceBudgetMb({}), 15);
+    assert.equal(readParallelSourceBudgetMb({ RUNTIME_MODE: 'cloud' }), 15);
+    assert.equal(readParallelSourceBudgetMb({ RUNTIME_MODE: 'local' }), 48);
     assert.equal(readParallelSourceBudgetMb({ PARALLEL_SOURCE_BUDGET_MB: '10' }), 10);
     assert.equal(readParallelSourceBudgetMb({ PARALLEL_SOURCE_BUDGET_MB: ' 100 ' }), 100);
     for (const value of ['9', '101', '10.5', 'many']) {

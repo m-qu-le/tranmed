@@ -1,16 +1,15 @@
 # Frontend: upload, trạng thái và kết quả
 
-> **Trạng thái 11-08-2026:** phần dưới mô tả frontend cloud baseline. Render URL mặc
-> định hiện không usable vì workspace Render bị suspend. P015 sẽ phục vụ production
-> build và API cùng origin trên localhost, nhưng behavior đó chưa được code/test.
+> **Trạng thái P015:** frontend production được Express local phục vụ cùng origin.
+> Cloud uploader vẫn giữ cho `RUNTIME_MODE=cloud`; local mode đã có direct uploader và
+> được unit-test và owner đã nghiệm thu browser/PDF thật trên máy owner ngày 23-08-2026.
 
 Frontend là React 19/Vite. `src/App.jsx` hiện là nơi tập trung phần lớn state/UI; `src/api/client.js` chuẩn hóa base URL và direct R2 PUT; `src/cloudUploader.js` chứa giao thức cloud batch có thể test độc lập.
 
 ## Kết nối backend
 
-`VITE_API_URL` phải là base đã gồm `/api/translate`. Nếu không có biến này, code hiện
-fallback `https://tranmed.onrender.com/api/translate`; đây là legacy default cần được
-loại bỏ/thay bằng same-origin trong P015, không phải endpoint hoạt động. Axios API
+`VITE_API_URL` phải là base đã gồm `/api/translate` cho cloud deploy. Nếu không có,
+frontend dùng same-origin `/api/translate`, là default của local runtime. Axios API
 timeout 30 giây; PUT R2 timeout 15 phút. `putPdfToR2` từ chối URL không HTTPS hoặc
 không kết thúc bằng `.r2.cloudflarestorage.com`, vì cloud mode chỉ được PUT vào URL
 do backend cấp.
@@ -26,10 +25,10 @@ do backend cấp.
 
 Không preempt một browser upload đang chạy: priority task mới được xếp local và sẽ bắt đầu sau task local hiện tại. Đây là khác với **worker claim priority** ở backend, vốn ưu tiên tuyệt đối giữa job pending eligible.
 
-P015 target sẽ upload thẳng vào localhost/filesystem và giữ upload gate 159 MB, tối
-ưu cho PDF thực tế khoảng 10 MB. Code hiện vẫn dùng prepare/presigned PUT/confirm R2,
-max file lấy từ backend cloud (fallback hiện 350 MB); không ghi target 159 MB thành
-hành vi đã có.
+Khi `/status` báo `storage.mode=local`, UI chuyển sang `uploadBatchToLocal()`: gửi từng
+multipart request tuần tự, giữ `clientUploadId` qua retry và chỉ báo close-safe sau
+response persist source/job. Local không gọi prepare/presigned PUT/confirm R2 và backend
+giữ upload gate 159 MB.
 
 ### Ẩn batch local
 
@@ -37,7 +36,8 @@ Nút “Ẩn/Ẩn tất cả” chỉ khả dụng cho batch close-safe. Nó lư
 
 ## Đồng bộ trạng thái
 
-- Initial load đọc `/status`, `/jobs/stats`, `/jobs/terminal-failures`, `/upload-batches`; UI bổ sung job summary theo folder khi người dùng mở folder.
+- Initial load đọc `/status`, `/jobs/stats`, `/jobs/terminal-failures`; chỉ cloud mode
+  đọc thêm `/upload-batches`. UI bổ sung job summary theo folder khi người dùng mở folder.
 - SSE mở `EventSource(${API_BASE_URL}/stream)`. Server gửi connected, public job/log/system/batch/cleanup events và heartbeat. SSE chỉ cải thiện độ tươi; nó không có đủ state để khôi phục giao diện.
 - Khi SSE reconnect, frontend gọi lại status/batches/stats/terminal failures. Job state persist ở MongoDB là nguồn sự thật; không reset thanh tiến độ chỉ vì kết nối bị mất.
 - Dashboard phải lấy bốn total (`pending`, `processing`, `completed`, `failed`) và danh mục folder từ `/jobs/stats`. “Tải thêm” folder chỉ tải page danh sách, không được cộng/trừ dashboard total.
@@ -58,13 +58,14 @@ Card/hành động folder chỉ thao tác trên page đã load. Download folder 
 
 ## Điều khiển vận hành hiển thị trong UI
 
-- UI cho phép xem danh sách terminal failures và gọi `/jobs/retry-terminal`. Chỉ failed job còn R2 source ready và thuộc loại retryable mới quay về pending; file đã bị dọn cần upload lại PDF gốc.
+- UI cho phép xem danh sách terminal failures và gọi `/jobs/retry-terminal`. Cả R2 và
+  local source còn `ready` đều có thể retry; source đã dọn cần upload lại PDF gốc.
 - Nút **Tạm dừng để redeploy** yêu cầu người vận hành nhập `MAINTENANCE_CONTROL_TOKEN`, gửi riêng trong `X-Maintenance-Token`, rồi chờ status có `worker.activeJobs=0` trước deploy. Token không lưu local storage, không đưa vào `VITE_*` và không hiển thị/log.
 - Khi status maintenance paused, UI phải chặn bắt đầu upload mới. Huỷ pause dùng endpoint cancel với token.
 
-Các control redeploy trên thuộc cloud baseline. P015 cần launcher start/stop local và
-shutdown/resume semantics riêng; chưa có launcher, PID lock hoặc local readiness flow
-trong code hiện tại.
+P015 có `Start-StudyMedLocal.ps1`/`Stop-StudyMedLocal.ps1`: PID lock, readiness trước
+mở browser, Node BelowNormal, safe drain qua local maintenance endpoint và không đặt
+secret trên command line.
 
 ## Test và khoản nợ
 

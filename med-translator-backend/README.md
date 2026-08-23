@@ -15,6 +15,8 @@ npm run dev
 Các giới hạn quan trọng:
 
 - `MAX_UPLOAD_STORAGE_MB`: ngân sách disk cho PDF tạm, mặc định 400 MB.
+- `CLOUD_DIRECT_UPLOAD_RATE_LIMIT_PER_HOUR`: giới hạn upload PDF trực tiếp qua Render trên cloud, mặc định 120/giờ/IP. Luồng R2 batch không dùng giới hạn này.
+- `CLOUD_UPLOAD_CONTROL_RATE_LIMIT_PER_HOUR`: giới hạn request prepare/confirm batch R2, mặc định 600/giờ/IP. Giữ mức này để chống abuse nhưng không chặn thư viện lớn.
 - `R2_SOURCE_RETENTION_DAYS`: giữ source của job lỗi cuối trước khi app tự xóa, mặc định 7 ngày. Cấu hình Cloudflare R2 Lifecycle 8 ngày cho prefix source chỉ là hàng rào chống object mồ côi; app vẫn xóa source ngay khi hoàn thành hoặc khi người dùng dọn hàng đợi.
 - `MAX_FILE_SIZE_MB`: giới hạn một PDF, mặc định 350 MB.
 - `MAX_JOB_ATTEMPTS`: số lần xử lý tối đa của pipeline legacy, mặc định 3. Quality job dùng giới hạn 7 cho lỗi cấp tài liệu; lỗi nội dung cấp chunk dùng chính sách riêng bên dưới.
@@ -56,7 +58,7 @@ sau khi chẩn đoán xong.
 ## Thống kê và worker pool P008
 
 - `GET /api/translate/jobs/stats` tổng hợp `pending`, `processing`, `completed`, `failed` trên toàn collection; phân trang `/jobs` không phải nguồn thống kê dashboard.
-- `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; không công khai ID hay tên file active.
+- `GET /api/translate/status` có thêm `worker.concurrency`, `worker.activeJobs`, `worker.activeSourceBytes` và `worker.parallelSourceBudgetBytes`; `GET /api/translate/jobs/active` trả tối đa ba file đang dịch với metadata progress an toàn cho dashboard local.
 - Tối đa 3 lane có thể chạy đồng thời. Sau job đầu, lane tiếp theo chỉ nhận đúng job FIFO kế tiếp khi mọi job active có `sourceSize` hợp lệ và tổng không vượt `PARALLEL_SOURCE_BUDGET_MB`; job lớn hoặc thiếu size chạy một mình.
 - Ngưỡng source bytes là proxy, không phải phép đo RAM thực. Nếu cần rollback tải xử lý, đặt rõ `TRANSLATION_WORKER_CONCURRENCY=2` và `PARALLEL_SOURCE_BUDGET_MB=10` (hoặc `1` / `10`), rồi restart Render.
 - P008 không đổi schema và không cần migration.

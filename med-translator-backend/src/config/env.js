@@ -5,10 +5,50 @@ import dotenv from 'dotenv';
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(configDir, '../..');
 
-dotenv.config({ path: path.join(backendRoot, '.env'), quiet: true });
+// Local runtime deliberately reads a separate override so a launcher never
+// needs to place a secret in a shortcut or command line. Existing shared
+// provider credentials remain in .env and local-only limits stay in .env.local.
+const requestedRuntimeMode = process.env.RUNTIME_MODE?.trim().toLowerCase();
+const sharedEnvFile = path.join(backendRoot, '.env');
+const envFile = process.env.ENV_FILE
+    ? path.resolve(process.env.ENV_FILE)
+    : path.join(backendRoot, requestedRuntimeMode === 'cloud' ? '.env' : '.env.local');
+
+// Load the shared file first without replacing shell-provided values, then let
+// the explicitly selected runtime file override only its own settings.
+dotenv.config({ path: sharedEnvFile, quiet: true });
+if (envFile !== sharedEnvFile) {
+    dotenv.config({ path: envFile, override: true, quiet: true });
+}
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL?.trim() || 'gemini-3.5-flash-lite';
 export const UPLOAD_DIR = path.join(backendRoot, 'uploads');
+
+export function readRuntimeMode(source = process.env) {
+    const mode = source.RUNTIME_MODE?.trim().toLowerCase() || 'local';
+    if (!['local', 'cloud'].includes(mode)) {
+        throw new Error('RUNTIME_MODE chỉ nhận local hoặc cloud.');
+    }
+    return mode;
+}
+
+export function readAppHost(source = process.env) {
+    const mode = readRuntimeMode(source);
+    const host = source.APP_HOST?.trim() || (mode === 'local' ? '127.0.0.1' : '0.0.0.0');
+    if (mode === 'local' && host !== '127.0.0.1') {
+        throw new Error('APP_HOST của local runtime bắt buộc là 127.0.0.1. LAN/public access cần một dự án security riêng.');
+    }
+    return host;
+}
+
+export function readDataRoot(source = process.env) {
+    const rawValue = source.DATA_ROOT?.trim() || 'D:\\StudyMedData';
+    const dataRoot = path.resolve(rawValue);
+    if (!path.isAbsolute(dataRoot) || dataRoot === path.parse(dataRoot).root) {
+        throw new Error('DATA_ROOT phải là một thư mục tuyệt đối, không được là root của ổ đĩa.');
+    }
+    return dataRoot;
+}
 
 export function getGeminiApiKeys() {
     return (process.env.GEMINI_API_KEYS || '')
@@ -143,7 +183,9 @@ function readEnum(name, accepted, fallback, source = process.env) {
 
 export function readParallelSourceBudgetMb(source = process.env) {
     const rawValue = source.PARALLEL_SOURCE_BUDGET_MB;
-    if (rawValue === undefined || rawValue === '') return 15;
+    if (rawValue === undefined || rawValue === '') {
+        return readRuntimeMode(source) === 'local' ? 48 : 15;
+    }
     const normalized = String(rawValue).trim();
     const value = Number(normalized);
     if (!Number.isSafeInteger(value) || value < 10 || value > 100 || String(value) !== normalized) {
@@ -153,6 +195,9 @@ export function readParallelSourceBudgetMb(source = process.env) {
 }
 
 const p003Config = readP003Config();
+export const RUNTIME_MODE = readRuntimeMode();
+export const APP_HOST = readAppHost();
+export const DATA_ROOT = readDataRoot();
 export const TRANSLATION_PIPELINE_MODE = p003Config.pipelineMode;
 export const PDF_PAGES_PER_CHUNK = p003Config.pagesPerChunk;
 export const GEMINI_THINKING_LEVEL = p003Config.thinkingLevel;
@@ -215,13 +260,32 @@ function readRequiredString(name, missing) {
 }
 
 export const MAX_UPLOAD_STORAGE_MB = readPositiveInteger('MAX_UPLOAD_STORAGE_MB', 400);
-export const MAX_FILE_SIZE_MB = readPositiveInteger('MAX_FILE_SIZE_MB', 350);
+export const MAX_FILE_SIZE_MB = readPositiveInteger(
+    'MAX_FILE_SIZE_MB',
+    RUNTIME_MODE === 'local' ? 159 : 350
+);
 export const MAX_JOB_ATTEMPTS = readPositiveInteger('MAX_JOB_ATTEMPTS', 3);
 export const GEMINI_TIMEOUT_MS = readPositiveInteger('GEMINI_TIMEOUT_MS', 180000);
 export const R2_SOURCE_RETENTION_DAYS = readPositiveInteger('R2_SOURCE_RETENTION_DAYS', 7);
+// Cloud uses direct-to-R2 batches, so its control-plane requests are small and
+// idempotent. Keep a separate, higher guard for them instead of applying the
+// old per-PDF limit to every local upload.
+export const CLOUD_DIRECT_UPLOAD_RATE_LIMIT_PER_HOUR = readPositiveInteger(
+    'CLOUD_DIRECT_UPLOAD_RATE_LIMIT_PER_HOUR',
+    120
+);
+export const CLOUD_UPLOAD_CONTROL_RATE_LIMIT_PER_HOUR = readPositiveInteger(
+    'CLOUD_UPLOAD_CONTROL_RATE_LIMIT_PER_HOUR',
+    600
+);
+export const LOCAL_DISK_RESERVE_MB = readPositiveInteger('LOCAL_DISK_RESERVE_MB', 10_240);
+export const LOCAL_RESOURCE_CPU_PAUSE_PERCENT = readPositiveInteger('LOCAL_RESOURCE_CPU_PAUSE_PERCENT', 75);
+export const LOCAL_RESOURCE_CPU_RESUME_PERCENT = readPositiveInteger('LOCAL_RESOURCE_CPU_RESUME_PERCENT', 50);
 
 export function validateRuntimeEnv() {
     const missing = [];
+    const runtimeMode = readRuntimeMode();
+    const appHost = readAppHost();
     const mongodbUri = readRequiredString('MONGODB_URI', missing);
     if (getGeminiApiKeys().length === 0) missing.push('GEMINI_API_KEYS');
     if (GEMINI_SCHEDULER_MODE === 'project_pool') {
@@ -247,35 +311,48 @@ export function validateRuntimeEnv() {
         }
     }
 
-    const r2AccountId = readRequiredString('R2_ACCOUNT_ID', missing);
-    const r2AccessKeyId = readRequiredString('R2_ACCESS_KEY_ID', missing);
-    const r2SecretAccessKey = readRequiredString('R2_SECRET_ACCESS_KEY', missing);
-    const r2BucketName = readRequiredString('R2_BUCKET_NAME', missing);
-    const r2Endpoint = readRequiredString('R2_ENDPOINT', missing);
-    const r2Region = readRequiredString('R2_REGION', missing);
-    readRequiredString('R2_PRESIGNED_URL_TTL_SECONDS', missing);
-    readRequiredString('R2_UPLOAD_CONCURRENCY', missing);
-    readRequiredString('R2_SOURCE_RETENTION_DAYS', missing);
+    const r2AccountId = runtimeMode === 'cloud' ? readRequiredString('R2_ACCOUNT_ID', missing) : null;
+    const r2AccessKeyId = runtimeMode === 'cloud' ? readRequiredString('R2_ACCESS_KEY_ID', missing) : null;
+    const r2SecretAccessKey = runtimeMode === 'cloud' ? readRequiredString('R2_SECRET_ACCESS_KEY', missing) : null;
+    const r2BucketName = runtimeMode === 'cloud' ? readRequiredString('R2_BUCKET_NAME', missing) : null;
+    const r2Endpoint = runtimeMode === 'cloud' ? readRequiredString('R2_ENDPOINT', missing) : null;
+    const r2Region = runtimeMode === 'cloud' ? readRequiredString('R2_REGION', missing) : null;
+    if (runtimeMode === 'cloud') {
+        readRequiredString('R2_PRESIGNED_URL_TTL_SECONDS', missing);
+        readRequiredString('R2_UPLOAD_CONCURRENCY', missing);
+        readRequiredString('R2_SOURCE_RETENTION_DAYS', missing);
+    }
 
     if (missing.length > 0) {
         throw new Error(`Thiếu biến môi trường bắt buộc: ${missing.join(', ')}`);
     }
-    if (MAX_FILE_SIZE_MB >= MAX_UPLOAD_STORAGE_MB) {
+    if (runtimeMode === 'cloud' && MAX_FILE_SIZE_MB >= MAX_UPLOAD_STORAGE_MB) {
         throw new Error('MAX_FILE_SIZE_MB phải nhỏ hơn MAX_UPLOAD_STORAGE_MB để chừa dung lượng vận hành.');
     }
-
-    let parsedR2Endpoint;
-    try {
-        parsedR2Endpoint = new URL(r2Endpoint);
-    } catch {
-        throw new Error('R2_ENDPOINT phải là URL HTTPS hợp lệ.');
+    if (runtimeMode === 'local' && MAX_FILE_SIZE_MB > 159) {
+        throw new Error('MAX_FILE_SIZE_MB của local runtime không được vượt 159 MB.');
     }
-    if (parsedR2Endpoint.protocol !== 'https:') {
-        throw new Error('R2_ENDPOINT phải sử dụng HTTPS.');
+    if (LOCAL_RESOURCE_CPU_RESUME_PERCENT >= LOCAL_RESOURCE_CPU_PAUSE_PERCENT) {
+        throw new Error('LOCAL_RESOURCE_CPU_RESUME_PERCENT phải nhỏ hơn LOCAL_RESOURCE_CPU_PAUSE_PERCENT.');
+    }
+
+    let parsedR2Endpoint = null;
+    if (runtimeMode === 'cloud') {
+        try {
+            parsedR2Endpoint = new URL(r2Endpoint);
+        } catch {
+            throw new Error('R2_ENDPOINT phải là URL HTTPS hợp lệ.');
+        }
+        if (parsedR2Endpoint.protocol !== 'https:') {
+            throw new Error('R2_ENDPOINT phải sử dụng HTTPS.');
+        }
     }
 
     return Object.freeze({
         port: readPositiveInteger('PORT', 8080),
+        runtimeMode,
+        appHost,
+        dataRoot: runtimeMode === 'local' ? readDataRoot() : null,
         mongodbUri,
         frontendUrl: process.env.FRONTEND_URL?.trim() || null,
         maintenanceControlToken: process.env.MAINTENANCE_CONTROL_TOKEN?.trim() || null,
@@ -283,6 +360,10 @@ export function validateRuntimeEnv() {
         maxFileSizeMb: MAX_FILE_SIZE_MB,
         maxJobAttempts: MAX_JOB_ATTEMPTS,
         geminiTimeoutMs: GEMINI_TIMEOUT_MS,
+        uploadRateLimits: Object.freeze({
+            cloudDirectPerHour: CLOUD_DIRECT_UPLOAD_RATE_LIMIT_PER_HOUR,
+            cloudControlPerHour: CLOUD_UPLOAD_CONTROL_RATE_LIMIT_PER_HOUR,
+        }),
         gemini: Object.freeze({
             schedulerMode: GEMINI_SCHEDULER_MODE,
             activeProjectLimit: GEMINI_ELIGIBLE_PROJECT_LIMIT,
@@ -294,7 +375,20 @@ export function validateRuntimeEnv() {
             projectLimits: GEMINI_PROJECT_LIMITS,
         }),
         translation: p003Config,
-        r2: Object.freeze({
+        storage: Object.freeze({
+            mode: runtimeMode === 'local' ? 'local' : 'r2',
+            dataRoot: runtimeMode === 'local' ? readDataRoot() : null,
+            diskReserveBytes: LOCAL_DISK_RESERVE_MB * 1024 * 1024,
+        }),
+        resourceGovernor: Object.freeze({
+            enabled: runtimeMode === 'local',
+            cpuPausePercent: LOCAL_RESOURCE_CPU_PAUSE_PERCENT,
+            cpuResumePercent: LOCAL_RESOURCE_CPU_RESUME_PERCENT,
+            cpuPressureDurationMs: 15_000,
+            recoveryDurationMs: 30_000,
+            sampleIntervalMs: 5_000,
+        }),
+        r2: runtimeMode === 'cloud' ? Object.freeze({
             accountId: r2AccountId,
             accessKeyId: r2AccessKeyId,
             secretAccessKey: r2SecretAccessKey,
@@ -304,6 +398,6 @@ export function validateRuntimeEnv() {
             presignedUrlTtlSeconds: readPositiveInteger('R2_PRESIGNED_URL_TTL_SECONDS'),
             uploadConcurrency: readPositiveInteger('R2_UPLOAD_CONCURRENCY'),
             sourceRetentionDays: R2_SOURCE_RETENTION_DAYS,
-        }),
+        }) : null,
     });
 }

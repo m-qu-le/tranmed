@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PDFDocument } from 'pdf-lib';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { extractPdfPageRange, splitPdfToBuffers } from '../src/utils/pdfSplitter.js';
 import { processPdf } from '../src/services/pdfService.js';
 import { ErrorCodes } from '../src/utils/processingError.js';
@@ -35,6 +38,28 @@ test('processPdf stops its worker when cancellation was already requested', asyn
         processPdf('file-does-not-need-to-exist.pdf', controller.signal),
         error => error.code === ErrorCodes.CANCELLED
     );
+});
+
+test('processPdf exposes one transferable chunk at a time instead of all chunk buffers', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'studymed-pdf-session-'));
+    const filePath = path.join(directory, 'source.pdf');
+    const source = await PDFDocument.create();
+    for (let page = 0; page < 3; page += 1) source.addPage([200, 200]);
+    await fs.writeFile(filePath, Buffer.from(await source.save()));
+    let session;
+    try {
+        session = await processPdf(filePath);
+        assert.equal(session.totalPages, 3);
+        assert.deepEqual(session.pageRanges, [
+            { pageStart: 1, pageEnd: 2 },
+            { pageStart: 3, pageEnd: 3 },
+        ]);
+        assert.equal((await PDFDocument.load(await session.getChunk(0))).getPageCount(), 2);
+        assert.equal((await PDFDocument.load(await session.getChunk(1))).getPageCount(), 1);
+    } finally {
+        await session?.close();
+        await fs.rm(directory, { recursive: true, force: true });
+    }
 });
 
 test('extractPdfPageRange uses one-based inclusive ranges and truncates the last chunk', async () => {

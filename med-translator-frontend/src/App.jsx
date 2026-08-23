@@ -3,6 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import './App.css';
 import api, { API_BASE_URL } from './api/client.js';
 import { uploadBatchToCloud } from './cloudUploader.js';
+import { uploadBatchToLocal } from './localUploader.js';
+import { planUploadBatches } from './uploadBatchPlanner.js';
 
 const formatMegabytes = bytes => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} MB`;
 const HIDDEN_UPLOAD_BATCH_IDS_KEY = 'studymed.hiddenUploadBatchIds.v1';
@@ -310,6 +312,7 @@ function App() {
   const [showTerminalFailures, setShowTerminalFailures] = useState(false);
   const [jobStats, setJobStats] = useState(null);
   const [sysStatus, setSysStatus] = useState({ isHibernating: false, isMaintenancePaused: false, stats: null });
+  const [runtimeMode, setRuntimeMode] = useState('cloud');
   const [statusClock, setStatusClock] = useState(Date.now());
   const [geminiKeyStatus, setGeminiKeyStatus] = useState(null);
   const [isCheckingGeminiKeys, setIsCheckingGeminiKeys] = useState(false);
@@ -355,16 +358,20 @@ function App() {
           }),
         ]);
         setSysStatus(statusRes.data);
+        const isLocal = statusRes.data?.storage?.mode === 'local';
+        setRuntimeMode(isLocal ? 'local' : 'cloud');
         const initialStats = normalizeJobStats(statsRes?.data);
         if (initialStats) setJobStats(initialStats);
         setTerminalFailures(Array.isArray(terminalFailuresRes?.data?.items) ? terminalFailuresRes.data.items : []);
         
-        try {
-          const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
-          const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
-          setLocalQueue(previous => mergeServerBatches(previous, batches, hiddenUploadBatchIds.current));
-        } catch (batchError) {
-          console.error('Không thể phục hồi upload batch:', batchError);
+        if (!isLocal) {
+          try {
+            const batchesRes = await api.get('/upload-batches', { params: { limit: 20 } });
+            const batches = Array.isArray(batchesRes.data?.items) ? batchesRes.data.items : [];
+            setLocalQueue(previous => mergeServerBatches(previous, batches, hiddenUploadBatchIds.current));
+          } catch (batchError) {
+            console.error('Không thể phục hồi upload batch:', batchError);
+          }
         }
       } catch (error) {
         console.error("Lỗi khởi tạo dữ liệu:", error);
@@ -504,9 +511,14 @@ function App() {
     if (uploadStartLock.current) return;
     uploadStartLock.current = task.id;
     setActiveUploadTaskId(task.id);
-    updateCloudTask(task.id, { status: 'preparing', progressMsg: 'Đang chuẩn bị URL upload an toàn...' });
+    const isLocalRuntime = runtimeMode === 'local';
+    updateCloudTask(task.id, {
+      status: 'preparing',
+      progressMsg: isLocalRuntime ? 'Đang kiểm tra và lưu PDF an toàn trên máy...' : 'Đang chuẩn bị URL upload an toàn...',
+    });
     try {
-      const result = await uploadBatchToCloud({
+      const uploadBatch = isLocalRuntime ? uploadBatchToLocal : uploadBatchToCloud;
+      const result = await uploadBatch({
         clientBatchId: task.clientBatchId,
         folderName: task.folderName,
         priority: task.priority,
@@ -533,8 +545,10 @@ function App() {
         onProgress: progress => updateCloudTask(task.id, {
           ...progress,
           progressMsg: progress.canCloseClient
-            ? 'Đã lưu an toàn trên Cloud — có thể tắt máy.'
-            : `Đang upload lên R2: ${progress.percent}% · xác nhận ${progress.confirmedFiles}/${progress.totalFiles} file`,
+            ? (isLocalRuntime ? 'Đã lưu an toàn trên máy — có thể tắt máy.' : 'Đã lưu an toàn trên Cloud — có thể tắt máy.')
+            : (isLocalRuntime
+              ? `Đang ghi vào DATA_ROOT: ${progress.percent}% · xác nhận ${progress.confirmedFiles}/${progress.totalFiles} file`
+              : `Đang upload lên R2: ${progress.percent}% · xác nhận ${progress.confirmedFiles}/${progress.totalFiles} file`),
         }),
         onItemState: (clientUploadId, state) => updateCloudTask(task.id, current => ({
           itemStates: { ...current.itemStates, [clientUploadId]: state },
@@ -546,7 +560,9 @@ function App() {
         files: [],
         confirmedFiles: result.confirmedFiles,
         confirmedBytes: result.confirmedBytes,
-        progressMsg: '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Render sẽ tiếp tục dịch.',
+        progressMsg: isLocalRuntime
+          ? '✅ Đã lưu trên máy — có thể đóng tab hoặc tắt máy. StudyMed local sẽ tiếp tục dịch sau lần khởi động kế tiếp.'
+          : '✅ Đã lưu trên Cloud — có thể đóng tab hoặc tắt máy. Render sẽ tiếp tục dịch.',
       });
       void refreshJobStats();
     } catch (error) {
@@ -569,37 +585,42 @@ function App() {
     }
   };
 
-  const enqueueFilesForUpload = (inputFiles, { priority = false, targetFolderName = '' } = {}) => {
+  const enqueueFilesForUpload = (inputFiles, {
+    priority = false,
+    targetFolderName = '',
+    groupByDirectory = false,
+  } = {}) => {
     const files = Array.from(inputFiles || []);
     if (files.length === 0) return false;
-    if (files.length > 500) {
-      alert('Mỗi batch chỉ được tối đa 500 file PDF.');
-      return false;
-    }
     const invalidFile = files.find(file => !file.name.toLowerCase().endsWith('.pdf')
       || (file.type && file.type !== 'application/pdf'));
     if (invalidFile) {
       alert(`${invalidFile.name} không phải file PDF hợp lệ.`);
       return false;
     }
-    const task = {
-      id: crypto.randomUUID(),
-      clientBatchId: crypto.randomUUID(),
-      folderName: priority ? PRIORITY_FOLDER_NAME : (targetFolderName.trim() || 'Mặc định'),
-      priority,
-      entries: files.map(file => ({ file, clientUploadId: crypto.randomUUID() })),
-      totalFiles: files.length,
-      totalBytes: files.reduce((sum, file) => sum + file.size, 0),
-      uploadedBytes: 0,
-      confirmedFiles: 0,
-      percent: 0,
-      canCloseClient: false,
-      itemStates: {},
-      status: 'queued',
-      progressMsg: priority ? '⚡ Đang chờ upload ưu tiên lên Cloud...' : 'Đang chờ upload lên Cloud...',
-    };
-    setLocalQueue(previous => [...previous, task]);
-    void startCloudUpload(task);
+    const fallbackFolderName = priority ? PRIORITY_FOLDER_NAME : (targetFolderName.trim() || 'Mặc định');
+    const tasks = planUploadBatches(files, { fallbackFolderName, groupByDirectory })
+      .map(plan => ({
+        id: crypto.randomUUID(),
+        clientBatchId: crypto.randomUUID(),
+        folderName: plan.folderName,
+        displayName: plan.displayName,
+        priority,
+        entries: plan.files.map(file => ({ file, clientUploadId: crypto.randomUUID() })),
+        totalFiles: plan.files.length,
+        totalBytes: plan.files.reduce((sum, file) => sum + file.size, 0),
+        uploadedBytes: 0,
+        confirmedFiles: 0,
+        percent: 0,
+        canCloseClient: false,
+        itemStates: {},
+        status: 'queued',
+        progressMsg: priority
+          ? (runtimeMode === 'local' ? '⚡ Đang chờ lưu ưu tiên trên máy...' : '⚡ Đang chờ upload ưu tiên lên Cloud...')
+          : (runtimeMode === 'local' ? 'Đang chờ lưu trên máy...' : 'Đang chờ upload lên Cloud...'),
+      }));
+    setLocalQueue(previous => [...previous, ...tasks]);
+    if (tasks[0]) void startCloudUpload(tasks[0]);
     return true;
   };
 
@@ -608,7 +629,7 @@ function App() {
       alert('Hệ thống đang tạm dừng để redeploy; hãy chờ Render deploy xong rồi upload.');
       return;
     }
-    if (!selectedFiles || selectedFiles.length === 0 || activeUploadTaskId) return;
+    if (!selectedFiles || selectedFiles.length === 0) return;
     if (!enqueueFilesForUpload(selectedFiles, { targetFolderName: folderName })) return;
     document.getElementById('fileInput').value = '';
     setSelectedFiles(null);
@@ -624,6 +645,14 @@ function App() {
   const handlePriorityFileChange = (event) => {
     if (sysStatus.isMaintenancePaused) return;
     if (enqueueFilesForUpload(event.target.files, { priority: true })) event.target.value = '';
+  };
+
+  const handleDirectorySelection = (event) => {
+    if (sysStatus.isMaintenancePaused) return;
+    if (enqueueFilesForUpload(event.target.files, { targetFolderName: folderName, groupByDirectory: true })) {
+      event.target.value = '';
+      setFolderName('');
+    }
   };
 
   const handleRemoveFromQueue = (taskId) => {
@@ -1058,7 +1087,7 @@ function App() {
             )}
             {geminiKeyStatus?.type === 'error' && <aside className="gemini-key-status-result error" role="alert"><button className="gemini-key-status-close" onClick={() => setGeminiKeyStatus(null)} aria-label="Đóng bảng trạng thái API key">×</button>{geminiKeyStatus.message}</aside>}
           </div>
-          <button className="gemini-key-status-control" onClick={handleRetryTerminalFailures} title="Chỉ thử lại các file lỗi còn source trên Cloud">
+          <button className="gemini-key-status-control" onClick={handleRetryTerminalFailures} title="Chỉ thử lại các file lỗi còn source an toàn">
             🔄 Thử lại lỗi có thể phục hồi
           </button>
           {terminalFailures.length > 0 && (
@@ -1074,8 +1103,10 @@ function App() {
         </span>
         <span className={`storage-status ${sysStatus.storage?.available === true ? 'available' : sysStatus.storage?.available === false ? 'unavailable' : 'checking'}`} role="status">
           {sysStatus.storage?.available === true
-            ? '☁ Cloud Storage sẵn sàng'
-            : sysStatus.storage?.available === false ? '☁ Cloud Storage chưa sẵn sàng' : '☁ Đang kiểm tra Cloud Storage'}
+            ? (runtimeMode === 'local' ? '💾 Lưu trữ local sẵn sàng' : '☁ Cloud Storage sẵn sàng')
+            : sysStatus.storage?.available === false
+              ? (runtimeMode === 'local' ? '💾 Lưu trữ local chưa sẵn sàng' : '☁ Cloud Storage chưa sẵn sàng')
+              : (runtimeMode === 'local' ? '💾 Đang kiểm tra lưu trữ local' : '☁ Đang kiểm tra Cloud Storage')}
           {sysStatus.storage?.cleanupBacklog > 0 && ` · ${sysStatus.storage.cleanupBacklog} file chờ dọn`}
         </span>
       </header>
@@ -1084,13 +1115,13 @@ function App() {
         <section className="batch-dashboard" aria-label="Tổng quan tiến độ">
           <article>
             <strong>{dashboard.uploadingBatches}</strong>
-            <span>Batch đang upload lên R2</span>
+            <span>{runtimeMode === 'local' ? 'Batch đang lưu vào máy' : 'Batch đang upload lên R2'}</span>
             <small>{formatMegabytes(dashboard.uploadedBytes)} / {formatMegabytes(dashboard.totalBytes)}</small>
           </article>
           <article>
             <strong>{dashboard.safeFiles}</strong>
             <span>File đã xác nhận upload</span>
-            <small>Lịch sử Cloud: {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
+            <small>{runtimeMode === 'local' ? 'Lịch sử local' : 'Lịch sử Cloud'}: {dashboard.confirmedFiles}/{dashboard.totalFiles} file</small>
           </article>
           <article>
             <strong>{jobStats?.completed ?? '—'}</strong>
@@ -1101,6 +1132,12 @@ function App() {
             </small>
           </article>
         </section>
+
+        {runtimeMode === 'local' && sysStatus.resourceGovernor?.state && sysStatus.resourceGovernor.state !== 'normal' && (
+          <aside role="status" style={{ marginBottom: '18px', padding: '12px 16px', borderRadius: '10px', background: '#fff3cd', color: '#664d03' }}>
+            🖥️ Máy đang ưu tiên tài nguyên cho Windows ({sysStatus.resourceGovernor.reason || sysStatus.resourceGovernor.state}). StudyMed sẽ tự tiếp tục khi ổn định.
+          </aside>
+        )}
 
         {showTerminalFailures && terminalFailures.length > 0 && (
           <section className="terminal-failures" aria-label="File cần tải lại hoặc xử lý" style={{ marginBottom: '24px', border: '1px solid #e6a700', borderRadius: '10px', padding: '16px', background: '#fffaf0' }}>
@@ -1226,21 +1263,39 @@ function App() {
                 onMouseLeave={(e) => e.target.style.background = '#f0f4f8'}
               />
             </div>
+            <div className="file-input-wrap" style={{ flex: 2, position: 'relative', minWidth: '300px' }}>
+              <label className="sr-only" htmlFor="directoryInput">Chọn thư mục gốc chứa các sách PDF</label>
+              <input
+                id="directoryInput"
+                type="file"
+                accept="application/pdf"
+                multiple
+                webkitdirectory=""
+                onChange={handleDirectorySelection}
+                disabled={sysStatus.isMaintenancePaused}
+                className="file-input"
+                title="Chrome/Edge: chọn thư mục gốc để xếp toàn bộ sách vào hàng đợi"
+                style={{ width: '100%', padding: '12px 15px', background: '#f0f4f8', border: '1.5px dashed #a0aec0', borderRadius: '12px', cursor: 'pointer', color: '#4a5568', transition: 'background 0.2s', fontSize: '14px' }}
+                onMouseEnter={(e) => e.target.style.background = '#e2e8f0'}
+                onMouseLeave={(e) => e.target.style.background = '#f0f4f8'}
+              />
+              <small style={{ display: 'block', marginTop: '4px', color: '#52606d' }}>Chrome/Edge: chọn thư mục gốc để thêm nhiều sách; hệ thống tự chia batch lớn và nạp tuần tự an toàn.</small>
+            </div>
           </div>
 
           <button 
             onClick={handleAddToQueue} 
-            disabled={!selectedFiles || selectedFiles.length === 0 || Boolean(activeUploadTaskId) || sysStatus.isMaintenancePaused}
+            disabled={!selectedFiles || selectedFiles.length === 0 || sysStatus.isMaintenancePaused}
             className="upload-btn"
             style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '16px', fontWeight: 'bold', background: (!selectedFiles || selectedFiles.length === 0) ? '#e9ecef' : '#007bff', color: (!selectedFiles || selectedFiles.length === 0) ? '#adb5bd' : '#ffffff', border: 'none', cursor: (!selectedFiles || selectedFiles.length === 0) ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: (!selectedFiles || selectedFiles.length === 0) ? 'none' : '0 4px 12px rgba(0, 123, 255, 0.3)' }}
           >
-            <span style={{ fontSize: '1.2em' }}>☁️</span> Upload {selectedFiles ? selectedFiles.length : 0} file lên Cloud
+            <span style={{ fontSize: '1.2em' }}>{runtimeMode === 'local' ? '💾' : '☁️'}</span> {runtimeMode === 'local' ? 'Lưu' : 'Upload'} {selectedFiles ? selectedFiles.length : 0} file {runtimeMode === 'local' ? 'vào máy' : 'lên Cloud'}
           </button>
 
           {localQueue.some(task => task.canCloseClient) && (
             <div className="cloud-safe-banner" role="status">
-              <strong>✅ Đã lưu an toàn trên Cloud — có thể tắt máy</strong>
-              <span>Render sẽ tiếp tục dịch các tài liệu đã xác nhận, không cần giữ tab này mở.</span>
+              <strong>✅ Đã lưu an toàn {runtimeMode === 'local' ? 'trên máy' : 'trên Cloud'} — có thể tắt máy</strong>
+              <span>{runtimeMode === 'local' ? 'StudyMed local sẽ phục hồi hàng đợi sau lần khởi động kế tiếp.' : 'Render sẽ tiếp tục dịch các tài liệu đã xác nhận, không cần giữ tab này mở.'}</span>
             </div>
           )}
 
@@ -1260,7 +1315,7 @@ function App() {
                 {localQueue.map(task => (
                   <li key={task.id} className={`cloud-task ${task.status}`}>
                     <div className="cloud-task-main">
-                      <strong>{task.priority ? '⚡' : '📁'} {task.folderName} <span>({task.totalFiles} files · {formatMegabytes(task.totalBytes)})</span></strong>
+                      <strong>{task.priority ? '⚡' : '📁'} {task.displayName || task.folderName} <span>({task.totalFiles} files · {formatMegabytes(task.totalBytes)})</span></strong>
                       <span className="cloud-task-message">
                         {task.progressMsg}
                       </span>

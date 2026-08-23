@@ -10,6 +10,16 @@ export class CloudUploadError extends Error {
 
 const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
+function retryAfterMs(error) {
+  const headers = error?.response?.headers
+  const value = headers?.['retry-after'] ?? headers?.get?.('retry-after')
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+  const suppliedSeconds = Number(error?.response?.data?.retryAfterSeconds)
+  if (Number.isFinite(suppliedSeconds) && suppliedSeconds >= 0) return suppliedSeconds * 1000
+  return 0
+}
+
 function isRetryable(error) {
   const status = error?.response?.status
   return !status || status === 408 || status === 429 || status >= 500
@@ -28,7 +38,7 @@ async function retryOperation(operation, { attempts = 3, sleep = wait, retryWhen
     } catch (error) {
       lastError = error
       if (attempt === attempts || !retryWhen(error)) throw error
-      await sleep(300 * (2 ** (attempt - 1)))
+      await sleep(Math.max(300 * (2 ** (attempt - 1)), retryAfterMs(error)))
     }
   }
   throw lastError
@@ -69,7 +79,7 @@ export async function uploadBatchToCloud({
   priority = false,
   entries,
   concurrency = 4,
-  confirmChunkSize = 10,
+  confirmChunkSize = 50,
   apiClient = api,
   putFile = putPdfToR2,
   sleep = wait,
@@ -78,6 +88,9 @@ export async function uploadBatchToCloud({
   onProgress = () => {},
   onItemState = () => {},
 }) {
+  const boundedConfirmChunkSize = Number.isSafeInteger(confirmChunkSize)
+    ? Math.min(50, Math.max(1, confirmChunkSize))
+    : 50
   const manifest = buildManifest({ clientBatchId, folderName, priority, entries })
   const fileByClientId = new Map(entries.map(entry => [entry.clientUploadId, entry.file]))
   const totalBytes = entries.reduce((sum, entry) => sum + entry.file.size, 0)
@@ -118,9 +131,9 @@ export async function uploadBatchToCloud({
   let latestConfirmation = null
   const flushConfirm = (force = false) => {
     if (confirmError) return confirmChain
-    if (!force && pendingConfirmIds.length < confirmChunkSize) return confirmChain
+    if (!force && pendingConfirmIds.length < boundedConfirmChunkSize) return confirmChain
     if (pendingConfirmIds.length === 0) return confirmChain
-    const jobIds = pendingConfirmIds.splice(0, confirmChunkSize)
+    const jobIds = pendingConfirmIds.splice(0, boundedConfirmChunkSize)
     confirmChain = confirmChain.then(async () => {
       try {
         const response = await retryOperation(

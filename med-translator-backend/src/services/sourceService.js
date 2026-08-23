@@ -57,18 +57,31 @@ async function validateDownloadedPdf(filePath, expectedSize) {
 }
 
 export class SourceService {
-    constructor({ r2, uploadDir = UPLOAD_DIR, assertCapacity = assertWorkerDiskCapacity }) {
+    constructor({
+        r2,
+        uploadDir = UPLOAD_DIR,
+        assertCapacity = assertWorkerDiskCapacity,
+        localStorage = null,
+    }) {
         this.r2 = r2;
         this.uploadDir = uploadDir;
         this.assertCapacity = assertCapacity;
+        this.localStorage = localStorage;
     }
 
     async resolve(job) {
         if (job.storageProvider !== 'r2') {
             if (!job.filePath) throw new ProcessingError(ErrorCodes.FILE_MISSING, 'Job legacy không có filePath.');
-            try { await fs.access(job.filePath); }
-            catch { throw new ProcessingError(ErrorCodes.FILE_MISSING, 'File gốc bị mất trên Render.', { publicMessage: 'File gốc đã bị mất trên Render.' }); }
-            return { filePath: job.filePath, temporary: false };
+            const filePath = this.localStorage
+                ? await this.localStorage.assertManagedSource(job.filePath)
+                : job.filePath;
+            try { await fs.access(filePath); }
+            catch {
+                throw new ProcessingError(ErrorCodes.FILE_MISSING, 'File nguồn local không còn tồn tại.', {
+                    publicMessage: 'File nguồn local đã bị mất. Hãy tải lại PDF gốc.',
+                });
+            }
+            return { filePath, temporary: false };
         }
         if (!job.storageKey || job.sourceState !== 'ready') {
             throw new ProcessingError(ErrorCodes.R2_SOURCE_MISSING, 'Job R2 chưa có source sẵn sàng.');

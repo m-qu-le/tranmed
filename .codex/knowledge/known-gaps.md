@@ -12,29 +12,29 @@ Danh sách này mô tả những gì hệ thống **chưa** đảm bảo. Không
 
 ## Năng lực runtime
 
-- Source-size budget chỉ là proxy bảo thủ cho memory, không đo RSS/CPU/Gemini load. P008 từng làm Render Free (512 MB/0.1 CPU theo hồ sơ lịch sử) tràn bộ nhớ ở cấu hình 5 worker/100 MiB.
-- Code hiện nhận 1–3 source job, fallback 3 và source budget fallback 15 MiB (accepted
-  10–100). Đây là cloud baseline, chưa phải local resource profile P015.
-- Runtime resource snapshot hiện chỉ quan sát process RSS/event-loop/Mongo latency;
-  chưa throttle theo available RAM/system CPU, chưa enforce trần 50% RAM và chưa
-  serialize PDF split. Node heap limit cũng không bao phủ Buffer/native/worker memory.
-- PDF worker đọc toàn file rồi giữ các chunk buffers. Upload cap code hiện 350 MB,
-  trong khi workload P015 được chốt quanh 10 MB và target upload gate là 159 MB;
-  target này chưa được triển khai hoặc chứng minh cho PDF sát trần.
+- Source-size budget vẫn chỉ là proxy bảo thủ. Local P015 bổ sung RSS/available-RAM/
+  system-CPU governor, nhưng Node heap limit không bao phủ Buffer/native/worker memory
+  và threshold phải được benchmark trên máy owner.
+- Local default giữ 1–3 source lanes, source budget 48 MiB, serialize PDF parse/copy và
+  materialize một chunk/lane. Điều này giảm peak memory, không phải chứng minh file
+  159 MB luôn xử lý được trên máy 8 GB RAM.
 - Gemini AbortSignal không đảm bảo Google ngừng tính usage nếu request đã đến dịch vụ. Circuit breaker/key scheduler giảm retry vô ích nhưng không loại bỏ chi phí đó.
 
-## Chuyển đổi P015 chưa hoàn thành
+## P015 đã đóng — giới hạn còn hiệu lực
 
 - Render đang suspended; không có production backend đang hoạt động được xác minh.
 - P014 Oracle đã đóng mà không deploy. Không sử dụng Docker/Caddy/Oracle snapshot như
   runtime hiện hành.
-- P015 mới có plan tại commit `3b0d9a4`. Code chưa có `RUNTIME_MODE`, `APP_HOST`,
-  `DATA_ROOT`, local storage adapter, MongoDB local profile, resource governor,
-  launcher/PID lock hoặc graceful Windows shutdown flow.
-- Backend vẫn bind `0.0.0.0`, validate R2 là required và frontend vẫn fallback Render.
-  Chạy code hiện tại trên laptop không tương đương P015 và có thể expose API ra LAN.
-- Máy chưa cài MongoDB local. Cài/config service, loopback binding, cache cap và data
-  root là thay đổi hệ thống cần được thực hiện trong P015, không tự làm khi đọc docs.
+- Code có `RUNTIME_MODE`, loopback-only `APP_HOST`, `DATA_ROOT`, local storage adapter,
+  governor và launcher/PID lock/safe drain. Cloud vẫn phải đặt explicit
+  `RUNTIME_MODE=cloud`.
+- MongoDB local, `.env.local`, launcher và workload thật đã được owner nghiệm thu ngày
+  23-08-2026 với PDF khoảng 10 MB, batch, sleep/restart và Chrome/VS Code song song.
+  Không có benchmark timing/RSS chi tiết, nên không suy diễn kết quả này thành bảo đảm
+  hiệu năng cho mọi loại PDF hoặc phần cứng khác.
+- Owner không cần fallback web và đã loại rollback rehearsal khỏi tiêu chí P015. Render
+  suspended và ref P014/Render được giữ làm lịch sử bất biến, không phải phương án
+  khôi phục đã được kiểm chứng.
 
 ## Sản phẩm và an toàn truy cập
 

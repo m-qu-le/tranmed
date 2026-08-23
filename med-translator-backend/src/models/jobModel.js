@@ -14,8 +14,11 @@ const jobSchema = new mongoose.Schema({
         default: 'pending' 
     },
     storageProvider: { type: String, enum: ['local', 'r2'], default: null },
-    storageKey: { type: String, default: null },
+    // `storageKey` belongs exclusively to R2 jobs. Keeping `null` on local
+    // documents defeats the unique sparse index because MongoDB indexes null.
+    storageKey: { type: String, default: undefined },
     sourceSize: { type: Number, min: 0, default: null },
+    sourceSha256: { type: String, default: null, match: /^[a-f0-9]{64}$/i },
     sourceEtag: { type: String, default: null },
     sourceState: {
         type: String,

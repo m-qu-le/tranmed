@@ -38,27 +38,27 @@ Máy có 7,7 GB RAM và CPU 2 core, nên P015 dùng ba lớp bảo vệ:
 1. Giữ `TRANSLATION_WORKER_CONCURRENCY=3` như Render, nhưng serialize PDF splitting;
    các lane còn lại chủ yếu chờ Gemini và có thể bị admission governor tạm dừng.
 2. Node chạy với process priority `BelowNormal` và V8 old-space target 1,5–2 GB.
-3. Admission controller dùng process RSS, available system memory, system CPU và
-   event-loop delay để quyết định nhận job mới.
+3. Admission controller chỉ dùng system CPU để quyết định nhận job mới. Process RSS,
+   available system memory và event-loop delay chỉ là telemetry trong status.
 
-Ngưỡng khởi đầu để benchmark:
+Ngưỡng active của profile backend server:
 
 | Gate | Giá trị kế hoạch |
 | --- | ---: |
-| RSS target | ≤ 2.048 MB |
-| Dừng nhận job mới | RSS ≥ 2.560 MB hoặc system free RAM < 2.048 MB |
-| Hard pressure | RSS ≥ 3.072 MB; suspend/terminate PDF split an toàn, không phát Gemini stage mới |
-| CPU pressure | System CPU ≥ 75% liên tục 15 giây |
-| Resume | CPU < 50% và free RAM ≥ 2.048 MB liên tục 30 giây |
+| RSS / free RAM | Telemetry, không phải điều kiện admission |
+| Dừng nhận job mới | System CPU ≥ 90% liên tục 15 giây |
+| Hard pressure | Không dùng hard-pressure theo RAM |
+| CPU pressure | System CPU ≥ 90% liên tục 15 giây |
+| Resume | CPU < 75% và free RAM ≥ 256 MB liên tục 30 giây |
 | Disk reserve | Luôn chừa ít nhất 10 GB trên volume dữ liệu |
-| Parallel source budget | Khởi đầu 48 MB; source lớn hơn chạy một mình |
+| Parallel source budget | 15 MB như backend server trước đây; source lớn hơn chạy một mình |
 | Upload limit | 159 MB; đây là validation gate, không phải kích thước workload mục tiêu |
 
 Các ngưỡng là baseline để đo, không phải hằng số hardcode. UI/status phải công khai
 lý do `LOCAL_RESOURCE_PRESSURE` nhưng không log file content hoặc secret.
 
-Node `--max-old-space-size` không kiểm soát toàn bộ Buffer/native/worker memory, nên
-không được dùng nó như bằng chứng duy nhất cho cam kết 50% RAM.
+Node `--max-old-space-size` vẫn không kiểm soát toàn bộ Buffer/native/worker memory;
+RSS/free RAM chỉ được công khai để quan sát, không dừng queue.
 
 ## PDF memory model cần sửa
 

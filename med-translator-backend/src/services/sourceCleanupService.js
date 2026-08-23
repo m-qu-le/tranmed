@@ -10,13 +10,41 @@ function retryAt(attempt) {
 }
 
 export class SourceCleanupService {
-    constructor({ Job, r2 }) {
+    constructor({ Job, r2, localStorage = null }) {
         this.Job = Job;
         this.r2 = r2;
+        this.localStorage = localStorage;
     }
 
     async cleanupSource(job, { reason = 'terminal' } = {}) {
-        if (!job || job.storageProvider !== 'r2' || !job.storageKey) {
+        if (!job) {
+            return { cleaned: true, notRequired: true };
+        }
+        if (job.storageProvider === 'local') {
+            try {
+                if (job.filePath && this.localStorage) await this.localStorage.removeManagedFile(job.filePath);
+                const deletedAt = new Date();
+                await this.Job.updateOne(
+                    { jobId: job.jobId },
+                    {
+                        $set: {
+                            sourceState: 'deleted',
+                            sourceDeletedAt: deletedAt,
+                            sourceCleanupState: 'succeeded',
+                            sourceCleanupNextRetryAt: null,
+                            sourceCleanupLastError: null,
+                        },
+                    }
+                );
+                appEvents.emit('sourceCleanup', { jobId: job.jobId, status: 'deleted', reason, deletedAt });
+                return { cleaned: true, deletedAt, reason };
+            } catch (error) {
+                // A local path outside DATA_ROOT is a security invariant failure,
+                // not a cleanup target. Preserve the job for investigation.
+                throw error;
+            }
+        }
+        if (job.storageProvider !== 'r2' || !job.storageKey) {
             return { cleaned: true, notRequired: true };
         }
         if (job.sourceState === 'deleted' || job.sourceCleanupState === 'succeeded') {

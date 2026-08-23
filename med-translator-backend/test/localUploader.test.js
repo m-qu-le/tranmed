@@ -15,12 +15,30 @@ import {
     parseArguments,
     partitionFiles,
     putPdfToR2,
+    retryOperation,
     saveLedger,
     scanSource,
     sourceKeyFor,
 } from '../scripts/local-uploader.js';
 
 const PDF_BYTES = Buffer.from('%PDF-1.7\n% StudyMed test fixture\n');
+
+test('retry waits for a server-supplied rate-limit reset instead of retrying immediately', async () => {
+    const delays = [];
+    let calls = 0;
+
+    const result = await retryOperation(async () => {
+        calls += 1;
+        if (calls === 1) throw new HttpError('rate limited', 429, { retryAfterMs: 12_000 });
+        return 'accepted';
+    }, {
+        sleep: async milliseconds => { delays.push(milliseconds); },
+    });
+
+    assert.equal(result, 'accepted');
+    assert.equal(calls, 2);
+    assert.deepEqual(delays, [12_000]);
+});
 
 async function createTempRoot(t) {
     const root = await mkdtemp(path.join(os.tmpdir(), 'studymed-uploader-'));

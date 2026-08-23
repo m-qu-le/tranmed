@@ -31,13 +31,13 @@ toàn bộ chức năng đã tích hợp và qua một đợt nghiệm thu cuố
 
 ## Workstream 3 — Giữ đủ throughput mà máy vẫn mượt
 
-1. Giữ ba source lane như Render và `PARALLEL_SOURCE_BUDGET_MB=48` cho workload PDF
-   khoảng 10 MB; PDF lớn hơn budget được chạy đơn độc.
+1. Giữ ba source lane. Code local mặc định source budget 48 MiB; máy owner được nghiệm
+   thu với `PARALLEL_SOURCE_BUDGET_MB=50`. PDF lớn hơn budget được chạy đơn độc.
 2. Serialize thao tác parse/split PDF để không để hai worker CPU-heavy giành cả hai core.
-3. Mở rộng resource snapshot bằng available RAM và sampled CPU; thêm state machine
-   `normal → pressured → suspended → recovering` có hysteresis.
-4. Khi pressure, ngừng claim lane mới nhưng cho Gemini stage đang chạy persist an
-   toàn. Hard pressure terminate PDF split và đánh dấu resource-blocked, không retry storm.
+3. Giữ resource snapshot gồm available RAM và sampled CPU; chỉ CPU là điều kiện của
+   state machine `normal → pressured → recovering` có hysteresis.
+4. Khi CPU pressure, ngừng claim lane mới nhưng cho Gemini stage đang chạy persist an
+   toàn; RAM/RSS không được đưa job vào resource-blocked.
 5. Node chạy với old-space target 1,5–2 GB và Windows priority `BelowNormal`.
 6. Thay quota disk 400 MB bằng free-space gate, giữ tối thiểu 10 GB trống trên ổ D.
 7. `MAX_FILE_SIZE_MB=159`; UI cảnh báo file trên 25 MB có thể cần chạy đơn độc hoặc
@@ -45,7 +45,8 @@ toàn bộ chức năng đã tích hợp và qua một đợt nghiệm thu cuố
 
 ## Workstream 4 — Trải nghiệm như một ứng dụng local
 
-1. Tạo launcher Windows có PID lock, start Mongo + backend, chờ readiness rồi mở UI.
+1. Tạo launcher Windows có PID lock, start Mongo + backend, chờ readiness rồi hiển thị
+   dashboard CMD; UI browser chỉ mở qua lệnh tùy chọn riêng.
 2. Launcher không đưa secret vào command line, chạy backend `BelowNormal`, xoay log
    và có lệnh stop rõ ràng.
 3. Shutdown handler dừng claim, persist/suspend ở stage boundary, đóng Mongo và cleanup
@@ -61,7 +62,8 @@ toàn bộ chức năng đã tích hợp và qua một đợt nghiệm thu cuố
 - Dùng Chrome/VS Code trong lúc dịch; xác nhận RSS/CPU/disk không vượt gate và máy
   không lag rõ rệt.
 - Xác nhận app vẫn hoạt động khi Atlas/R2/Render không khả dụng.
-- Rehearse tạo branch web mới từ tag Render mà không sửa/xóa P015 data.
+- Owner đã quyết định không cần fallback web; không thực hiện rollback rehearsal. Các
+  ref Render/P014 được giữ làm lịch sử, không phải đường khôi phục vận hành của P015.
 
 Sau khi tất cả pass, tạo shortcut chính thức và cutover local. Không xóa Atlas/R2 hoặc
 lịch sử Render; cleanup cloud là quyết định destructive riêng ngoài P015.

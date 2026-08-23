@@ -47,8 +47,9 @@ D:\1. File chờ dịch\
   không rỗng, tối đa 350 MB và chữ ký đầu file `%PDF-`. Một lỗi làm dừng toàn bộ
   lượt chạy để không tạo một đợt upload thiếu âm thầm.
 
-350 MB là giới hạn của CLI cloud hiện tại. P015 target dùng upload gate 159 MB và
-workload thực khoảng 10 MB; target đó chưa được áp dụng vào script.
+350 MB là giới hạn của CLI cloud hiện tại. P015 có local importer riêng, gửi tuần tự
+vào `127.0.0.1:8080` với upload gate 159 MB; owner đã nghiệm thu workload thực khoảng
+10 MB ngày 23-08-2026. Không dùng cloud CLI để nạp hàng local.
 
 ## Kiến trúc và data flow
 

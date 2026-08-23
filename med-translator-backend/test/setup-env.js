@@ -1,4 +1,7 @@
 const defaults = {
+    // Existing baseline tests exercise the Render-compatible contract. Local
+    // P015 tests pass RUNTIME_MODE explicitly where relevant.
+    RUNTIME_MODE: 'cloud',
     MONGODB_URI: 'mongodb://127.0.0.1:27017/tranmed-test',
     GEMINI_API_KEYS: 'test-gemini-key',
     GEMINI_PROJECT_IDS: 'test-project',

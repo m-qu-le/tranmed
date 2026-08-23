@@ -1,24 +1,26 @@
 # Bản đồ kiến trúc và luồng dữ liệu
 
-> **Phân lớp trạng thái:** “cloud baseline” dưới đây là code `e442641` vẫn đang có,
-> không phải service live (Render đang suspended). “P015 target” là thiết kế đã chốt
-> nhưng chưa implement. Không trộn hai lớp khi sửa code hoặc chẩn đoán.
+> **Phân lớp trạng thái:** “cloud baseline” dưới đây là đường code lịch sử từ
+> `e442641`, không phải service live (Render đang suspended). P015 local-first đã được
+> triển khai và owner nghiệm thu ngày 23-08-2026. Không diễn giải cloud baseline thành
+> fallback web được hỗ trợ.
 
 ## Thành phần
 
 | Khu vực | Trách nhiệm | Điểm vào/chính |
 | --- | --- | --- |
-| `med-translator-frontend/` | React UI, chọn/nhóm file, direct upload R2, SSE resync, preview/copy/download | `src/main.jsx` → `src/App.jsx` |
+| `med-translator-frontend/` | React UI, chọn/nhóm file, local upload hoặc cloud R2 explicit, SSE resync, preview/copy/download | `src/main.jsx` → `src/App.jsx` |
 | `med-translator-backend/src/server.js` | Express, CORS, health/readiness, Mongo connect và khởi động queue | server HTTP |
 | `routes/translateRoute.js` + `controllers/translateController.js` | public API, maintenance-token guard và hình dạng response | `/api/translate` |
-| `services/uploadBatchService.js` + `r2Service.js` | manifest, presigned PUT, confirm bằng HEAD R2, abandoned item và batch reconcile | cloud upload |
+| `services/uploadBatchService.js` + `r2Service.js` | manifest, presigned PUT, confirm bằng HEAD R2, abandoned item và batch reconcile | cloud mode only |
 | `services/queueManager.js` | claim atomic, lease, retry, circuit breaker, pool, cancel, cleanup, folder/stat API | persistent worker |
-| `services/sourceService.js` + `workers/pdfWorker.js` | stream source R2 xuống file `.part` tạm, rename atomically, chia PDF theo trang | lúc xử lý job |
+| `services/localStorageService.js` + `sourceService.js` + `workers/pdfWorker.js` | local source an toàn hoặc stream R2 theo mode, chia PDF theo trang | lúc xử lý job |
 | Quality services | context passport, stage executor, scheduler key, state machine, quality public view/header | quality jobs |
-| MongoDB | nguồn sự thật về upload, queue, lease, stage, artifact kết quả và cleanup retry | `Job`, `TranslationChunk`, `UploadBatch`, `System` |
-| Cloudflare R2 | lưu source PDF trong khi upload/chờ/xử lý/retry | object storage |
+| MongoDB local | nguồn sự thật P015 về upload, queue, lease, stage, artifact kết quả và cleanup retry | `Job`, `TranslationChunk`, `UploadBatch`, `System` |
+| Filesystem `DATA_ROOT` | lưu source PDF P015 trong khi upload/chờ/xử lý/retry | `D:\StudyMedData` trên máy owner |
+| Cloudflare R2 | object storage của cloud baseline, chỉ dùng khi đặt explicit cloud mode | object storage |
 | `archive/` | hồ sơ đã đóng, không có import runtime | chỉ đọc |
-| `project-015/` | kế hoạch chuyển trọn runtime/data mới về Windows | tài liệu, chưa import runtime |
+| `project-015/` | hồ sơ P015 local-first đã đóng | tài liệu archive |
 
 ## Luồng cloud baseline hiện có
 
@@ -45,7 +47,7 @@ Người dùng chọn PDF + folder (hoặc priority)
 Render URL cũ hiện bị suspend. Luồng trên chỉ chạy khi backend cloud tương thích được
 deploy lại và cấu hình Atlas/R2/Gemini hợp lệ.
 
-## P015 target chưa triển khai
+## P015 local-first đã triển khai và nghiệm thu
 
 ```text
 Browser cùng máy
@@ -53,14 +55,14 @@ Browser cùng máy
   → upload PDF thẳng vào D:\StudyMedData qua file .part + validation + atomic rename
   → MongoDB local mới giữ queue/lease/quota/stage/result
   → tối đa 3 source lane như Render; PDF parse/split chỉ 1 lane CPU tại một thời điểm
-  → resource governor tạm dừng admission khi RSS/system RAM/CPU/disk bị áp lực
+  → resource governor tạm dừng admission khi CPU sustained bị áp lực; RAM/RSS chỉ quan sát
   → Gemini API qua Internet
   → restart/sleep recovery từ local lease/artifact
 ```
 
-P015 giữ cloud adapter để tạo branch web về sau, nhưng local runtime mặc định không
-được phụ thuộc Render, Vercel, R2 hoặc Atlas. Upload cap target 159 MB; workload nghiệm
-thu chính khoảng 10 MB. Không khẳng định các behavior này tồn tại trước khi code/test.
+P015 giữ cloud adapter cho tương thích lịch sử, nhưng local runtime mặc định không phụ
+thuộc Render, Vercel, R2 hoặc Atlas. Upload cap là 159 MB; workload thực đã được owner
+nghiệm thu quanh 10 MB ngày 23-08-2026. P015 không duy trì fallback web.
 
 ### Quality pipeline
 
@@ -80,10 +82,10 @@ document_context (một lần mỗi quality job)
 
 - Browser không nhận credential MongoDB, R2 hay Gemini. Trong cloud baseline, browser
   chỉ nhận presigned R2 URL từ backend và URL này được kiểm HTTPS/R2 domain trước PUT;
-  P015 target không cấp R2 URL cho browser.
+  P015 local không cấp R2 URL cho browser.
 - Trong cloud baseline, R2 chứa PDF gốc có thời hạn; filesystem backend chỉ là cache
-  tạm. Trong P015 target, filesystem dưới data root mới là source bền của local job,
-  nhưng contract/path safety đó chưa có trong code.
+  tạm. Trong P015 local, filesystem dưới data root là source bền của local job và
+  contract/path safety được enforce trong code.
 - MongoDB giữ metadata/artifact để resume. SSE chỉ là tín hiệu thời gian thực, không phải nguồn trạng thái.
 - API public chỉ trả summary, result cuối và public quality summary/header. Không trả PDF base64, prompt, draft, audit/reverify raw, context passport, API key hay stack trace.
 - Quality text transient được dọn khi chunk passed; artifact review private chỉ phục vụ resume/triage. Header P004 được dựng lúc đọc, không ghi ngược vào `TranslationChunk.content`.
@@ -102,7 +104,7 @@ document_context (một lần mỗi quality job)
 10. Preview, Copy và Download phải nhận cùng header review do backend dựng, tránh UI tự tái diễn giải report private.
 11. Cleanup source phải idempotent. Failed job R2 giữ source đến `sourceRetentionUntil` để cho phép retry; completed/cancel/delete dọn sớm. Thất bại xóa R2 phải có state/retry thay vì bỏ quên object.
 12. P015 local cleanup chỉ được xóa path đã resolve bên dưới data root; không chấp
-   nhận symlink/junction/path traversal. Đây là planned invariant cần test trước cutover.
+   nhận symlink/junction/path traversal.
 
 ## Vòng đời trạng thái
 
